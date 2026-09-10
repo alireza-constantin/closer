@@ -1,0 +1,38 @@
+# ADR 002: Separate initial invitation from rejoin recovery
+
+**Status:** Accepted
+
+## Context
+
+Creating a pair must let a second person claim the empty slot without exposing sequential database IDs. After that slot is occupied, possession of the old invitation URL must never authorize replacement. Guest-session loss is a different problem from registered-account recovery: a guest may lack durable proof of the former identity, while a registered participant can use normal sign-in or account recovery. Guest replacement must not transfer the previous participant's identity or pre-membership pair history.
+
+## Decision
+
+Closer will use separate credentials and authority rules for initial joining and rejoining.
+
+An initial invitation is an opaque, cryptographically strong, single-use, revocable token bound to the empty second slot. It expires 7 days after issuance. Redemption succeeds atomically only while that slot is empty. Once redeemed, revoked, expired, or otherwise invalid, it cannot claim or replace a membership and cannot serve as a recovery credential. If it expires while the second slot remains empty, the active member may generate a fresh initial invitation.
+
+A rejoin link is a fresh, high-entropy, single-use, revocable token that expires 24 hours after issuance. It targets a specific occupied logical slot whose current participant is a guest eligible for guest-session recovery. Only the other currently active member of the same pair may explicitly generate it, never the participant for their own slot. This rule is symmetric: either member can generate recovery for the other eligible guest slot. A registered participant cannot be replaced through guest rejoin and instead recovers through normal authentication.
+
+The governing invariant is: a replacement rejoin link may only target a slot whose current participant is a guest participant eligible for guest-session recovery.
+
+Successful rejoin gives the replacement a new domain `participant.id`, ends or supersedes the former active membership, and starts a new active membership in the same logical slot. The former participant identity remains distinct. The replacement may see pair history only from the beginning of the new membership onward; previous Private answers, reactions, replies, Together sessions, and all other earlier pair history are not transferred or exposed automatically. The continuing participant may retain access to historical interactions in which they were authorized to participate. Issuance and redemption checks must be enforced server-side and transactionally so concurrent requests cannot redeem twice or overwrite an unexpected slot occupant.
+
+This ADR does not select token encoding, persistence columns, or route design.
+
+## Consequences
+
+- Initial invitation and rejoin records need distinguishable purpose and lifecycle state.
+- Expiration is purpose-specific: 7 days for initial invitations and 24 hours for guest rejoin links.
+- The current slot state is authoritative; token possession alone is insufficient.
+- Revocation, expiry, redemption, and membership transition must be race-safe and idempotent where requests can retry.
+- History authorization must follow participant identity and active-membership time, not merely the logical pair slot.
+- A replacement participant can join future pair activity without inheriting any pair history from before the new membership began.
+- Registered-session loss stays within normal authentication recovery and cannot be converted into member replacement by the other participant.
+
+## Alternatives considered
+
+- **Reuse the original invitation for recovery:** rejected because a leaked or retained URL could take over an occupied slot.
+- **Let either person self-issue recovery without the other member:** rejected because a lost guest session has no independent durable proof of the prior participant identity in V1.
+- **Treat the pair slot as the participant identity:** rejected because it would transfer private history to whoever later occupies the slot.
+- **Transfer the former participant ID to the replacement guest:** rejected because the replacement has not proven continuity with that participant.
