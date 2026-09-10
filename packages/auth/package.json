@@ -1,0 +1,24 @@
+{
+  "name": "@Closer/auth",
+  "type": "module",
+  "exports": {
+    ".": {
+      "default": "./src/index.ts"
+    },
+    "./*": {
+      "default": "./src/*.ts"
+    }
+  },
+  "scripts": {},
+  "dependencies": {
+    "@Closer/db": "workspace:*",
+    "@Closer/env": "workspace:*",
+    "better-auth": "catalog:",
+    "dotenv": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@Closer/config": "workspace:*",
+    "typescript": "catalog:"
+  }
+}
