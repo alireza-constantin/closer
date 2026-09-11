@@ -9,6 +9,7 @@ const { createDb } = await import("./index");
 const {
   CloserDomainError,
   createPairForParticipant,
+  getActivePairForParticipant,
   getPairForParticipant,
   getPairStatusForParticipant,
   getParticipantByAuthUserId,
@@ -101,6 +102,18 @@ describe("Closer Slice 01A", () => {
         expect.objectContaining({ pairId: friendPair.pair.id, participantId: friendPair.creator.id, slot: "first", endedAt: null }),
       ]),
     );
+  });
+
+  test("resolves the participant's active pair for server-side root routing", async () => {
+    const participantWithoutPair = await createParticipant("Not paired yet");
+    expect(await getActivePairForParticipant(db, participantWithoutPair.id)).toBeNull();
+
+    const created = await createPair();
+    expect(await getActivePairForParticipant(db, created.creator.id)).toMatchObject({ pairId: created.pair.id });
+
+    const invitee = await createParticipant("Invitee");
+    await redeemInitialInvite(db, { token: created.invite.token, participantId: invitee.id });
+    expect(await getActivePairForParticipant(db, invitee.id)).toMatchObject({ pairId: created.pair.id });
   });
 
   test("redeems an opaque initial invite into the empty second slot and authorizes both members", async () => {

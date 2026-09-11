@@ -2,8 +2,7 @@
 
 import { useState } from "react";
 
-import { Button } from "@Closer/ui/components/button";
-import { Input } from "@Closer/ui/components/input";
+import { Copy, Link as LinkIcon, RotateCcw } from "lucide-react";
 
 export default function InviteControls({ pairId }: { pairId: string }) {
   const [inviteUrl, setInviteUrl] = useState<string | null>(null);
@@ -47,23 +46,20 @@ export default function InviteControls({ pairId }: { pairId: string }) {
   }
 
   return (
-    <section className="space-y-3 rounded border p-5">
-      <h2 className="font-semibold">Invite the second member</h2>
-      <p className="text-sm text-muted-foreground">An invite is single-use and expires seven days after creation.</p>
-      {inviteUrl ? <Input aria-label="Initial invite URL" readOnly value={inviteUrl} /> : null}
-      {message ? <p className="text-sm text-muted-foreground">{message}</p> : null}
-      <div className="flex flex-wrap gap-2">
-        <Button disabled={isWorking} onClick={() => void generateInvite()} type="button">
-          {isWorking ? "Working…" : inviteUrl ? "Replace invite" : "Generate invite"}
-        </Button>
+    <section className="closer-invite-controls">
+      <span className="closer-onboarding-icon closer-icon-peach"><LinkIcon aria-hidden="true" /></span>
+      <h2>One link, just for them</h2>
+      <p>An invite is private, single-use, and expires in seven days.</p>
+      {inviteUrl ? <input aria-label="Initial invite URL" className="closer-onboarding-input" readOnly value={inviteUrl} /> : null}
+      {message ? <p className="closer-invite-message">{message}</p> : null}
+      <div className="closer-invite-actions">
+        <button className="closer-primary-button" disabled={isWorking} onClick={() => void generateInvite()} type="button">
+          {isWorking ? "Getting it ready…" : inviteUrl ? "Make a fresh link" : "Create invite link"}
+        </button>
         {inviteUrl ? (
-          <Button disabled={isWorking} onClick={() => void navigator.clipboard.writeText(inviteUrl)} type="button" variant="outline">
-            Copy invite link
-          </Button>
+          <button className="closer-secondary-button" disabled={isWorking} onClick={() => void navigator.clipboard.writeText(inviteUrl)} type="button"><Copy aria-hidden="true" /> Copy link</button>
         ) : null}
-        <Button disabled={isWorking} onClick={() => void revokeInvite()} type="button" variant="outline">
-          Revoke invite
-        </Button>
+        {inviteUrl ? <button className="closer-text-button" disabled={isWorking} onClick={() => void revokeInvite()} type="button"><RotateCcw aria-hidden="true" /> Revoke link</button> : null}
       </div>
     </section>
   );

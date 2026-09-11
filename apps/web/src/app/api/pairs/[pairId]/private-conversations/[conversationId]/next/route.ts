@@ -1,0 +1,25 @@
+import { createNextPrivateRound, db } from "@Closer/auth/closer";
+
+import { noStoreHeaders, privateDomainErrorResponse, requireRequestParticipant } from "@/lib/private-api";
+
+export async function POST(
+  request: Request,
+  context: { params: Promise<{ pairId: string; conversationId: string }> },
+) {
+  const participant = await requireRequestParticipant(request);
+  if (!participant) return Response.json({ error: "Sign in is required." }, { status: 401, headers: noStoreHeaders });
+  const body: unknown = await request.json().catch(() => null);
+  const clientRequestId = body && typeof body === "object" && "clientRequestId" in body ? body.clientRequestId : undefined;
+  if (clientRequestId !== undefined && typeof clientRequestId !== "string") {
+    return Response.json({ error: "Invalid request." }, { status: 400, headers: noStoreHeaders });
+  }
+  const { pairId, conversationId } = await context.params;
+  try {
+    return Response.json(
+      await createNextPrivateRound(db, { participantId: participant.id, pairId, conversationId, clientRequestId }),
+      { status: 201, headers: noStoreHeaders },
+    );
+  } catch (error) {
+    return privateDomainErrorResponse(error);
+  }
+}

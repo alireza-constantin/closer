@@ -4,7 +4,7 @@
 
 Closer is a mobile-first progressive web app for exactly two people: romantic partners or close friends. It helps a pair have better conversations through a curated deck of questions in two modes: a shared-device verbal experience called Together and an independent-answer experience called Private.
 
-This document is authoritative for V1 product behavior and scope. Architecture documentation defines the technical invariants that support this behavior. [`design/core-private-flow.png`](./design/core-private-flow.png) is the approved visual source of truth for the visual language and for Private Question, Waiting, and Reveal. Its Pair Home styling remains authoritative, but its Private-mode content model predates support for multiple active Private questions; the behavior defined here takes precedence.
+This document is authoritative for V1 product behavior and scope. Architecture documentation defines the technical invariants that support this behavior. [`design/core-private-flow.png`](./design/core-private-flow.png) is the approved visual source of truth for the visual language and for Private Question, Waiting, and Reveal. Its Pair Home styling remains authoritative, but its Private-mode content model predates category-scoped Private conversations; the behavior defined here takes precedence.
 
 ## 2. Target users
 
@@ -34,15 +34,16 @@ Together mode never creates typed answer records. Like, Skip, and Next are pair/
 
 Private mode gives both active participants the same question and lets each answer independently.
 
-1. An eligible question starts a Private round.
-2. Each participant can submit their own required answer independently. The submitted value is trimmed, must contain 1–2000 characters, and cannot be edited after submission in V1.
-3. Before both answers exist, each participant may access only their own answer and round status.
-4. Neither answer is sent to the other participant before mutual reveal.
-5. When both answers are persisted, the round becomes reveal-ready and either participant may access both answers.
-6. Reveal viewing is tracked independently per participant. One participant viewing the reveal does not mark it viewed for the other participant, and the round has no global `REVEALED` acknowledgement.
-7. In the post-reveal experience, each participant may have at most one reaction and one optional short reply for the round.
+1. Choosing a category starts or resumes one Private conversation for that pair and category. A conversation owns a sequential run of eligible Private rounds.
+2. Its current eligible question starts the next Private round. A conversation has at most one unresolved current round at a time.
+3. Each participant can submit their own required answer independently. The submitted value is trimmed, must contain 1–2000 characters, and cannot be edited after submission in V1.
+4. Before both answers exist, each participant may access only their own answer and round status.
+5. Neither answer is sent to the other participant before mutual reveal.
+6. When both answers are persisted, the round becomes reveal-ready and either participant may access both answers.
+7. Reveal viewing is tracked independently per participant. One participant viewing the reveal does not mark it viewed for the other participant, and the round has no global `REVEALED` acknowledgement.
+8. In the post-reveal experience, each participant may have at most one reaction and one optional short reply for the round. A reaction represents that participant's reaction to the *other* participant's answer and is shown on that answer card to both authorized participants.
 
-Multiple distinct Private rounds may be active concurrently for the same pair. Each round independently owns its question, initiating participant, two answer positions, answer-derived reveal readiness, per-participant reveal-view timing, reactions, optional replies, and timestamps. A participant may leave an unfinished round, start or open another question, and later resume the earlier round. Reveal readiness or reveal viewing in one round never blocks creation or use of another round.
+Multiple Private conversations may be active concurrently for the same pair, such as Deep, Fun, and Memories. A conversation groups the sequential rounds in one category; it normally has one active conversation per category and at most one unresolved current round. Older revealed rounds remain part of that conversation rather than becoming unrelated Active Questions. A participant may leave an unfinished Deep conversation, start or resume Fun, and later return to the same Deep round unchanged. When a round is reveal-ready and viewed, `Next question` adds its next round to that same conversation without reopening category selection. Reveal readiness or reveal viewing in one conversation never blocks another category conversation.
 
 V1 does not need a persisted `paused` state. An unfinished round remains active, and the UI derives `Your turn` or `Waiting for <name>` from that participant's answer position. Once both answers exist, the UI derives either `Ready to reveal` or reveal already viewed from that participant's own reveal-view timing. Round creation must safely handle accidental duplicate submissions or retries where appropriate, without imposing pair-wide uniqueness across active rounds.
 
@@ -56,7 +57,7 @@ V1 includes:
 - Pair creation and a secure invitation URL for the empty second slot.
 - A secure rejoin flow for guest-session loss.
 - Together mode and Private mode.
-- Multiple independently active Private questions with a lightweight resume surface.
+- Multiple independently active Private conversations with a lightweight resume surface.
 - Server-enforced mutual reveal.
 - An initial target of approximately 80 curated questions.
 - Question categories: Fun, Deep, Memories, and one relationship-specific category: Relationship for Partner pairs or Friendship for Friend pairs.
@@ -111,26 +112,26 @@ The previous participant identity remains distinct, and no earlier Private answe
 
 The pair starts a session on one phone, moves through eligible cards with Like, Skip, or Next, answers verbally, and manually ends the session. No answer text is collected or stored.
 
-### Private round
+### Private conversation and round
 
-The pair starts a question, each participant answers independently, and the server withholds the other answer until both have submitted for that round. Both answers then become available together whenever either participant opens the reveal; each participant's viewing is tracked independently. Reactions and one optional short reply per participant become available in the post-reveal experience. The pair may have other active rounds in different states, and either participant may resume those rounds or start another eligible question without first viewing a ready reveal.
+The pair selects a category to create or resume its Private conversation. The conversation presents one current question at a time; each participant answers independently, and the server withholds the other answer until both have submitted for that round. Both answers then become available together whenever either participant opens the reveal; each participant's viewing is tracked independently. Reactions and one optional short reply per participant become available in the post-reveal experience. `Next question` stays in the same conversation and category. The pair may have other category conversations in different states, and either participant may return to Pair Home to switch topics without first viewing a ready reveal.
 
 ### History
 
-Participants can review a simple chronological history limited by their own authorization. History does not snapshot display names; wherever a participant is named, it renders that participant's current display name. A replacement participant may see pair history only from the beginning of their new active membership onward; they do not gain access to any earlier Private, Together, or other pair activity. The continuing participant may retain access to earlier interactions in which they were authorized to participate.
+Participants can review a simple chronological history limited by their own authorization. Future Private history groups activity by conversation (for example, `Deep — 4 questions`) rather than presenting each question as an unrelated top-level history item; opening that group may later expose its revealed rounds. History does not snapshot display names; wherever a participant is named, it renders that participant's current display name. A replacement participant may see pair history only from the beginning of their new active membership onward; they do not gain access to any earlier Private, Together, or other pair activity. The continuing participant may retain access to earlier interactions in which they were authorized to participate.
 
 ## 9. Important UI states
 
-Pair Home presents `Answer Privately` as the entry point for starting another eligible question. When active Private rounds exist, it also provides a lightweight `Active questions` summary. Each item derives one clear participant-relative state:
+Pair Home presents `Answer Privately` as the entry point for selecting a category. When active Private conversations exist, it also provides a lightweight `Your conversations` summary. Each item represents a category conversation, its current question, its question count, and one clear participant-relative state:
 
-| Per-round state | Current participant status/action |
+| Current-round state | Current participant status/action |
 | --- | --- |
 | Active; current participant has not answered | `Your turn` and open to answer |
 | Active; current participant has answered and the other has not | `Waiting for <name>` and open to revisit |
 | Both answers persisted; current participant has not viewed reveal | `Ready to reveal` and open to reveal |
-| Both answers persisted; current participant has viewed reveal | Reveal already viewed and open to revisit |
+| Both answers persisted; current participant has viewed reveal | Ready for next question and open to continue |
 
-Participants can open any unfinished round, revisit one while waiting, open any reveal-ready round, or start another question without unrelated rounds blocking them. The summary remains question-based and lightweight; it is not an inbox, messaging system, folder hierarchy, or source of unread-message semantics. The PRD does not prescribe its final layout.
+Participants can open any conversation's current round, revisit one while waiting, open any reveal-ready round, or select another category without unrelated conversations blocking them. A conversation cannot create another unresolved round while it is waiting; from a revealed question, `Next question` continues directly in that same conversation and category. The summary remains conversation-based and lightweight; it is not an inbox, messaging system, folder hierarchy, or source of unread-message semantics. The PRD does not prescribe its final layout.
 
 Additional required states:
 
@@ -149,7 +150,7 @@ Notification permission must not be requested during initial onboarding.
 - History renders each participant's current display name and does not preserve historical name snapshots.
 - A Private answer is required, trimmed, and must contain 1–2000 characters. It cannot be edited after submission in V1.
 - A post-reveal reply is optional. When supplied, it is trimmed and must contain 1–500 characters. Each participant may have at most one reply per Private round and may edit or remove their own reply.
-- Each participant may have at most one reaction per Private round and may change or remove their own reaction.
+- Each participant may have at most one reaction per Private round and may change or remove their own reaction. Their reaction is attached to the other participant's answer card, not their own.
 
 ## 10. Question and content rules
 
@@ -178,7 +179,7 @@ V1 should establish whether:
 - A secure invite flow gets the second person into the correct empty slot without creating recovery risk.
 - Together mode creates a low-friction shared conversation without collecting answer text.
 - Private mode's waiting and mutual-reveal sequence is understandable, trustworthy, and emotionally satisfying.
-- Multiple active Private questions remain easy to resume and understand without making Closer feel like a chat product.
+- Multiple active Private conversations remain easy to resume and understand without making Closer feel like a chat product.
 - Users find enough variety and appropriate depth in the curated question deck across Partner and Friend pairs.
 - Participants return to start another conversation and find chronological history useful.
 - Contextual notification opt-in after submitting a Private answer feels relevant rather than intrusive.

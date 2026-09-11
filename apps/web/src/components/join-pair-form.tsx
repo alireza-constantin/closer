@@ -1,13 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { Sparkles } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { useState } from "react";
 
-import { Button } from "@Closer/ui/components/button";
-import { Input } from "@Closer/ui/components/input";
-import { Label } from "@Closer/ui/components/label";
-
-export default function JoinPairForm({ token }: { token: string }) {
+export default function JoinPairForm({ token, inviterDisplayName }: { token: string; inviterDisplayName: string | null }) {
   const router = useRouter();
   const [displayName, setDisplayName] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -28,7 +25,9 @@ export default function JoinPairForm({ token }: { token: string }) {
         setError("This invitation is unavailable. It may have expired, been revoked, or already been used.");
         return;
       }
-      router.push(`/pair/${String(body.pairId)}` as never);
+      // The invite is consumed; keep the joined pair as the canonical back
+      // destination instead of allowing Back to return to onboarding.
+      router.replace(`/pair/${String(body.pairId)}` as never);
     } catch {
       setError("This invitation is unavailable. Please try again.");
     } finally {
@@ -37,21 +36,24 @@ export default function JoinPairForm({ token }: { token: string }) {
   }
 
   return (
-    <form className="space-y-5 rounded border p-5" onSubmit={joinPair}>
-      <div className="space-y-2">
-        <Label htmlFor="display-name">Your display name</Label>
-        <Input
-          id="display-name"
-          maxLength={40}
-          onChange={(event) => setDisplayName(event.target.value)}
-          required
-          value={displayName}
-        />
-      </div>
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
-      <Button disabled={isSubmitting} type="submit">
-        {isSubmitting ? "Joining…" : "Join pair"}
-      </Button>
+    <form className="closer-onboarding-card closer-join-card" onSubmit={joinPair}>
+      <span className="closer-onboarding-icon closer-icon-lavender"><Sparkles aria-hidden="true" /></span>
+      <p className="closer-eyebrow">An invitation for you</p>
+      <h1>{inviterDisplayName ? `${inviterDisplayName} invited you` : "You’re invited"}</h1>
+      <p className="closer-onboarding-copy">Add your name to join this little space for two. No sign-up needed.</p>
+      <label className="closer-input-label" htmlFor="display-name">Your name</label>
+      <input
+        autoComplete="name"
+        className="closer-onboarding-input"
+        id="display-name"
+        maxLength={40}
+        onChange={(event) => setDisplayName(event.target.value)}
+        placeholder="What should they call you?"
+        required
+        value={displayName}
+      />
+      {error ? <p className="closer-form-error" role="alert">{error}</p> : null}
+      <button className="closer-primary-button closer-wide-button" disabled={isSubmitting} type="submit">{isSubmitting ? "Joining…" : "Join"}</button>
     </form>
   );
 }

@@ -1,13 +1,25 @@
+import { db, getActivePairForParticipant } from "@Closer/auth/closer";
+import { redirect } from "next/navigation";
+
 import AnonymousSession from "@/components/anonymous-session";
 import CreatePairForm from "@/components/create-pair-form";
+import { getCurrentParticipant } from "@/lib/closer-server";
 
-export default function Home() {
+// Membership can be completed in another browser while this route is cached.
+// Resolve it on every request so an active participant never sees onboarding.
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+export default async function Home() {
+  const currentParticipant = await getCurrentParticipant();
+  if (currentParticipant) {
+    const activePair = await getActivePairForParticipant(db, currentParticipant.id);
+    if (activePair) redirect(`/pair/${activePair.pairId}`);
+  }
+
   return (
-    <main className="mx-auto w-full max-w-xl px-5 py-12">
-      <div className="mb-8 space-y-2">
-        <h1 className="text-3xl font-semibold">Closer</h1>
-        <p className="text-muted-foreground">Create a private space for two people to have better conversations.</p>
-      </div>
+    <main className="closer-shell closer-onboarding-shell">
+      <header className="closer-topbar"><span className="closer-wordmark">Closer <span aria-hidden="true">♥</span></span><span className="closer-pair-mark" aria-hidden="true"><i /> <i /></span></header>
       <AnonymousSession>
         <CreatePairForm />
       </AnonymousSession>

@@ -1,12 +1,27 @@
 import { createHash, randomBytes } from "node:crypto";
 
-import { and, eq, gt, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNull, sql } from "drizzle-orm";
 
 import { createDb } from "./index";
-import { initialInvite, pair, pairMembership, participant } from "./schema/closer";
+import {
+  initialInvite,
+  pair,
+  pairMembership,
+  participant,
+  privateAnswer,
+  privateConversation,
+  privateReaction,
+  privateReply,
+  privateRevealView,
+  privateRound,
+  question,
+} from "./schema/closer";
 
 type Database = ReturnType<typeof createDb>;
 type RelationshipType = "partner" | "friend";
+type QuestionCategory = "fun" | "deep" | "memories" | "relationship" | "friendship";
+type QuestionModeFit = "both" | "together" | "private";
+type ReactionValue = "heart" | "laugh" | "tender" | "surprised";
 
 const INITIAL_INVITE_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -17,7 +32,16 @@ export class CloserDomainError extends Error {
       | "RELATIONSHIP_TYPE_INVALID"
       | "UNAUTHENTICATED"
       | "PAIR_NOT_FOUND"
-      | "INVITE_UNAVAILABLE",
+      | "INVITE_UNAVAILABLE"
+      | "ROUND_NOT_FOUND"
+      | "CONVERSATION_NOT_FOUND"
+      | "PAIR_NOT_READY"
+      | "QUESTION_UNAVAILABLE"
+      | "ANSWER_INVALID"
+      | "ANSWER_IMMUTABLE"
+      | "REPLY_INVALID"
+      | "REACTION_INVALID"
+      | "REVEAL_NOT_READY",
   ) {
     super(code);
   }
@@ -35,6 +59,30 @@ function assertRelationshipType(value: string): asserts value is RelationshipTyp
   if (value !== "partner" && value !== "friend") {
     throw new CloserDomainError("RELATIONSHIP_TYPE_INVALID");
   }
+}
+
+function assertQuestionCategory(value: string): asserts value is QuestionCategory {
+  if (!["fun", "deep", "memories", "relationship", "friendship"].includes(value)) {
+    throw new CloserDomainError("QUESTION_UNAVAILABLE");
+  }
+}
+
+function assertReactionValue(value: string): asserts value is ReactionValue {
+  if (!["heart", "laugh", "tender", "surprised"].includes(value)) {
+    throw new CloserDomainError("REACTION_INVALID");
+  }
+}
+
+function normalizePrivateText(value: string, maximumLength: number, errorCode: "ANSWER_INVALID" | "REPLY_INVALID") {
+  const normalized = value.trim();
+  if (normalized.length < 1 || normalized.length > maximumLength) {
+    throw new CloserDomainError(errorCode);
+  }
+  return normalized;
+}
+
+function isUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
 function hashInviteToken(token: string) {
@@ -81,6 +129,23 @@ export async function getParticipantByAuthUserId(database: Database, authUserId:
     .select()
     .from(participant)
     .where(eq(participant.authUserId, authUserId))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+/**
+ * Resolve the participant's current space for server-side routing. This is
+ * deliberately a projection of active membership only; it does not impose a
+ * database-wide one-pair-per-participant constraint, so future multi-pair
+ * navigation remains possible. Until that exists, the most recently started
+ * active membership is the participant's current space.
+ */
+export async function getActivePairForParticipant(database: Database, participantId: string) {
+  const rows = await database
+    .select({ pairId: pairMembership.pairId, startedAt: pairMembership.startedAt })
+    .from(pairMembership)
+    .where(and(eq(pairMembership.participantId, participantId), isNull(pairMembership.endedAt)))
+    .orderBy(desc(pairMembership.startedAt), desc(pairMembership.id))
     .limit(1);
   return rows[0] ?? null;
 }
@@ -195,6 +260,36 @@ export async function revokeInitialInvites(
   });
 }
 
+/**
+ * The high-entropy invite URL is the only public capability here. This small
+ * projection lets its landing page name the inviter without exposing pair data
+ * for a missing, revoked, redeemed, or expired invite.
+ */
+export async function getInitialInviteLanding(database: Database, token: string) {
+  const rows = await database
+    .select({ inviterDisplayName: participant.displayName })
+    .from(initialInvite)
+    .innerJoin(
+      pairMembership,
+      and(
+        eq(pairMembership.pairId, initialInvite.pairId),
+        eq(pairMembership.slot, "first"),
+        isNull(pairMembership.endedAt),
+      ),
+    )
+    .innerJoin(participant, eq(participant.id, pairMembership.participantId))
+    .where(
+      and(
+        eq(initialInvite.tokenHash, hashInviteToken(token)),
+        isNull(initialInvite.revokedAt),
+        isNull(initialInvite.redeemedAt),
+        gt(initialInvite.expiresAt, new Date()),
+      ),
+    )
+    .limit(1);
+  return rows[0] ?? null;
+}
+
 export async function redeemInitialInvite(
   database: Database,
   input: { token: string; participantId: string },
@@ -293,6 +388,656 @@ export async function getPairStatusForParticipant(database: Database, participan
   const otherMember = otherMembers[0];
   if (!otherMember) return { state: "waiting" as const };
   return { state: "connected" as const, otherParticipantDisplayName: otherMember.displayName };
+}
+
+async function requireCompletePairAccess(database: Database, participantId: string, pairId: string) {
+  const access = await requireActivePairAccess(database, participantId, pairId);
+  const members = await database
+    .select({ participantId: pairMembership.participantId, displayName: participant.displayName })
+    .from(pairMembership)
+    .innerJoin(participant, eq(pairMembership.participantId, participant.id))
+    .where(and(eq(pairMembership.pairId, pairId), isNull(pairMembership.endedAt)));
+
+  if (members.length !== 2) throw new CloserDomainError("PAIR_NOT_READY");
+  return { ...access, members };
+}
+
+async function loadPrivateRoundContext(database: Database, participantId: string, pairId: string, roundId: string) {
+  const access = await requireCompletePairAccess(database, participantId, pairId);
+  const rows = await database
+    .select({ round: privateRound, question, conversation: privateConversation })
+    .from(privateRound)
+    .innerJoin(
+      privateConversation,
+      and(
+        eq(privateRound.conversationId, privateConversation.id),
+        eq(privateRound.pairId, privateConversation.pairId),
+      ),
+    )
+    .innerJoin(question, eq(privateRound.questionId, question.id))
+    .where(
+      and(
+        eq(privateRound.id, roundId),
+        eq(privateRound.pairId, pairId),
+        gte(privateRound.createdAt, access.membership.startedAt),
+      ),
+    )
+    .limit(1);
+  const result = rows[0];
+  if (!result) throw new CloserDomainError("ROUND_NOT_FOUND");
+  return { ...access, ...result };
+}
+
+function viewerRoundState(
+  answerCount: number,
+  hasViewerAnswer: boolean,
+  revealViewedAt: Date | null,
+): "YOUR_TURN" | "WAITING" | "REVEAL_READY" | "REVEAL_VIEWED" {
+  if (answerCount === 2) return revealViewedAt ? "REVEAL_VIEWED" : "REVEAL_READY";
+  return hasViewerAnswer ? "WAITING" : "YOUR_TURN";
+}
+
+export async function listEligiblePrivateQuestions(
+  database: Database,
+  input: { participantId: string; pairId: string; category: string },
+) {
+  assertQuestionCategory(input.category);
+  const access = await requireCompletePairAccess(database, input.participantId, input.pairId);
+  const relationshipCategory = access.pair.relationshipType === "partner" ? "relationship" : "friendship";
+  if (input.category === "relationship" || input.category === "friendship") {
+    if (input.category !== relationshipCategory) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+  }
+
+  const eligibleQuestions = await database
+    .select({
+      id: question.id,
+      text: question.text,
+      category: question.category,
+      depth: question.depth,
+    })
+    .from(question)
+    .where(
+      and(
+        eq(question.isActive, true),
+        eq(question.category, input.category),
+        inArray(question.relationshipFit, ["both", access.pair.relationshipType]),
+        inArray(question.modeFit, ["both", "private"]),
+      ),
+    );
+
+  // This is deliberately preference-free: a pair sees every compatible question again
+  // only after it has exhausted the compatible questions it has not used before.
+  const usedRows = await database
+    .select({ questionId: privateRound.questionId })
+    .from(privateRound)
+    .where(eq(privateRound.pairId, input.pairId));
+  const usedQuestionIds = new Set(usedRows.map((row) => row.questionId));
+
+  return eligibleQuestions.toSorted((left, right) => {
+    const usageDifference = Number(usedQuestionIds.has(left.id)) - Number(usedQuestionIds.has(right.id));
+    return usageDifference || left.id.localeCompare(right.id);
+  });
+}
+
+function assertCategoryForPair(access: { pair: { relationshipType: RelationshipType } }, category: string) {
+  assertQuestionCategory(category);
+  const relationshipCategory = access.pair.relationshipType === "partner" ? "relationship" : "friendship";
+  if ((category === "relationship" || category === "friendship") && category !== relationshipCategory) {
+    throw new CloserDomainError("QUESTION_UNAVAILABLE");
+  }
+}
+
+async function eligiblePrivateQuestions(
+  database: Database,
+  input: { relationshipType: RelationshipType; category: QuestionCategory },
+) {
+  return database
+    .select({ id: question.id, text: question.text, category: question.category, depth: question.depth })
+    .from(question)
+    .where(
+      and(
+        eq(question.isActive, true),
+        eq(question.category, input.category),
+        inArray(question.relationshipFit, ["both", input.relationshipType]),
+        inArray(question.modeFit, ["both", "private"]),
+      ),
+    );
+}
+
+async function latestRoundForConversation(database: Database, conversationId: string) {
+  const rows = await database
+    .select({ id: privateRound.id, questionId: privateRound.questionId, createdAt: privateRound.createdAt })
+    .from(privateRound)
+    .where(eq(privateRound.conversationId, conversationId))
+    .orderBy(desc(privateRound.createdAt), desc(privateRound.id))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+async function answerCountForRound(database: Database, roundId: string) {
+  const rows = await database
+    .select({ id: privateAnswer.id })
+    .from(privateAnswer)
+    .where(eq(privateAnswer.roundId, roundId));
+  return rows.length;
+}
+
+async function nextEligibleQuestionForConversation(
+  database: Database,
+  input: { pairId: string; conversationId: string; relationshipType: RelationshipType; category: QuestionCategory; latestQuestionId?: string },
+) {
+  // Callers hold a row lock inside one PostgreSQL transaction. This client must
+  // execute those reads serially; parallel queries on it trigger driver warnings.
+  const eligible = await eligiblePrivateQuestions(database, { relationshipType: input.relationshipType, category: input.category });
+  const conversationUsage = await database
+    .select({ questionId: privateRound.questionId })
+    .from(privateRound)
+    .where(eq(privateRound.conversationId, input.conversationId));
+  const pairUsage = await database
+    .select({ questionId: privateRound.questionId })
+    .from(privateRound)
+    .where(eq(privateRound.pairId, input.pairId));
+  if (!eligible.length) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+
+  const conversationQuestionIds = new Set(conversationUsage.map((row) => row.questionId));
+  const pairQuestionIds = new Set(pairUsage.map((row) => row.questionId));
+  return eligible.toSorted((left, right) => {
+    const conversationUsageDifference = Number(conversationQuestionIds.has(left.id)) - Number(conversationQuestionIds.has(right.id));
+    if (conversationUsageDifference) return conversationUsageDifference;
+    const pairUsageDifference = Number(pairQuestionIds.has(left.id)) - Number(pairQuestionIds.has(right.id));
+    if (pairUsageDifference) return pairUsageDifference;
+    // When the whole category has been used, cycle rather than immediately
+    // repeating the current question when another eligible prompt exists.
+    const currentQuestionDifference = Number(left.id === input.latestQuestionId) - Number(right.id === input.latestQuestionId);
+    return currentQuestionDifference || left.id.localeCompare(right.id);
+  })[0]!;
+}
+
+async function lockPairAndFindConversation(
+  database: Database,
+  input: { pairId: string; category: QuestionCategory; participantId: string },
+) {
+  await database.execute(sql`select id from "pair" where id = ${input.pairId} for update`);
+  const existing = await database
+    .select()
+    .from(privateConversation)
+    .where(
+      and(
+        eq(privateConversation.pairId, input.pairId),
+        eq(privateConversation.category, input.category),
+        isNull(privateConversation.endedAt),
+      ),
+    )
+    .limit(1);
+  if (existing[0]) return existing[0];
+
+  const inserted = await database
+    .insert(privateConversation)
+    .values({
+      pairId: input.pairId,
+      category: input.category,
+      createdByParticipantId: input.participantId,
+    })
+    .onConflictDoNothing()
+    .returning();
+  if (inserted[0]) return inserted[0];
+
+  const resolved = await database
+    .select()
+    .from(privateConversation)
+    .where(
+      and(
+        eq(privateConversation.pairId, input.pairId),
+        eq(privateConversation.category, input.category),
+        isNull(privateConversation.endedAt),
+      ),
+    )
+    .limit(1);
+  if (!resolved[0]) throw new Error("Private conversation creation did not resolve.");
+  return resolved[0];
+}
+
+async function insertRoundForConversation(
+  database: Database,
+  input: { pairId: string; conversationId: string; participantId: string; questionId: string; clientRequestId?: string },
+) {
+  if (input.clientRequestId) {
+    const existing = await database
+      .select({ id: privateRound.id, conversationId: privateRound.conversationId })
+      .from(privateRound)
+      .where(
+        and(
+          eq(privateRound.pairId, input.pairId),
+          eq(privateRound.initiatorParticipantId, input.participantId),
+          eq(privateRound.clientRequestId, input.clientRequestId),
+        ),
+      )
+      .limit(1);
+    if (existing[0]) {
+      if (existing[0].conversationId !== input.conversationId) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+      return { id: existing[0].id };
+    }
+  }
+
+  const inserted = await database
+    .insert(privateRound)
+    .values({
+      pairId: input.pairId,
+      conversationId: input.conversationId,
+      questionId: input.questionId,
+      initiatorParticipantId: input.participantId,
+      clientRequestId: input.clientRequestId,
+    })
+    .onConflictDoNothing()
+    .returning({ id: privateRound.id });
+  if (inserted[0]) return { id: inserted[0].id };
+
+  if (!input.clientRequestId) throw new Error("Private round creation did not return a round.");
+  const resolved = await database
+    .select({ id: privateRound.id, conversationId: privateRound.conversationId })
+    .from(privateRound)
+    .where(
+      and(
+        eq(privateRound.pairId, input.pairId),
+        eq(privateRound.initiatorParticipantId, input.participantId),
+        eq(privateRound.clientRequestId, input.clientRequestId),
+      ),
+    )
+    .limit(1);
+  if (!resolved[0]) throw new Error("Private round creation did not resolve.");
+  if (resolved[0].conversationId !== input.conversationId) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+  return { id: resolved[0].id };
+}
+
+export async function startOrResumePrivateConversation(
+  database: Database,
+  input: { participantId: string; pairId: string; category: string; clientRequestId?: string },
+) {
+  const access = await requireCompletePairAccess(database, input.participantId, input.pairId);
+  if (input.clientRequestId && !isUuid(input.clientRequestId)) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+  assertCategoryForPair(access, input.category);
+  const category = input.category as QuestionCategory;
+
+  return database.transaction(async (transaction) => {
+    const tx = transaction as unknown as Database;
+    const conversation = await lockPairAndFindConversation(tx, {
+      pairId: input.pairId,
+      category,
+      participantId: input.participantId,
+    });
+    const currentRound = await latestRoundForConversation(tx, conversation.id);
+    if (currentRound) return { conversationId: conversation.id, roundId: currentRound.id };
+
+    const nextQuestion = await nextEligibleQuestionForConversation(tx, {
+      pairId: input.pairId,
+      conversationId: conversation.id,
+      relationshipType: access.pair.relationshipType,
+      category: conversation.category,
+    });
+    const round = await insertRoundForConversation(tx, {
+      pairId: input.pairId,
+      conversationId: conversation.id,
+      participantId: input.participantId,
+      questionId: nextQuestion.id,
+      clientRequestId: input.clientRequestId,
+    });
+    return { conversationId: conversation.id, roundId: round.id };
+  });
+}
+
+export async function createNextPrivateRound(
+  database: Database,
+  input: { participantId: string; pairId: string; conversationId: string; clientRequestId?: string },
+) {
+  const access = await requireCompletePairAccess(database, input.participantId, input.pairId);
+  if (input.clientRequestId && !isUuid(input.clientRequestId)) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+
+  return database.transaction(async (transaction) => {
+    const tx = transaction as unknown as Database;
+    await tx.execute(sql`select id from "pair" where id = ${input.pairId} for update`);
+    const conversations = await tx
+      .select()
+      .from(privateConversation)
+      .where(
+        and(
+          eq(privateConversation.id, input.conversationId),
+          eq(privateConversation.pairId, input.pairId),
+          isNull(privateConversation.endedAt),
+        ),
+      )
+      .limit(1);
+    const conversation = conversations[0];
+    if (!conversation) throw new CloserDomainError("CONVERSATION_NOT_FOUND");
+    await tx.execute(sql`select id from "private_conversation" where id = ${conversation.id} for update`);
+
+    const currentRound = await latestRoundForConversation(tx, conversation.id);
+    if (!currentRound) throw new CloserDomainError("CONVERSATION_NOT_FOUND");
+    if (await answerCountForRound(tx, currentRound.id) < 2) {
+      // The first successful Next request may already have made this the new
+      // current round; returning it makes retries and double-clicks safe.
+      return { conversationId: conversation.id, roundId: currentRound.id };
+    }
+
+    const nextQuestion = await nextEligibleQuestionForConversation(tx, {
+      pairId: input.pairId,
+      conversationId: conversation.id,
+      relationshipType: access.pair.relationshipType,
+      category: conversation.category,
+      latestQuestionId: currentRound.questionId,
+    });
+    const nextRound = await insertRoundForConversation(tx, {
+      pairId: input.pairId,
+      conversationId: conversation.id,
+      participantId: input.participantId,
+      questionId: nextQuestion.id,
+      clientRequestId: input.clientRequestId,
+    });
+    return { conversationId: conversation.id, roundId: nextRound.id };
+  });
+}
+
+/** @deprecated Use startOrResumePrivateConversation so category flow cannot bypass conversation sequencing. */
+export async function createPrivateRound(
+  database: Database,
+  input: { participantId: string; pairId: string; questionId: string; clientRequestId?: string },
+) {
+  const selectedQuestion = await database
+    .select({ category: question.category })
+    .from(question)
+    .where(eq(question.id, input.questionId))
+    .limit(1);
+  if (!selectedQuestion[0]) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+  const result = await startOrResumePrivateConversation(database, {
+    participantId: input.participantId,
+    pairId: input.pairId,
+    category: selectedQuestion[0].category,
+    clientRequestId: input.clientRequestId,
+  });
+  return { id: result.roundId };
+}
+
+export async function getPrivateRoundForParticipant(
+  database: Database,
+  input: { participantId: string; pairId: string; roundId: string },
+) {
+  const context = await loadPrivateRoundContext(database, input.participantId, input.pairId, input.roundId);
+  const [answers, viewerReveal] = await Promise.all([
+    database.select().from(privateAnswer).where(eq(privateAnswer.roundId, input.roundId)),
+    database
+      .select({ viewedAt: privateRevealView.viewedAt })
+      .from(privateRevealView)
+      .where(and(eq(privateRevealView.roundId, input.roundId), eq(privateRevealView.participantId, input.participantId)))
+      .limit(1),
+  ]);
+  const viewerAnswer = answers.find((answer) => answer.participantId === input.participantId) ?? null;
+  const isRevealReady = answers.length === 2;
+  const revealViewedAt = viewerReveal[0]?.viewedAt ?? null;
+  const otherMember = context.members.find((member) => member.participantId !== input.participantId);
+  if (!otherMember) throw new CloserDomainError("ROUND_NOT_FOUND");
+
+  const result = {
+    id: context.round.id,
+    pairId: context.round.pairId,
+    conversation: {
+      id: context.conversation.id,
+      category: context.conversation.category,
+      questionNumber: 0,
+    },
+    question: {
+      id: context.question.id,
+      text: context.question.text,
+      category: context.question.category,
+      depth: context.question.depth,
+    },
+    otherParticipant: { id: otherMember.participantId, displayName: otherMember.displayName },
+    yourAnswer: viewerAnswer?.body ?? null,
+    state: viewerRoundState(answers.length, viewerAnswer !== null, revealViewedAt),
+    revealViewedAt: revealViewedAt?.toISOString() ?? null,
+  } as {
+    id: string;
+    pairId: string;
+    conversation: { id: string; category: QuestionCategory; questionNumber: number };
+    question: { id: string; text: string; category: QuestionCategory; depth: "light" | "medium" | "deep" };
+    otherParticipant: { id: string; displayName: string };
+    yourAnswer: string | null;
+    state: "YOUR_TURN" | "WAITING" | "REVEAL_READY" | "REVEAL_VIEWED";
+    revealViewedAt: string | null;
+    answers?: Array<{ participantId: string; displayName: string; body: string }>;
+    reactions?: Array<{ participantId: string; displayName: string; value: ReactionValue }>;
+    replies?: Array<{ participantId: string; displayName: string; body: string; isOwner: boolean }>;
+  };
+
+  const conversationRounds = await database
+    .select({ id: privateRound.id })
+    .from(privateRound)
+    .where(eq(privateRound.conversationId, context.conversation.id))
+    .orderBy(asc(privateRound.createdAt), asc(privateRound.id));
+  result.conversation.questionNumber = conversationRounds.findIndex((round) => round.id === input.roundId) + 1;
+
+  // Deliberately do not put another participant's answer anywhere in this projection until this exact round is ready.
+  if (!isRevealReady) return result;
+
+  const memberNames = new Map(context.members.map((member) => [member.participantId, member.displayName]));
+  const [reactions, replies] = await Promise.all([
+    database.select().from(privateReaction).where(eq(privateReaction.roundId, input.roundId)),
+    database.select().from(privateReply).where(eq(privateReply.roundId, input.roundId)),
+  ]);
+  result.answers = answers.map((answer) => ({
+    participantId: answer.participantId,
+    displayName: memberNames.get(answer.participantId) ?? "Participant",
+    body: answer.body,
+  }));
+  result.reactions = reactions.map((reaction) => ({
+    participantId: reaction.participantId,
+    displayName: memberNames.get(reaction.participantId) ?? "Participant",
+    value: reaction.value,
+  }));
+  result.replies = replies.map((reply) => ({
+    participantId: reply.participantId,
+    displayName: memberNames.get(reply.participantId) ?? "Participant",
+    body: reply.body,
+    isOwner: reply.participantId === input.participantId,
+  }));
+  return result;
+}
+
+export async function getPrivateRoundStatusForParticipant(
+  database: Database,
+  input: { participantId: string; pairId: string; roundId: string },
+) {
+  const view = await getPrivateRoundForParticipant(database, input);
+  return { state: view.state };
+}
+
+export async function listActivePrivateConversations(
+  database: Database,
+  input: { participantId: string; pairId: string },
+): Promise<Array<{
+  id: string;
+  category: QuestionCategory;
+  questionCount: number;
+  currentRound: { id: string; question: { id: string; text: string; category: QuestionCategory; depth: "light" | "medium" | "deep" } };
+  otherParticipantDisplayName: string;
+  state: "YOUR_TURN" | "WAITING" | "REVEAL_READY" | "READY_FOR_NEXT";
+}>> {
+  const access = await requireCompletePairAccess(database, input.participantId, input.pairId);
+  const conversations = await database
+    .select({
+      id: privateConversation.id,
+      category: privateConversation.category,
+      createdAt: privateConversation.createdAt,
+    })
+    .from(privateConversation)
+    .where(
+      and(
+        eq(privateConversation.pairId, input.pairId),
+        isNull(privateConversation.endedAt),
+        gte(privateConversation.createdAt, access.membership.startedAt),
+      ),
+    )
+    .orderBy(desc(privateConversation.createdAt));
+  if (!conversations.length) return [];
+
+  // Pair Home intentionally reads a conversation summary, never answer/reaction/reply
+  // payloads. Answer positions for each current round are sufficient to derive state.
+  const conversationIds = conversations.map((conversation) => conversation.id);
+  const rounds = await database
+    .select({
+      id: privateRound.id,
+      conversationId: privateRound.conversationId,
+      question: { id: question.id, text: question.text, category: question.category, depth: question.depth },
+      createdAt: privateRound.createdAt,
+    })
+    .from(privateRound)
+    .innerJoin(question, eq(privateRound.questionId, question.id))
+    .where(inArray(privateRound.conversationId, conversationIds))
+    .orderBy(desc(privateRound.createdAt), desc(privateRound.id));
+  if (!rounds.length) return [];
+
+  const currentRoundByConversation = new Map<string, typeof rounds[number]>();
+  const questionCountByConversation = new Map<string, number>();
+  for (const round of rounds) {
+    questionCountByConversation.set(round.conversationId, (questionCountByConversation.get(round.conversationId) ?? 0) + 1);
+    if (!currentRoundByConversation.has(round.conversationId)) currentRoundByConversation.set(round.conversationId, round);
+  }
+  const currentRoundIds = [...currentRoundByConversation.values()].map((round) => round.id);
+  const [answerPositions, revealViews] = await Promise.all([
+    database
+      .select({ roundId: privateAnswer.roundId, participantId: privateAnswer.participantId })
+      .from(privateAnswer)
+      .where(inArray(privateAnswer.roundId, currentRoundIds)),
+    database
+      .select({ roundId: privateRevealView.roundId, viewedAt: privateRevealView.viewedAt })
+      .from(privateRevealView)
+      .where(and(inArray(privateRevealView.roundId, currentRoundIds), eq(privateRevealView.participantId, input.participantId))),
+  ]);
+  const answersByRound = new Map<string, Array<{ participantId: string }>>();
+  for (const answer of answerPositions) {
+    const positions = answersByRound.get(answer.roundId) ?? [];
+    positions.push(answer);
+    answersByRound.set(answer.roundId, positions);
+  }
+  const viewedRoundIds = new Set(revealViews.map((view) => view.roundId));
+  const otherMember = access.members.find((member) => member.participantId !== input.participantId);
+  if (!otherMember) throw new CloserDomainError("ROUND_NOT_FOUND");
+
+  return conversations.flatMap((conversation) => {
+    const currentRound = currentRoundByConversation.get(conversation.id);
+    if (!currentRound) return [];
+    const answerPositionsForRound = answersByRound.get(currentRound.id) ?? [];
+    const currentState = viewerRoundState(
+      answerPositionsForRound.length,
+      answerPositionsForRound.some((answer) => answer.participantId === input.participantId),
+      viewedRoundIds.has(currentRound.id) ? new Date() : null,
+    );
+    return [{
+      id: conversation.id,
+      category: conversation.category,
+      questionCount: questionCountByConversation.get(conversation.id) ?? 0,
+      currentRound: { id: currentRound.id, question: currentRound.question },
+      otherParticipantDisplayName: otherMember.displayName,
+      state: currentState === "REVEAL_VIEWED" ? "READY_FOR_NEXT" : currentState,
+    }];
+  });
+}
+
+/** @deprecated Pair Home must use conversation summaries. */
+export const listActivePrivateRounds = listActivePrivateConversations;
+
+export async function submitPrivateAnswer(
+  database: Database,
+  input: { participantId: string; pairId: string; roundId: string; body: string },
+) {
+  const body = normalizePrivateText(input.body, 2000, "ANSWER_INVALID");
+  await loadPrivateRoundContext(database, input.participantId, input.pairId, input.roundId);
+  const inserted = await database
+    .insert(privateAnswer)
+    .values({ roundId: input.roundId, participantId: input.participantId, body })
+    .onConflictDoNothing()
+    .returning({ body: privateAnswer.body });
+
+  if (!inserted[0]) {
+    const existing = await database
+      .select({ body: privateAnswer.body })
+      .from(privateAnswer)
+      .where(and(eq(privateAnswer.roundId, input.roundId), eq(privateAnswer.participantId, input.participantId)))
+      .limit(1);
+    if (!existing[0]) throw new Error("Private answer submission did not resolve.");
+    if (existing[0].body !== body) throw new CloserDomainError("ANSWER_IMMUTABLE");
+  }
+  return getPrivateRoundForParticipant(database, input);
+}
+
+export async function markPrivateRevealViewed(
+  database: Database,
+  input: { participantId: string; pairId: string; roundId: string },
+) {
+  const view = await getPrivateRoundForParticipant(database, input);
+  if (!view.answers) throw new CloserDomainError("REVEAL_NOT_READY");
+  await database
+    .insert(privateRevealView)
+    .values({ roundId: input.roundId, participantId: input.participantId })
+    .onConflictDoNothing();
+  return getPrivateRoundForParticipant(database, input);
+}
+
+async function requireRevealViewed(database: Database, input: { participantId: string; pairId: string; roundId: string }) {
+  const view = await getPrivateRoundForParticipant(database, input);
+  if (!view.answers || view.state !== "REVEAL_VIEWED") throw new CloserDomainError("REVEAL_NOT_READY");
+}
+
+export async function setPrivateReaction(
+  database: Database,
+  input: { participantId: string; pairId: string; roundId: string; value: string },
+) {
+  assertReactionValue(input.value);
+  await requireRevealViewed(database, input);
+  await database
+    .insert(privateReaction)
+    .values({ roundId: input.roundId, participantId: input.participantId, value: input.value })
+    .onConflictDoUpdate({
+      target: [privateReaction.roundId, privateReaction.participantId],
+      set: { value: input.value, updatedAt: new Date() },
+    });
+  return getPrivateRoundForParticipant(database, input);
+}
+
+export async function removePrivateReaction(
+  database: Database,
+  input: { participantId: string; pairId: string; roundId: string },
+) {
+  await requireRevealViewed(database, input);
+  await database
+    .delete(privateReaction)
+    .where(and(eq(privateReaction.roundId, input.roundId), eq(privateReaction.participantId, input.participantId)));
+  return getPrivateRoundForParticipant(database, input);
+}
+
+export async function setPrivateReply(
+  database: Database,
+  input: { participantId: string; pairId: string; roundId: string; body: string },
+) {
+  const body = normalizePrivateText(input.body, 500, "REPLY_INVALID");
+  await requireRevealViewed(database, input);
+  await database
+    .insert(privateReply)
+    .values({ roundId: input.roundId, participantId: input.participantId, body })
+    .onConflictDoUpdate({
+      target: [privateReply.roundId, privateReply.participantId],
+      set: { body, updatedAt: new Date() },
+    });
+  return getPrivateRoundForParticipant(database, input);
+}
+
+export async function removePrivateReply(
+  database: Database,
+  input: { participantId: string; pairId: string; roundId: string },
+) {
+  await requireRevealViewed(database, input);
+  await database
+    .delete(privateReply)
+    .where(and(eq(privateReply.roundId, input.roundId), eq(privateReply.participantId, input.participantId)));
+  return getPrivateRoundForParticipant(database, input);
 }
 
 export { INITIAL_INVITE_LIFETIME_MS, normalizeDisplayName };
