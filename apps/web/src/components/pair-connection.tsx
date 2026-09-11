@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { CheckCircle2 } from "lucide-react";
+import { CheckCircle2, UsersRound } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import InviteControls from "@/components/invite-controls";
@@ -183,6 +184,13 @@ export default function PairConnection({
         </ol>
       </section>
       {!isConnected && !isRedirecting ? <InviteControls pairId={pairId} /> : null}
+      {!isConnected && !isRedirecting ? (
+        <Link className="closer-mode-card closer-mode-card-together closer-waiting-together-link" href={`/pair/${pairId}/together` as never}>
+          <span className="closer-mode-icon"><UsersRound aria-hidden="true" /></span>
+          <span><strong>Talk Together</strong><small>You can start a shared conversation before they join.</small></span>
+          <span aria-hidden="true">›</span>
+        </Link>
+      ) : null}
       {isConnected || isRedirecting ? (
         <p className="closer-joined-notice" role="status">Opening your shared space…</p>
       ) : null}

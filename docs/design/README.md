@@ -15,6 +15,8 @@ The reference depicts the selected Pair Home, Private Question, Waiting, and Rev
 
 The Pair Home image was produced before V1 accepted multiple concurrently active Private questions. It remains authoritative for visual language, colors, typography, and component style, but its single Private-state content model is obsolete. Pair Home implementation must follow the PRD's lightweight `Active questions` behavior, including independently derived `Your turn`, `Waiting for <name>`, and `Ready to reveal` items. This task does not prescribe the revised layout or modify the image.
 
+The Together reference in [`together-flow.png`](./together-flow.png) establishes the same visual language for shared-device category selection and question actions. It also illustrates that Together is an immediate, one-phone path; it must not acquire invitation, QR, or waiting-state UI merely because the second pair slot is empty.
+
 ## Chosen direction: Soft Modern / Playful
 
 Closer should feel warm, personal, and emotionally safe without becoming childish or visually busy.

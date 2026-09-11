@@ -1,6 +1,6 @@
 "use client";
 
-import { Copy, Link as LinkIcon, Sparkles } from "lucide-react";
+import { LockKeyhole, MessageCircleMore, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -27,12 +27,11 @@ export default function CreatePairForm() {
   const [result, setResult] = useState<PairCreation | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [didCopy, setDidCopy] = useState(false);
   const [joinedDisplayName, setJoinedDisplayName] = useState<string | null>(null);
   const intervalRef = useRef<number | null>(null);
+  const creationRequestIdRef = useRef<string | null>(null);
   const stoppedRef = useRef(false);
   const navigatedRef = useRef(false);
-  const inviteUrl = result ? `${window.location.origin}/join/${result.inviteToken}` : null;
 
   useEffect(() => {
     if (!result) return;
@@ -131,10 +130,12 @@ export default function CreatePairForm() {
     setError(null);
     setIsSubmitting(true);
     try {
+      const clientRequestId = creationRequestIdRef.current ?? crypto.randomUUID();
+      creationRequestIdRef.current = clientRequestId;
       const response = await fetch("/api/pairs", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ displayName, relationshipType }),
+        body: JSON.stringify({ displayName, relationshipType, clientRequestId }),
       });
       const body: unknown = await response.json();
       if (!response.ok || !body || typeof body !== "object" || !("pairId" in body)) {
@@ -150,27 +151,26 @@ export default function CreatePairForm() {
     }
   }
 
-  async function copyInvite() {
-    if (!inviteUrl) return;
-    try {
-      await navigator.clipboard.writeText(inviteUrl);
-      setDidCopy(true);
-    } catch {
-      setError("We couldn’t copy the invite. You can select the link instead.");
-    }
-  }
-
-  if (result && inviteUrl) {
+  if (result) {
     return (
-      <section className="closer-onboarding-card closer-invite-created">
-        <span className="closer-onboarding-icon closer-icon-lavender"><LinkIcon aria-hidden="true" /></span>
+      <section className="closer-onboarding-card closer-mode-choice-card">
+        <span className="closer-onboarding-icon closer-icon-coral"><Sparkles aria-hidden="true" /></span>
         <p className="closer-eyebrow">Your space is ready</p>
-        <h1>Invite your person</h1>
-        <p className="closer-onboarding-copy">Share this private link with the person you want to invite. It expires in seven days.</p>
-        <label className="closer-input-label" htmlFor="initial-invite">Your invite link</label>
-        <input className="closer-onboarding-input" id="initial-invite" readOnly value={inviteUrl} />
-        <button className="closer-primary-button closer-wide-button" onClick={() => void copyInvite()} type="button"><Copy aria-hidden="true" />{didCopy ? "Copied" : "Copy invite link"}</button>
-        <Link className="closer-text-link" href={`/pair/${result.pairId}`}>I’ll invite them later</Link>
+        <h1>How do you want to connect?</h1>
+        <p className="closer-onboarding-copy">Choose the kind of moment you want right now. You can bring your person in when you’re ready.</p>
+        <div className="closer-mode-stack closer-onboarding-mode-stack">
+          <Link className="closer-mode-card closer-mode-card-together" href={`/pair/${result.pairId}/together` as never}>
+            <span className="closer-mode-icon"><MessageCircleMore aria-hidden="true" /></span>
+            <span><strong>Together</strong><small>Use this phone and talk face-to-face.</small></span>
+            <span aria-hidden="true">›</span>
+          </Link>
+          <Link className="closer-mode-card closer-mode-card-private" href={`/pair/${result.pairId}/private` as never}>
+            <span className="closer-mode-icon"><LockKeyhole aria-hidden="true" /></span>
+            <span><strong>Private</strong><small>Answer separately on your own phones.</small></span>
+            <span aria-hidden="true">›</span>
+          </Link>
+        </div>
+        <Link className="closer-text-link" href={`/pair/${result.pairId}` as never}>I’ll choose later</Link>
         {joinedDisplayName ? (
           <p className="closer-joined-notice" role="status">
             <strong>{joinedDisplayName}</strong> joined. Opening your shared space…
@@ -201,11 +201,11 @@ export default function CreatePairForm() {
       <fieldset className="closer-relationship-choice">
         <legend>Who are you creating this with?</legend>
         <label className={relationshipType === "partner" ? "is-selected" : ""}>
-          <input checked={relationshipType === "partner"} name="relationship-type" onChange={() => setRelationshipType("partner")} type="radio" />
+          <input checked={relationshipType === "partner"} name="relationship-type" onChange={() => { creationRequestIdRef.current = null; setRelationshipType("partner"); }} type="radio" />
           <span>Partner</span><small>For the two of you</small>
         </label>
         <label className={relationshipType === "friend" ? "is-selected" : ""}>
-          <input checked={relationshipType === "friend"} name="relationship-type" onChange={() => setRelationshipType("friend")} type="radio" />
+          <input checked={relationshipType === "friend"} name="relationship-type" onChange={() => { creationRequestIdRef.current = null; setRelationshipType("friend"); }} type="radio" />
           <span>Friend</span><small>For close friends</small>
         </label>
       </fieldset>

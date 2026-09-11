@@ -13,12 +13,15 @@ const {
   getPairForParticipant,
   getPairStatusForParticipant,
   getParticipantByAuthUserId,
+  getRejoinInviteLanding,
   issueInitialInvite,
+  issueRejoinInvite,
+  redeemRejoinInvite,
   redeemInitialInvite,
   resolveOrCreateParticipant,
   revokeInitialInvites,
 } = await import("./closer");
-const { initialInvite, pair, pairMembership, participant } = await import("./schema/closer");
+const { initialInvite, pair, pairMembership, participant, rejoinInvite } = await import("./schema/closer");
 const { user } = await import("./schema/auth");
 const { and, eq, inArray, isNull } = await import("drizzle-orm");
 
@@ -60,6 +63,7 @@ async function captureError(promise: Promise<unknown>) {
 afterEach(async () => {
   if (createdPairIds.length > 0) {
     await db.delete(initialInvite).where(inArray(initialInvite.pairId, createdPairIds));
+    await db.delete(rejoinInvite).where(inArray(rejoinInvite.pairId, createdPairIds));
     await db.delete(pairMembership).where(inArray(pairMembership.pairId, createdPairIds));
     await db.delete(pair).where(inArray(pair.id, createdPairIds));
   }
@@ -102,6 +106,17 @@ describe("Closer Slice 01A", () => {
         expect.objectContaining({ pairId: friendPair.pair.id, participantId: friendPair.creator.id, slot: "first", endedAt: null }),
       ]),
     );
+  });
+
+  test("retries the same pair-creation request without creating a duplicate pair", async () => {
+    const creator = await createParticipant("Retry creator");
+    const clientRequestId = randomUUID();
+    const first = await createPairForParticipant(db, { participantId: creator.id, relationshipType: "partner", clientRequestId });
+    createdPairIds.push(first.pair.id);
+    const second = await createPairForParticipant(db, { participantId: creator.id, relationshipType: "partner", clientRequestId });
+
+    expect(second.pair.id).toBe(first.pair.id);
+    expect(await db.select().from(pair).where(eq(pair.id, first.pair.id))).toHaveLength(1);
   });
 
   test("resolves the participant's active pair for server-side root routing", async () => {
@@ -273,6 +288,32 @@ describe("Closer Slice 01A", () => {
     const unrelated = await createParticipant("Unrelated");
 
     expect(await captureError(getPairStatusForParticipant(db, unrelated.id, created.pair.id))).toBeInstanceOf(CloserDomainError);
+  });
+
+  test("rejoin links are slot-bound, single-use, and symmetric for guest members", async () => {
+    const created = await createPair();
+    const invitee = await createParticipant("Invitee");
+    await redeemInitialInvite(db, { token: created.invite.token, participantId: invitee.id });
+
+    const replacement = await createParticipant("Replacement");
+    const rejoin = await issueRejoinInvite(db, { participantId: created.creator.id, pairId: created.pair.id });
+    expect(rejoin.targetSlot).toBe("second");
+    expect((await getRejoinInviteLanding(db, rejoin.token))?.targetSlot).toBe("second");
+
+    await redeemRejoinInvite(db, { token: rejoin.token, participantId: replacement.id });
+    const activeMembers = await db
+      .select()
+      .from(pairMembership)
+      .where(and(eq(pairMembership.pairId, created.pair.id), isNull(pairMembership.endedAt)));
+    expect(activeMembers).toEqual(expect.arrayContaining([
+      expect.objectContaining({ participantId: created.creator.id, slot: "first" }),
+      expect.objectContaining({ participantId: replacement.id, slot: "second" }),
+    ]));
+    expect(activeMembers).not.toEqual(expect.arrayContaining([expect.objectContaining({ participantId: invitee.id })]));
+    expect(await captureError(redeemRejoinInvite(db, { token: rejoin.token, participantId: invitee.id }))).toMatchObject({ code: "REJOIN_UNAVAILABLE" });
+
+    const reverse = await issueRejoinInvite(db, { participantId: replacement.id, pairId: created.pair.id });
+    expect(reverse.targetSlot).toBe("first");
   });
 
   test("concurrent first-time resolution maps one auth user to one participant", async () => {

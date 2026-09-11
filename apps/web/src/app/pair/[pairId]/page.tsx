@@ -1,7 +1,6 @@
 import { db, getPairForParticipant, listActivePrivateConversations } from "@Closer/auth/closer";
 import { notFound } from "next/navigation";
 
-import PairConnection from "@/components/pair-connection";
 import PairHome from "@/components/pair-home";
 import { getCurrentParticipant } from "@/lib/closer-server";
 
@@ -21,28 +20,17 @@ export default async function PairPage({ params }: { params: Promise<{ pairId: s
     const firstMember = pairView.members.find((member) => member.slot === "first");
     const secondMember = pairView.members.find((member) => member.slot === "second");
 
-    if (firstMember && secondMember) {
-      const activeConversations = await listActivePrivateConversations(db, { participantId: currentParticipant.id, pairId });
-      return (
-        <PairHome
-          activeConversations={activeConversations}
-          memberNames={[firstMember.displayName, secondMember.displayName]}
-          pairId={pairId}
-        />
-      );
-    }
-
+    if (!firstMember) notFound();
+    const activeConversations = secondMember
+      ? await listActivePrivateConversations(db, { participantId: currentParticipant.id, pairId })
+      : [];
     return (
-      <main className="closer-shell closer-connection-shell">
-        <PairConnection
-          initialMembers={[
-            ...(firstMember ? [{ slot: "first" as const, displayName: firstMember.displayName }] : []),
-            ...(secondMember ? [{ slot: "second" as const, displayName: secondMember.displayName }] : []),
-          ]}
-          pairId={pairId}
-          relationshipType={pairView.pair.relationshipType}
-        />
-      </main>
+      <PairHome
+        activeConversations={activeConversations}
+        isComplete={Boolean(secondMember)}
+        memberNames={[firstMember.displayName, secondMember?.displayName ?? null]}
+        pairId={pairId}
+      />
     );
   } catch {
     notFound();

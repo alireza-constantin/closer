@@ -1,0 +1,23 @@
+import { CloserDomainError, db, redeemRejoinInvite, resolveOrCreateParticipant } from "@Closer/auth/closer";
+
+import { getAuthUserIdFromRequest } from "@/lib/closer-server";
+
+export async function POST(request: Request, context: { params: Promise<{ token: string }> }) {
+  const authUserId = await getAuthUserIdFromRequest(request.headers);
+  if (!authUserId) return Response.json({ error: "Sign in is required." }, { status: 401 });
+
+  const body: unknown = await request.json().catch(() => null);
+  const displayName = body && typeof body === "object" ? (body as Record<string, unknown>).displayName : null;
+  if (typeof displayName !== "string") return Response.json({ error: "Invalid request." }, { status: 400 });
+
+  const { token } = await context.params;
+  try {
+    const participant = await resolveOrCreateParticipant(db, { authUserId, displayName });
+    return Response.json(await redeemRejoinInvite(db, { token, participantId: participant.id }));
+  } catch (error) {
+    if (error instanceof CloserDomainError && error.code === "DISPLAY_NAME_INVALID") {
+      return Response.json({ error: error.code }, { status: 400 });
+    }
+    return Response.json({ error: "This rejoin link is unavailable." }, { status: 404 });
+  }
+}

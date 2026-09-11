@@ -14,25 +14,38 @@ This document is authoritative for V1 product behavior and scope. Architecture d
 
 Every V1 pair has exactly two logical participant slots and one relationship type: `partner` or `friend`. Groups and family configurations are outside V1.
 
+Creating a pair and connecting its second participant are separate actions. A pair may exist with only its first slot occupied. The relationship type belongs to the pair; the mode is a choice about the experience the pair wants right now.
+
 ## 3. Core product promise
 
 Closer makes it easy for two people to start a worthwhile conversation without setup friction. A pair can talk together from one phone or answer privately with a guaranteed mutual reveal: neither person can see the other's private answer until both have answered.
+
+The onboarding hierarchy is relationship first, mode second:
+
+```text
+Who are you using Closer with? → Partner or Friend → How do you want to connect? → Together or Private
+```
 
 ## 4. Together mode
 
 Together is for two people who are physically together and sharing one phone.
 
+Together requires only the requesting participant's active pair membership. The second slot may be empty: the other person does not need an active guest session, Closer open on another device, an invite redemption, or a QR scan. Choosing Together goes directly to category selection and its shared-device session.
+
 1. One participant starts a Together session.
 2. Closer displays one eligible question card at a time.
 3. The pair reads the question aloud and answers verbally.
 4. The shared device offers `Like`, `Skip`, `Next`, and `End session`.
-5. The session continues until the user explicitly ends it; there is no fixed card count.
+5. The pair chooses one category when the session starts. `Next` and `Skip` select another eligible question in that same category and session; they do not reopen category selection.
+6. The session continues until the user explicitly ends it; there is no fixed card count. A question already shown in that session is not repeated while unused eligible questions remain.
 
 Together mode never creates typed answer records. Like, Skip, and Next are pair/session-level signals. Because the phone is shared, those actions are intentionally not attributed to the individual who tapped. The participant who started the session may be known.
 
 ## 5. Private mode
 
 Private mode gives both active participants the same question and lets each answer independently.
+
+Private requires both logical slots to be actively connected. If the second slot is empty, the user sees `Connect your person` with the existing secure invitation URL presented as a link, QR code, and (when supported) native share action. Invitation is therefore part of entering Private, not a prerequisite for using Closer or Together.
 
 1. Choosing a category starts or resumes one Private conversation for that pair and category. A conversation owns a sequential run of eligible Private rounds.
 2. Its current eligible question starts the next Private round. A conversation has at most one unresolved current round at a time.
@@ -87,11 +100,14 @@ These are exclusions, not placeholders for speculative V2 requirements.
 
 1. A guest provides a required display name when their participant is created. The trimmed name must contain 1–40 characters and need not be unique.
 2. The guest chooses Partner or Friend and creates a pair, occupying the first logical slot.
-3. Closer creates a cryptographically strong, single-use, revocable invitation URL for the empty second slot. It expires after 7 days.
-4. The invited person opens the URL, provides a valid display name when their guest participant is created, and claims the empty slot.
-5. Redemption is single-purpose: the old URL cannot later replace either participant or reclaim an occupied slot.
+3. Closer asks how they want to connect: Together proceeds immediately, while Private checks whether the second slot is occupied.
+4. If the user chooses Private before the second person joins, Closer creates or reuses the initial invitation and shows `Connect your person`.
+5. The invited person opens the URL or scans its QR presentation, provides a valid display name when their guest participant is created, and claims the empty slot.
+6. Redemption is single-purpose: the old URL cannot later replace either participant or reclaim an occupied slot.
 
 If the initial invitation expires while the second slot remains empty, the active member may generate a fresh initial invitation. V1 may also allow a participant to change their own display name later.
+
+The invitation link and QR code always carry the same opaque URL. QR is only a presentation of the existing secure join flow; it is not a second joining mechanism.
 
 ### Optional registration
 
@@ -108,9 +124,11 @@ This replacement flow applies only when the participant occupying the target slo
 
 The previous participant identity remains distinct, and no earlier Private answers, reactions, replies, Together sessions, or other pre-membership pair history is transferred automatically. The continuing participant may retain access to historical interactions in which they were authorized to participate. The flow is symmetric: either active member can generate a rejoin link for the other eligible guest slot. The redeemed initial invitation is never a recovery credential.
 
+Where a rejoin link is shown, its exact URL may also be copied, shared, or displayed as a QR code. The QR presentation uses the same rejoin URL and does not change the symmetric authority rule.
+
 ### Together session
 
-The pair starts a session on one phone, moves through eligible cards with Like, Skip, or Next, answers verbally, and manually ends the session. No answer text is collected or stored.
+The pair chooses a category, starts a session on one phone, and moves through one eligible card at a time with Like, Skip, or Next. Next and Skip remain inside the selected category and session. The pair answers verbally and manually ends the session. No answer text is collected or stored.
 
 ### Private conversation and round
 
@@ -122,7 +140,7 @@ Participants can review a simple chronological history limited by their own auth
 
 ## 9. Important UI states
 
-Pair Home presents `Answer Privately` as the entry point for selecting a category. When active Private conversations exist, it also provides a lightweight `Your conversations` summary. Each item represents a category conversation, its current question, its question count, and one clear participant-relative state:
+Pair Home is mode-oriented and presents `Talk Together` and `Answer Privately` as its two primary actions, even while the second slot is empty. `Talk Together` always goes to category selection. `Answer Privately` goes to category selection when both slots are connected and to `Connect your person` when the second slot is empty. When active Private conversations exist, Pair Home also provides a lightweight `Your conversations` summary. Each item represents a category conversation, its current question, its question count, and one clear participant-relative state:
 
 | Current-round state | Current participant status/action |
 | --- | --- |
@@ -135,8 +153,8 @@ Participants can open any conversation's current round, revisit one while waitin
 
 Additional required states:
 
-- Empty second slot: invitation can be shared or revoked.
-- Both slots actively joined: Together and Private modes are available.
+- Empty second slot: Together is available immediately; Private explains that the second person needs to connect and offers the invitation as a link, QR code, and supported native share action.
+- Both slots actively joined: Together and Private modes are available without an unnecessary invitation screen.
 - Waiting after a Private answer: the participant may choose `Notify me when <name> answers`.
 - iOS push unavailable until Home Screen installation: show installation guidance before requesting notification permission.
 - Reveal: both answers appear together, followed by reactions and optional short replies.

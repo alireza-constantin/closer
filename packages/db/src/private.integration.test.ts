@@ -102,6 +102,19 @@ afterEach(async () => {
 afterAll(async () => { await db.$client.end(); });
 
 describe("Closer Slice 01B Private rounds", () => {
+  test("Private requires both participant slots before a conversation can start", async () => {
+    const first = await createParticipant("Solo participant");
+    const created = await createPairForParticipant(db, { participantId: first.id, relationshipType: "partner" });
+    pairIds.push(created.pair.id);
+
+    expect(await capture(startOrResumePrivateConversation(db, {
+      pairId: created.pair.id,
+      participantId: first.id,
+      category: "deep",
+      clientRequestId: randomUUID(),
+    }))).toMatchObject({ code: "PAIR_NOT_READY" });
+  });
+
   test("partner and friend pairs receive only their valid Private categories", async () => {
     const partner = await createJoinedPair("partner");
     const friend = await createJoinedPair("friend");

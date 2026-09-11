@@ -3,6 +3,7 @@ import {
   check,
   boolean,
   foreignKey,
+  integer,
   index,
   pgEnum,
   pgTable,
@@ -48,8 +49,9 @@ export const participant = pgTable(
 export const pair = pgTable("pair", {
   id: uuid("id").defaultRandom().primaryKey(),
   relationshipType: pairRelationshipType("relationship_type").notNull(),
+  creationRequestId: uuid("creation_request_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => [uniqueIndex("pair_creation_request_uidx").on(table.creationRequestId)]);
 
 export const pairMembership = pgTable(
   "pair_membership",
@@ -254,15 +256,118 @@ export const privateReply = pgTable(
   ],
 );
 
+export const togetherSession = pgTable(
+  "together_session",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    pairId: uuid("pair_id")
+      .notNull()
+      .references(() => pair.id, { onDelete: "cascade" }),
+    category: questionCategory("category").notNull(),
+    startedByParticipantId: uuid("started_by_participant_id")
+      .notNull()
+      .references(() => participant.id, { onDelete: "restrict" }),
+    startedAt: timestamp("started_at").defaultNow().notNull(),
+    endedAt: timestamp("ended_at"),
+    startRequestId: uuid("start_request_id"),
+  },
+  (table) => [
+    uniqueIndex("together_session_start_request_uidx")
+      .on(table.pairId, table.startedByParticipantId, table.startRequestId)
+      .where(sql`${table.startRequestId} is not null`),
+    uniqueIndex("together_session_pair_id_id_uidx").on(table.pairId, table.id),
+    index("together_session_pair_started_idx").on(table.pairId, table.startedAt),
+  ],
+);
+
+export const rejoinInvite = pgTable(
+  "rejoin_invite",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    pairId: uuid("pair_id")
+      .notNull()
+      .references(() => pair.id, { onDelete: "cascade" }),
+    targetSlot: pairSlot("target_slot").notNull(),
+    targetParticipantId: uuid("target_participant_id")
+      .notNull()
+      .references(() => participant.id, { onDelete: "restrict" }),
+    tokenHash: text("token_hash").notNull(),
+    expiresAt: timestamp("expires_at").notNull(),
+    revokedAt: timestamp("revoked_at"),
+    redeemedAt: timestamp("redeemed_at"),
+    redeemedByParticipantId: uuid("redeemed_by_participant_id").references(() => participant.id, {
+      onDelete: "restrict",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("rejoin_invite_token_hash_uidx").on(table.tokenHash),
+    index("rejoin_invite_pair_idx").on(table.pairId),
+    index("rejoin_invite_target_idx").on(table.pairId, table.targetSlot, table.targetParticipantId),
+  ],
+);
+
+export const togetherSessionQuestion = pgTable(
+  "together_session_question",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    sessionId: uuid("session_id")
+      .notNull()
+      .references(() => togetherSession.id, { onDelete: "cascade" }),
+    questionId: uuid("question_id")
+      .notNull()
+      .references(() => question.id, { onDelete: "restrict" }),
+    position: integer("position").notNull(),
+    shownAt: timestamp("shown_at").defaultNow().notNull(),
+    likedAt: timestamp("liked_at"),
+    skippedAt: timestamp("skipped_at"),
+    advancedAt: timestamp("advanced_at"),
+    advanceRequestId: uuid("advance_request_id"),
+  },
+  (table) => [
+    uniqueIndex("together_session_question_once_uidx").on(table.sessionId, table.questionId),
+    uniqueIndex("together_session_question_position_uidx").on(table.sessionId, table.position),
+    uniqueIndex("together_session_question_advance_request_uidx")
+      .on(table.sessionId, table.advanceRequestId)
+      .where(sql`${table.advanceRequestId} is not null`),
+    index("together_session_question_current_idx").on(table.sessionId, table.advancedAt),
+    check("together_session_question_position_positive", sql`${table.position} > 0`),
+  ],
+);
+
 export const participantRelations = relations(participant, ({ many }) => ({
   memberships: many(pairMembership),
   redeemedInitialInvites: many(initialInvite),
+  targetRejoinInvites: many(rejoinInvite, { relationName: "rejoinTarget" }),
+  redeemedRejoinInvites: many(rejoinInvite, { relationName: "rejoinRedeemer" }),
 }));
 
 export const pairRelations = relations(pair, ({ many }) => ({
   memberships: many(pairMembership),
   initialInvites: many(initialInvite),
+  rejoinInvites: many(rejoinInvite),
   privateConversations: many(privateConversation),
+  togetherSessions: many(togetherSession),
+}));
+
+export const togetherSessionRelations = relations(togetherSession, ({ one, many }) => ({
+  pair: one(pair, { fields: [togetherSession.pairId], references: [pair.id] }),
+  startedByParticipant: one(participant, {
+    fields: [togetherSession.startedByParticipantId],
+    references: [participant.id],
+  }),
+  questions: many(togetherSessionQuestion),
+}));
+
+export const togetherSessionQuestionRelations = relations(togetherSessionQuestion, ({ one }) => ({
+  session: one(togetherSession, {
+    fields: [togetherSessionQuestion.sessionId],
+    references: [togetherSession.id],
+  }),
+  question: one(question, {
+    fields: [togetherSessionQuestion.questionId],
+    references: [question.id],
+  }),
 }));
 
 export const privateConversationRelations = relations(privateConversation, ({ one, many }) => ({
@@ -293,6 +398,20 @@ export const initialInviteRelations = relations(initialInvite, ({ one }) => ({
   pair: one(pair, { fields: [initialInvite.pairId], references: [pair.id] }),
   redeemedByParticipant: one(participant, {
     fields: [initialInvite.redeemedByParticipantId],
+    references: [participant.id],
+  }),
+}));
+
+export const rejoinInviteRelations = relations(rejoinInvite, ({ one }) => ({
+  pair: one(pair, { fields: [rejoinInvite.pairId], references: [pair.id] }),
+  targetParticipant: one(participant, {
+    relationName: "rejoinTarget",
+    fields: [rejoinInvite.targetParticipantId],
+    references: [participant.id],
+  }),
+  redeemedByParticipant: one(participant, {
+    relationName: "rejoinRedeemer",
+    fields: [rejoinInvite.redeemedByParticipantId],
     references: [participant.id],
   }),
 }));

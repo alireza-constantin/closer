@@ -15,7 +15,11 @@ import {
   privateRevealView,
   privateRound,
   question,
+  rejoinInvite,
+  togetherSession,
+  togetherSessionQuestion,
 } from "./schema/closer";
+import { session, user } from "./schema/auth";
 
 type Database = ReturnType<typeof createDb>;
 type RelationshipType = "partner" | "friend";
@@ -24,15 +28,18 @@ type QuestionModeFit = "both" | "together" | "private";
 type ReactionValue = "heart" | "laugh" | "tender" | "surprised";
 
 const INITIAL_INVITE_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
+const REJOIN_INVITE_LIFETIME_MS = 24 * 60 * 60 * 1000;
 
 export class CloserDomainError extends Error {
   constructor(
     readonly code:
       | "DISPLAY_NAME_INVALID"
       | "RELATIONSHIP_TYPE_INVALID"
+      | "PAIR_CREATION_REQUEST_INVALID"
       | "UNAUTHENTICATED"
       | "PAIR_NOT_FOUND"
       | "INVITE_UNAVAILABLE"
+      | "REJOIN_UNAVAILABLE"
       | "ROUND_NOT_FOUND"
       | "CONVERSATION_NOT_FOUND"
       | "PAIR_NOT_READY"
@@ -41,7 +48,11 @@ export class CloserDomainError extends Error {
       | "ANSWER_IMMUTABLE"
       | "REPLY_INVALID"
       | "REACTION_INVALID"
-      | "REVEAL_NOT_READY",
+      | "REVEAL_NOT_READY"
+      | "TOGETHER_SESSION_NOT_FOUND"
+      | "TOGETHER_SESSION_ENDED"
+      | "TOGETHER_SESSION_EXHAUSTED"
+      | "TOGETHER_ACTION_INVALID",
   ) {
     super(code);
   }
@@ -211,14 +222,32 @@ async function issueInitialInviteInTransaction(
 
 export async function createPairForParticipant(
   database: Database,
-  input: { participantId: string; relationshipType: string },
+  input: { participantId: string; relationshipType: string; clientRequestId?: string },
 ) {
   const relationshipType = input.relationshipType;
   assertRelationshipType(relationshipType);
+  if (input.clientRequestId && !isUuid(input.clientRequestId)) throw new CloserDomainError("PAIR_CREATION_REQUEST_INVALID");
 
   return database.transaction(async (tx) => {
-    const pairs = await tx.insert(pair).values({ relationshipType }).returning();
-    const createdPair = pairs[0];
+    const pairs = await tx
+      .insert(pair)
+      .values({ relationshipType, creationRequestId: input.clientRequestId })
+      .onConflictDoNothing({ target: pair.creationRequestId })
+      .returning();
+    let createdPair = pairs[0];
+    if (!createdPair && input.clientRequestId) {
+      const existing = await tx
+        .select({ pair })
+        .from(pair)
+        .innerJoin(pairMembership, and(eq(pairMembership.pairId, pair.id), eq(pairMembership.participantId, input.participantId), eq(pairMembership.slot, "first"), isNull(pairMembership.endedAt)))
+        .where(eq(pair.creationRequestId, input.clientRequestId))
+        .limit(1);
+      createdPair = existing[0]?.pair;
+      if (createdPair) {
+        const invite = await issueInitialInviteInTransaction(tx, createdPair.id);
+        return { pair: createdPair, invite };
+      }
+    }
     if (!createdPair) throw new Error("Pair creation did not return a pair.");
 
     await tx.insert(pairMembership).values({
@@ -355,10 +384,204 @@ export async function redeemInitialInvite(
   });
 }
 
+async function findEligibleRejoinTarget(database: Database, participantId: string, pairId: string) {
+  const access = await requireActivePairAccess(database, participantId, pairId);
+  const targetSlot: "first" | "second" = access.membership.slot === "first" ? "second" : "first";
+  const rows = await database
+    .select({ membership: pairMembership, targetParticipant: participant, authUser: user })
+    .from(pairMembership)
+    .innerJoin(participant, eq(pairMembership.participantId, participant.id))
+    .innerJoin(user, eq(participant.authUserId, user.id))
+    .where(
+      and(
+        eq(pairMembership.pairId, pairId),
+        eq(pairMembership.slot, targetSlot),
+        isNull(pairMembership.endedAt),
+      ),
+    )
+    .limit(1);
+  const target = rows[0];
+  if (!target || !target.authUser.isAnonymous) throw new CloserDomainError("REJOIN_UNAVAILABLE");
+
+  const activeSessions = await database
+    .select({ id: session.id })
+    .from(session)
+    .where(and(eq(session.userId, target.authUser.id), gt(session.expiresAt, new Date())))
+    .limit(1);
+  if (activeSessions[0]) throw new CloserDomainError("REJOIN_UNAVAILABLE");
+
+  return { access, targetSlot, target };
+}
+
+export async function issueRejoinInvite(
+  database: Database,
+  input: { participantId: string; pairId: string },
+) {
+  await requireActivePairAccess(database, input.participantId, input.pairId);
+
+  return database.transaction(async (transaction) => {
+    const tx = transaction as unknown as Database;
+    await tx.execute(sql`select id from "pair" where id = ${input.pairId} for update`);
+    const { targetSlot, target } = await findEligibleRejoinTarget(tx, input.participantId, input.pairId);
+    const token = createInviteToken();
+    const expiresAt = new Date(Date.now() + REJOIN_INVITE_LIFETIME_MS);
+
+    await tx
+      .update(rejoinInvite)
+      .set({ revokedAt: new Date() })
+      .where(
+        and(
+          eq(rejoinInvite.pairId, input.pairId),
+          eq(rejoinInvite.targetSlot, targetSlot),
+          eq(rejoinInvite.targetParticipantId, target.targetParticipant.id),
+          isNull(rejoinInvite.revokedAt),
+          isNull(rejoinInvite.redeemedAt),
+        ),
+      );
+
+    await tx.insert(rejoinInvite).values({
+      pairId: input.pairId,
+      targetSlot,
+      targetParticipantId: target.targetParticipant.id,
+      tokenHash: hashInviteToken(token),
+      expiresAt,
+    });
+
+    return {
+      token,
+      expiresAt,
+      targetSlot,
+      targetParticipantDisplayName: target.targetParticipant.displayName,
+    };
+  });
+}
+
+export async function revokeRejoinInvites(
+  database: Database,
+  input: { participantId: string; pairId: string },
+) {
+  await requireActivePairAccess(database, input.participantId, input.pairId);
+  await database.transaction(async (transaction) => {
+    const tx = transaction as unknown as Database;
+    await tx.execute(sql`select id from "pair" where id = ${input.pairId} for update`);
+    await tx
+      .update(rejoinInvite)
+      .set({ revokedAt: new Date() })
+      .where(
+        and(
+          eq(rejoinInvite.pairId, input.pairId),
+          isNull(rejoinInvite.revokedAt),
+          isNull(rejoinInvite.redeemedAt),
+        ),
+      );
+  });
+}
+
+export async function getRejoinInviteLanding(database: Database, token: string) {
+  const rows = await database
+    .select({ targetSlot: rejoinInvite.targetSlot })
+    .from(rejoinInvite)
+    .where(
+      and(
+        eq(rejoinInvite.tokenHash, hashInviteToken(token)),
+        isNull(rejoinInvite.revokedAt),
+        isNull(rejoinInvite.redeemedAt),
+        gt(rejoinInvite.expiresAt, new Date()),
+      ),
+    )
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+export async function redeemRejoinInvite(
+  database: Database,
+  input: { token: string; participantId: string },
+) {
+  return database.transaction(async (transaction) => {
+    const tx = transaction as unknown as Database;
+    const inviteRows = await tx
+      .select()
+      .from(rejoinInvite)
+      .where(eq(rejoinInvite.tokenHash, hashInviteToken(input.token)))
+      .limit(1);
+    const invite = inviteRows[0];
+    if (!invite) throw new CloserDomainError("REJOIN_UNAVAILABLE");
+
+    await tx.execute(sql`select id from "pair" where id = ${invite.pairId} for update`);
+
+    const targetMembershipRows = await tx
+      .select({ membership: pairMembership })
+      .from(pairMembership)
+      .where(
+        and(
+          eq(pairMembership.pairId, invite.pairId),
+          eq(pairMembership.slot, invite.targetSlot),
+          eq(pairMembership.participantId, invite.targetParticipantId),
+          isNull(pairMembership.endedAt),
+        ),
+      )
+      .limit(1);
+    if (!targetMembershipRows[0]) throw new CloserDomainError("REJOIN_UNAVAILABLE");
+
+    const existingParticipantMembership = await tx
+      .select({ id: pairMembership.id })
+      .from(pairMembership)
+      .where(
+        and(
+          eq(pairMembership.pairId, invite.pairId),
+          eq(pairMembership.participantId, input.participantId),
+          isNull(pairMembership.endedAt),
+        ),
+      )
+      .limit(1);
+    if (existingParticipantMembership[0]) throw new CloserDomainError("REJOIN_UNAVAILABLE");
+
+    const redeemed = await tx
+      .update(rejoinInvite)
+      .set({ redeemedAt: new Date(), redeemedByParticipantId: input.participantId })
+      .where(
+        and(
+          eq(rejoinInvite.id, invite.id),
+          isNull(rejoinInvite.redeemedAt),
+          isNull(rejoinInvite.revokedAt),
+          gt(rejoinInvite.expiresAt, new Date()),
+        ),
+      )
+      .returning({ pairId: rejoinInvite.pairId });
+    if (!redeemed[0]) throw new CloserDomainError("REJOIN_UNAVAILABLE");
+
+    const endedAt = new Date();
+    await tx
+      .update(pairMembership)
+      .set({ endedAt })
+      .where(eq(pairMembership.id, targetMembershipRows[0].membership.id));
+    await tx.insert(pairMembership).values({
+      pairId: invite.pairId,
+      participantId: input.participantId,
+      slot: invite.targetSlot,
+    });
+    await tx
+      .update(rejoinInvite)
+      .set({ revokedAt: endedAt })
+      .where(
+        and(
+          eq(rejoinInvite.pairId, invite.pairId),
+          eq(rejoinInvite.targetSlot, invite.targetSlot),
+          eq(rejoinInvite.targetParticipantId, invite.targetParticipantId),
+          isNull(rejoinInvite.revokedAt),
+          isNull(rejoinInvite.redeemedAt),
+        ),
+      );
+
+    return { pairId: invite.pairId };
+  });
+}
+
 export async function getPairForParticipant(database: Database, participantId: string, pairId: string) {
   const access = await requireActivePairAccess(database, participantId, pairId);
   const members = await database
     .select({
+      participantId: pairMembership.participantId,
       slot: pairMembership.slot,
       displayName: participant.displayName,
     })
@@ -400,6 +623,280 @@ async function requireCompletePairAccess(database: Database, participantId: stri
 
   if (members.length !== 2) throw new CloserDomainError("PAIR_NOT_READY");
   return { ...access, members };
+}
+
+async function loadTogetherSessionContext(database: Database, participantId: string, pairId: string, sessionId: string) {
+  const access = await requireActivePairAccess(database, participantId, pairId);
+  const rows = await database
+    .select({ session: togetherSession })
+    .from(togetherSession)
+    .where(
+      and(
+        eq(togetherSession.id, sessionId),
+        eq(togetherSession.pairId, pairId),
+        gte(togetherSession.startedAt, access.membership.startedAt),
+      ),
+    )
+    .limit(1);
+  const result = rows[0];
+  if (!result) throw new CloserDomainError("TOGETHER_SESSION_NOT_FOUND");
+  return { ...access, session: result.session };
+}
+
+async function eligibleTogetherQuestions(
+  database: Database,
+  input: { relationshipType: RelationshipType; category: QuestionCategory },
+) {
+  return database
+    .select({ id: question.id, text: question.text, category: question.category, depth: question.depth })
+    .from(question)
+    .where(
+      and(
+        eq(question.isActive, true),
+        eq(question.category, input.category),
+        inArray(question.relationshipFit, ["both", input.relationshipType]),
+        inArray(question.modeFit, ["both", "together"]),
+      ),
+    );
+}
+
+export async function listEligibleTogetherQuestions(
+  database: Database,
+  input: { participantId: string; pairId: string; category: string },
+) {
+  const access = await requireActivePairAccess(database, input.participantId, input.pairId);
+  assertCategoryForPair(access, input.category);
+  return eligibleTogetherQuestions(database, {
+    relationshipType: access.pair.relationshipType,
+    category: input.category as QuestionCategory,
+  });
+}
+
+async function nextTogetherQuestion(
+  database: Database,
+  input: { sessionId?: string; relationshipType: RelationshipType; category: QuestionCategory },
+) {
+  const eligible = await eligibleTogetherQuestions(database, input);
+  const shownIds = new Set<string>();
+  if (input.sessionId) {
+    const shown = await database
+      .select({ questionId: togetherSessionQuestion.questionId })
+      .from(togetherSessionQuestion)
+      .where(eq(togetherSessionQuestion.sessionId, input.sessionId));
+    for (const row of shown) shownIds.add(row.questionId);
+  }
+  return eligible.filter((candidate) => !shownIds.has(candidate.id)).toSorted((left, right) => left.id.localeCompare(right.id))[0] ?? null;
+}
+
+async function currentTogetherQuestion(database: Database, sessionId: string) {
+  const rows = await database
+    .select({ card: togetherSessionQuestion, question })
+    .from(togetherSessionQuestion)
+    .innerJoin(question, eq(togetherSessionQuestion.questionId, question.id))
+    .where(and(eq(togetherSessionQuestion.sessionId, sessionId), isNull(togetherSessionQuestion.advancedAt)))
+    .orderBy(asc(togetherSessionQuestion.position))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+export async function startTogetherSession(
+  database: Database,
+  input: { participantId: string; pairId: string; category: string; clientRequestId?: string },
+) {
+  const access = await requireActivePairAccess(database, input.participantId, input.pairId);
+  if (input.clientRequestId && !isUuid(input.clientRequestId)) throw new CloserDomainError("TOGETHER_ACTION_INVALID");
+  assertCategoryForPair(access, input.category);
+  const category = input.category as QuestionCategory;
+
+  return database.transaction(async (transaction) => {
+    const tx = transaction as unknown as Database;
+    await tx.execute(sql`select id from "pair" where id = ${input.pairId} for update`);
+
+    if (input.clientRequestId) {
+      const existing = await tx
+        .select({ id: togetherSession.id })
+        .from(togetherSession)
+        .where(
+          and(
+            eq(togetherSession.pairId, input.pairId),
+            eq(togetherSession.startedByParticipantId, input.participantId),
+            eq(togetherSession.startRequestId, input.clientRequestId),
+          ),
+        )
+        .limit(1);
+      if (existing[0]) {
+        const current = await currentTogetherQuestion(tx, existing[0].id);
+        if (!current) throw new CloserDomainError("TOGETHER_SESSION_EXHAUSTED");
+        return { sessionId: existing[0].id, questionId: current.question.id };
+      }
+    }
+
+    const nextQuestion = await nextTogetherQuestion(tx, {
+      relationshipType: access.pair.relationshipType,
+      category,
+    });
+    if (!nextQuestion) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+
+    const inserted = await tx
+      .insert(togetherSession)
+      .values({
+        pairId: input.pairId,
+        category,
+        startedByParticipantId: input.participantId,
+        startRequestId: input.clientRequestId,
+      })
+      .returning({ id: togetherSession.id });
+    const session = inserted[0];
+    if (!session) throw new Error("Together session creation did not return a session.");
+
+    await tx.insert(togetherSessionQuestion).values({
+      sessionId: session.id,
+      questionId: nextQuestion.id,
+      position: 1,
+    });
+    return { sessionId: session.id, questionId: nextQuestion.id };
+  });
+}
+
+export async function getTogetherSessionForParticipant(
+  database: Database,
+  input: { participantId: string; pairId: string; sessionId: string },
+) {
+  const context = await loadTogetherSessionContext(database, input.participantId, input.pairId, input.sessionId);
+  const current = await currentTogetherQuestion(database, input.sessionId);
+  return {
+    id: context.session.id,
+    pairId: context.session.pairId,
+    category: context.session.category,
+    startedByParticipantId: context.session.startedByParticipantId,
+    startedAt: context.session.startedAt.toISOString(),
+    endedAt: context.session.endedAt?.toISOString() ?? null,
+    exhausted: current === null,
+    question: current
+      ? {
+          id: current.question.id,
+          text: current.question.text,
+          category: current.question.category,
+          depth: current.question.depth,
+          position: current.card.position,
+          liked: current.card.likedAt !== null,
+        }
+      : null,
+  };
+}
+
+export async function advanceTogetherSession(
+  database: Database,
+  input: { participantId: string; pairId: string; sessionId: string; action: "next" | "skip"; clientRequestId?: string },
+) {
+  if (input.clientRequestId && !isUuid(input.clientRequestId)) throw new CloserDomainError("TOGETHER_ACTION_INVALID");
+  const access = await loadTogetherSessionContext(database, input.participantId, input.pairId, input.sessionId);
+
+  return database.transaction(async (transaction) => {
+    const tx = transaction as unknown as Database;
+    const sessionRows = await tx
+      .select()
+      .from(togetherSession)
+      .where(eq(togetherSession.id, input.sessionId))
+      .for("update");
+    const session = sessionRows[0];
+    if (!session || session.pairId !== input.pairId || session.startedAt < access.membership.startedAt) {
+      throw new CloserDomainError("TOGETHER_SESSION_NOT_FOUND");
+    }
+    if (session.endedAt) throw new CloserDomainError("TOGETHER_SESSION_ENDED");
+
+    if (input.clientRequestId) {
+      const previous = await tx
+        .select({ id: togetherSessionQuestion.id })
+        .from(togetherSessionQuestion)
+        .where(
+          and(
+            eq(togetherSessionQuestion.sessionId, input.sessionId),
+            eq(togetherSessionQuestion.advanceRequestId, input.clientRequestId),
+          ),
+        )
+        .limit(1);
+      if (previous[0]) {
+        const current = await currentTogetherQuestion(tx, input.sessionId);
+        return current
+          ? { kind: "QUESTION" as const, sessionId: input.sessionId, questionId: current.question.id }
+          : { kind: "EXHAUSTED" as const, sessionId: input.sessionId };
+      }
+    }
+
+    const current = await currentTogetherQuestion(tx, input.sessionId);
+    if (!current) return { kind: "EXHAUSTED" as const, sessionId: input.sessionId };
+
+    const now = new Date();
+    await tx
+      .update(togetherSessionQuestion)
+      .set({
+        skippedAt: input.action === "skip" ? now : current.card.skippedAt,
+        advancedAt: now,
+        advanceRequestId: input.clientRequestId,
+      })
+      .where(eq(togetherSessionQuestion.id, current.card.id));
+
+    const nextQuestion = await nextTogetherQuestion(tx, {
+      sessionId: input.sessionId,
+      relationshipType: access.pair.relationshipType,
+      category: session.category,
+    });
+    if (!nextQuestion) return { kind: "EXHAUSTED" as const, sessionId: input.sessionId };
+
+    await tx.insert(togetherSessionQuestion).values({
+      sessionId: input.sessionId,
+      questionId: nextQuestion.id,
+      position: current.card.position + 1,
+    });
+    return { kind: "QUESTION" as const, sessionId: input.sessionId, questionId: nextQuestion.id };
+  });
+}
+
+export async function setTogetherSessionLike(
+  database: Database,
+  input: { participantId: string; pairId: string; sessionId: string; liked: boolean },
+) {
+  await loadTogetherSessionContext(database, input.participantId, input.pairId, input.sessionId);
+  await database.transaction(async (transaction) => {
+    const tx = transaction as unknown as Database;
+    const sessionRows = await tx
+      .select({ endedAt: togetherSession.endedAt })
+      .from(togetherSession)
+      .where(eq(togetherSession.id, input.sessionId))
+      .for("update");
+    const session = sessionRows[0];
+    if (!session) throw new CloserDomainError("TOGETHER_SESSION_NOT_FOUND");
+    if (session.endedAt) throw new CloserDomainError("TOGETHER_SESSION_ENDED");
+    const current = await currentTogetherQuestion(tx, input.sessionId);
+    if (!current) throw new CloserDomainError("TOGETHER_SESSION_EXHAUSTED");
+    await tx
+      .update(togetherSessionQuestion)
+      .set({ likedAt: input.liked ? new Date() : null })
+      .where(eq(togetherSessionQuestion.id, current.card.id));
+  });
+  return getTogetherSessionForParticipant(database, input);
+}
+
+export async function endTogetherSession(
+  database: Database,
+  input: { participantId: string; pairId: string; sessionId: string },
+) {
+  await loadTogetherSessionContext(database, input.participantId, input.pairId, input.sessionId);
+  await database.transaction(async (transaction) => {
+    const tx = transaction as unknown as Database;
+    const sessionRows = await tx
+      .select({ endedAt: togetherSession.endedAt })
+      .from(togetherSession)
+      .where(eq(togetherSession.id, input.sessionId))
+      .for("update");
+    const session = sessionRows[0];
+    if (!session) throw new CloserDomainError("TOGETHER_SESSION_NOT_FOUND");
+    if (!session.endedAt) {
+      await tx.update(togetherSession).set({ endedAt: new Date() }).where(eq(togetherSession.id, input.sessionId));
+    }
+  });
+  return getTogetherSessionForParticipant(database, input);
 }
 
 async function loadPrivateRoundContext(database: Database, participantId: string, pairId: string, roundId: string) {

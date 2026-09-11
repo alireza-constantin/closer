@@ -57,10 +57,12 @@ function categoryTitle(category: string) {
 export default function PairHome({
   pairId,
   memberNames,
+  isComplete,
   activeConversations: initialActiveConversations,
 }: {
   pairId: string;
-  memberNames: [string, string];
+  memberNames: [string, string | null];
+  isComplete: boolean;
   activeConversations: ActiveConversation[];
 }) {
   const [activeConversations, setActiveConversations] = useState(initialActiveConversations);
@@ -132,19 +134,19 @@ export default function PairHome({
           <span className="closer-companion closer-companion-coral">•‿•</span>
           <span className="closer-companion closer-companion-lavender">⌣⌣</span>
         </div>
-        <h1>{memberNames[0]} + {memberNames[1]}</h1>
+        <h1>{isComplete ? `${memberNames[0]} + ${memberNames[1] ?? "your person"}` : `${memberNames[0]} + your person`}</h1>
         <p>What do you feel like doing?</p>
       </section>
 
       <section className="closer-mode-stack" aria-label="Choose a way to connect">
-        <div className="closer-mode-card closer-mode-card-together" aria-disabled="true">
+        <Link className="closer-mode-card closer-mode-card-together" href={`/pair/${pairId}/together` as never}>
           <span className="closer-mode-icon"><MessageCircleMore aria-hidden="true" /></span>
-          <span><strong>Talk Together</strong><small>Questions for when you’re together</small></span>
-          <span className="closer-coming-soon">Coming soon</span>
-        </div>
+          <span><strong>Talk Together</strong><small>Use this phone and talk face-to-face</small></span>
+          <ChevronRight aria-hidden="true" />
+        </Link>
         <Link className="closer-mode-card closer-mode-card-private" href={`/pair/${pairId}/private` as never}>
           <span className="closer-mode-icon"><LockKeyhole aria-hidden="true" /></span>
-          <span><strong>Answer Privately</strong><small>Answer separately, reveal together</small></span>
+          <span><strong>Answer Privately</strong><small>{isComplete ? "Answer separately, reveal together" : "Connect your person to answer on two phones"}</small></span>
           <ChevronRight aria-hidden="true" />
         </Link>
       </section>
@@ -169,6 +171,7 @@ export default function PairHome({
       ) : (
         <section className="closer-empty-active"><Sparkles aria-hidden="true" /><p>Your private conversations will live here when you start one.</p></section>
       )}
+      {isComplete ? <Link className="closer-rejoin-link" href={`/pair/${pairId}/rejoin` as never}>Need to reconnect your person?</Link> : null}
     </main>
   );
 }

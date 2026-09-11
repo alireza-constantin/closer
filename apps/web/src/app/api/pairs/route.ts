@@ -4,7 +4,7 @@ import { getAuthUserIdFromRequest } from "@/lib/closer-server";
 
 function domainErrorResponse(error: unknown) {
   const message = error instanceof Error ? error.message : "Unable to create the pair.";
-  const status = message === "DISPLAY_NAME_INVALID" || message === "RELATIONSHIP_TYPE_INVALID" ? 400 : 500;
+  const status = message === "DISPLAY_NAME_INVALID" || message === "RELATIONSHIP_TYPE_INVALID" || message === "PAIR_CREATION_REQUEST_INVALID" ? 400 : 500;
   return Response.json({ error: status === 400 ? message : "Unable to create the pair." }, { status });
 }
 
@@ -17,8 +17,8 @@ export async function POST(request: Request) {
     return Response.json({ error: "Invalid request." }, { status: 400 });
   }
 
-  const { displayName, relationshipType } = body as Record<string, unknown>;
-  if (typeof displayName !== "string" || typeof relationshipType !== "string") {
+  const { displayName, relationshipType, clientRequestId } = body as Record<string, unknown>;
+  if (typeof displayName !== "string" || typeof relationshipType !== "string" || (clientRequestId !== undefined && typeof clientRequestId !== "string")) {
     return Response.json({ error: "Invalid request." }, { status: 400 });
   }
 
@@ -27,6 +27,7 @@ export async function POST(request: Request) {
     const result = await createPairForParticipant(db, {
       participantId: resolvedParticipant.id,
       relationshipType,
+      clientRequestId,
     });
     return Response.json({
       pairId: result.pair.id,
