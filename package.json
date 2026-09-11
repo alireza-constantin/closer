@@ -28,6 +28,7 @@
     "dev": "bun run --filter '*' dev",
     "build": "bun run --filter '*' build",
     "check-types": "bun run --filter '*' check-types",
+    "test": "bun test",
     "dev:web": "bun run --filter web dev",
     "db:push": "bun run --filter @Closer/db db:push",
     "db:studio": "bun run --filter @Closer/db db:studio",
