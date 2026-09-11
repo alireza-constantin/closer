@@ -1,0 +1,3 @@
+- [x] the together mode does not need to join
+- [x] the join should have a qrcode too
+- [ ] in private mode we should not let the other participant go to next question, they can end session but not go to next question, only the creator can 

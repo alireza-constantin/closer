@@ -2,6 +2,7 @@ import { db, getActivePairForParticipant } from "@Closer/auth/closer";
 import { redirect } from "next/navigation";
 
 import AnonymousSession from "@/components/anonymous-session";
+import { CloserPageShell, CloserTopbar } from "@/components/closer/page-shell";
 import CreatePairForm from "@/components/create-pair-form";
 import { getCurrentParticipant } from "@/lib/closer-server";
 
@@ -18,11 +19,11 @@ export default async function Home() {
   }
 
   return (
-    <main className="closer-shell closer-onboarding-shell">
-      <header className="closer-topbar"><span className="closer-wordmark">Closer <span aria-hidden="true">♥</span></span><span className="closer-pair-mark" aria-hidden="true"><i /> <i /></span></header>
+    <CloserPageShell className="flex flex-col">
+      <CloserTopbar />
       <AnonymousSession>
         <CreatePairForm />
       </AnonymousSession>
-    </main>
+    </CloserPageShell>
   );
 }

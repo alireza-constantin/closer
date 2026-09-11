@@ -2,7 +2,15 @@
 
 import { ChevronRight, LockKeyhole, MessageCircleMore, Sparkles } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useState } from "react";
+
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from "@Closer/ui/components/empty";
+import { cn } from "@Closer/ui/lib/utils";
+
+import { CloserCompanions, CloserPageShell, CloserTopbar } from "@/components/closer/page-shell";
+import { CloserModeCard } from "@/components/closer/navigation";
+import { CloserPageTitle, CloserSubtitle } from "@/components/closer/typography";
+import { useVisiblePolling } from "@/hooks/use-visible-polling";
 
 export const ACTIVE_CONVERSATIONS_POLL_INTERVAL_MS = 3_500;
 
@@ -19,15 +27,15 @@ function parseActiveConversations(value: unknown): ActiveConversation[] | null {
   if (!Array.isArray(value)) return null;
   return value.every((conversation) => (
     conversation && typeof conversation === "object"
-      && "id" in conversation && typeof conversation.id === "string"
-      && "category" in conversation && typeof conversation.category === "string"
-      && "questionCount" in conversation && typeof conversation.questionCount === "number"
-      && "state" in conversation && ["YOUR_TURN", "WAITING", "REVEAL_READY", "READY_FOR_NEXT"].includes(String(conversation.state))
-      && "currentRound" in conversation && conversation.currentRound && typeof conversation.currentRound === "object"
-      && "id" in conversation.currentRound && typeof conversation.currentRound.id === "string"
-      && "question" in conversation.currentRound && conversation.currentRound.question && typeof conversation.currentRound.question === "object"
-      && "text" in conversation.currentRound.question && typeof conversation.currentRound.question.text === "string"
-      && "otherParticipantDisplayName" in conversation && typeof conversation.otherParticipantDisplayName === "string"
+    && "id" in conversation && typeof conversation.id === "string"
+    && "category" in conversation && typeof conversation.category === "string"
+    && "questionCount" in conversation && typeof conversation.questionCount === "number"
+    && "state" in conversation && ["YOUR_TURN", "WAITING", "REVEAL_READY", "READY_FOR_NEXT"].includes(String(conversation.state))
+    && "currentRound" in conversation && conversation.currentRound && typeof conversation.currentRound === "object"
+    && "id" in conversation.currentRound && typeof conversation.currentRound.id === "string"
+    && "question" in conversation.currentRound && conversation.currentRound.question && typeof conversation.currentRound.question === "object"
+    && "text" in conversation.currentRound.question && typeof conversation.currentRound.question.text === "string"
+    && "otherParticipantDisplayName" in conversation && typeof conversation.otherParticipantDisplayName === "string"
   )) ? value as ActiveConversation[] : null;
 }
 
@@ -54,6 +62,27 @@ function categoryTitle(category: string) {
   return category.slice(0, 1).toUpperCase() + category.slice(1);
 }
 
+const stateDotClasses: Record<ActiveConversation["state"], string> = {
+  YOUR_TURN: "bg-closer-coral",
+  WAITING: "bg-closer-warning",
+  REVEAL_READY: "bg-closer-lavender",
+  READY_FOR_NEXT: "bg-closer-success",
+};
+
+function ConversationCard({ pairId, conversation }: { pairId: string; conversation: ActiveConversation }) {
+  return (
+    <Link className="group grid grid-cols-[12px_1fr_auto] items-center gap-2.5 rounded-[1.05rem] bg-white/85 px-3 py-3 text-closer-navy no-underline shadow-closer-soft transition-transform duration-200 hover:translate-x-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-closer-navy focus-visible:ring-offset-2 focus-visible:ring-offset-closer-cream" href={`/pair/${pairId}/private/round/${conversation.currentRound.id}` as never}>
+      <span aria-hidden="true" className={cn("size-2.5 rounded-full", stateDotClasses[conversation.state])} />
+      <span className="min-w-0">
+        <strong className="block text-sm font-extrabold">{categoryTitle(conversation.category)}</strong>
+        <small className="mt-0.5 block text-xs leading-relaxed text-closer-muted">{statusCopy(conversation)} · {conversation.questionCount} {conversation.questionCount === 1 ? "question" : "questions"}</small>
+        <small className="mt-0.5 block truncate text-xs leading-relaxed text-closer-muted">“{conversation.currentRound.question.text}”</small>
+      </span>
+      <ChevronRight aria-hidden="true" className="size-5 transition-transform duration-200 group-hover:translate-x-0.5" />
+    </Link>
+  );
+}
+
 export default function PairHome({
   pairId,
   memberNames,
@@ -67,111 +96,48 @@ export default function PairHome({
 }) {
   const [activeConversations, setActiveConversations] = useState(initialActiveConversations);
 
-  useEffect(() => {
-    let disposed = false;
-    let timer: number | null = null;
-    let activeRequest: AbortController | null = null;
-
-    async function refreshActiveConversations() {
-      if (disposed || document.visibilityState !== "visible" || activeRequest) return;
-      const request = new AbortController();
-      activeRequest = request;
+  useVisiblePolling({
+    intervalMs: ACTIVE_CONVERSATIONS_POLL_INTERVAL_MS,
+    onPoll: async (signal) => {
       try {
-        const response = await fetch(`/api/pairs/${encodeURIComponent(pairId)}/private-conversations`, {
-          cache: "no-store",
-          signal: request.signal,
-        });
+        const response = await fetch(`/api/pairs/${encodeURIComponent(pairId)}/private-conversations`, { cache: "no-store", signal });
         const next = response.ok ? parseActiveConversations(await response.json()) : null;
-        if (!disposed && next) setActiveConversations((current) => sameConversations(current, next) ? current : next);
+        if (next) setActiveConversations((current) => sameConversations(current, next) ? current : next);
       } catch {
         // A transient foreground refresh must not remove visible conversations.
-      } finally {
-        if (activeRequest === request) activeRequest = null;
       }
-    }
-
-    function start() {
-      if (disposed || document.visibilityState !== "visible" || timer !== null) return;
-      void refreshActiveConversations();
-      timer = window.setInterval(() => void refreshActiveConversations(), ACTIVE_CONVERSATIONS_POLL_INTERVAL_MS);
-    }
-    function stop() {
-      if (timer !== null) window.clearInterval(timer);
-      timer = null;
-      activeRequest?.abort();
-      activeRequest = null;
-    }
-    function onVisibilityChange() {
-      if (document.visibilityState === "visible") {
-        void refreshActiveConversations();
-        start();
-      } else stop();
-    }
-    function onFocus() { void refreshActiveConversations(); }
-
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    window.addEventListener("focus", onFocus);
-    start();
-    return () => {
-      disposed = true;
-      stop();
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-      window.removeEventListener("focus", onFocus);
-    };
-  }, [pairId]);
+    },
+  });
 
   return (
-    <main className="closer-shell">
-      <header className="closer-topbar">
-        <Link className="closer-wordmark" href={`/pair/${pairId}`}>
-          Closer <span aria-hidden="true">♥</span>
-        </Link>
-        <span className="closer-pair-mark" aria-hidden="true"><i /> <i /></span>
-      </header>
-
-      <section className="closer-home-intro">
-        <div className="closer-companions" aria-hidden="true">
-          <span className="closer-companion closer-companion-coral">•‿•</span>
-          <span className="closer-companion closer-companion-lavender">⌣⌣</span>
-        </div>
-        <h1>{isComplete ? `${memberNames[0]} + ${memberNames[1] ?? "your person"}` : `${memberNames[0]} + your person`}</h1>
-        <p>What do you feel like doing?</p>
+    <CloserPageShell>
+      <CloserTopbar href={`/pair/${pairId}`} />
+      <section className="pb-7 pt-8 text-center">
+        <CloserCompanions />
+        <CloserPageTitle>{isComplete ? `${memberNames[0]} + ${memberNames[1] ?? "your person"}` : `${memberNames[0]} + your person`}</CloserPageTitle>
+        <CloserSubtitle>What do you feel like doing?</CloserSubtitle>
       </section>
-
-      <section className="closer-mode-stack" aria-label="Choose a way to connect">
-        <Link className="closer-mode-card closer-mode-card-together" href={`/pair/${pairId}/together` as never}>
-          <span className="closer-mode-icon"><MessageCircleMore aria-hidden="true" /></span>
-          <span><strong>Talk Together</strong><small>Use this phone and talk face-to-face</small></span>
-          <ChevronRight aria-hidden="true" />
-        </Link>
-        <Link className="closer-mode-card closer-mode-card-private" href={`/pair/${pairId}/private` as never}>
-          <span className="closer-mode-icon"><LockKeyhole aria-hidden="true" /></span>
-          <span><strong>Answer Privately</strong><small>{isComplete ? "Answer separately, reveal together" : "Connect your person to answer on two phones"}</small></span>
-          <ChevronRight aria-hidden="true" />
-        </Link>
+      <section className="grid gap-3" aria-label="Choose a way to connect">
+        <CloserModeCard href={`/pair/${pairId}/together`} kind="together" icon={<MessageCircleMore aria-hidden="true" />} title="Talk Together" description="Use this phone and talk face-to-face" />
+        <CloserModeCard href={`/pair/${pairId}/private`} kind="private" icon={<LockKeyhole aria-hidden="true" />} title="Answer Privately" description={isComplete ? "Answer separately, reveal together" : "Connect your person to answer on two phones"} />
       </section>
-
       {activeConversations.length > 0 ? (
-        <section className="closer-active-section" aria-labelledby="private-conversations-heading">
-          <h2 id="private-conversations-heading">Your conversations</h2>
-          <div className="closer-active-list">
-            {activeConversations.map((conversation) => (
-              <Link className="closer-active-item" href={`/pair/${pairId}/private/round/${conversation.currentRound.id}` as never} key={conversation.id}>
-                <span className={`closer-state-dot closer-state-${conversation.state.toLowerCase()}`} aria-hidden="true" />
-                <span>
-                  <strong>{categoryTitle(conversation.category)}</strong>
-                  <small>{statusCopy(conversation)} · {conversation.questionCount} {conversation.questionCount === 1 ? "question" : "questions"}</small>
-                  <small className="closer-conversation-preview">“{conversation.currentRound.question.text}”</small>
-                </span>
-                <ChevronRight aria-hidden="true" />
-              </Link>
-            ))}
+        <section className="mt-8" aria-labelledby="private-conversations-heading">
+          <h2 className="mb-3 text-[1.15rem] font-extrabold tracking-[-.025em]" id="private-conversations-heading">Your conversations</h2>
+          <div className="grid gap-2.5">
+            {activeConversations.map((conversation) => <ConversationCard conversation={conversation} key={conversation.id} pairId={pairId} />)}
           </div>
         </section>
       ) : (
-        <section className="closer-empty-active"><Sparkles aria-hidden="true" /><p>Your private conversations will live here when you start one.</p></section>
+        <Empty className="my-9 gap-2 rounded-[1.375rem] bg-white/55 px-6 py-7 text-closer-muted">
+          <EmptyHeader className="gap-2">
+            <EmptyMedia className="mb-0 text-closer-coral" variant="default"><Sparkles aria-hidden="true" /></EmptyMedia>
+            <span className="sr-only">No private conversations yet</span>
+            <EmptyDescription className="max-w-[29ch] leading-relaxed">Your private conversations will live here when you start one.</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
       )}
-      {isComplete ? <Link className="closer-rejoin-link" href={`/pair/${pairId}/rejoin` as never}>Need to reconnect your person?</Link> : null}
-    </main>
+      {isComplete ? <Link className="mx-auto mt-6 block w-fit text-xs text-closer-muted underline-offset-4 hover:text-closer-navy hover:underline" href={`/pair/${pairId}/rejoin` as never}>Need to reconnect your person?</Link> : null}
+    </CloserPageShell>
   );
 }

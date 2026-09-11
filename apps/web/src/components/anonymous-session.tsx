@@ -15,7 +15,7 @@ export default function AnonymousSession({ children }: { children: React.ReactNo
   }, [isPending, session]);
 
   if (!session) {
-    return <p className="text-sm text-muted-foreground">Preparing your private guest session…</p>;
+    return <p className="mx-auto mt-12 text-center text-sm text-closer-muted">Preparing your private guest session…</p>;
   }
 
   return <>{children}</>;

@@ -1,4 +1,5 @@
 import AnonymousSession from "@/components/anonymous-session";
+import { CloserPageShell, CloserTopbar } from "@/components/closer/page-shell";
 import JoinPairForm from "@/components/join-pair-form";
 import { db, getInitialInviteLanding } from "@Closer/auth/closer";
 
@@ -7,11 +8,11 @@ export default async function JoinPage({ params }: { params: Promise<{ token: st
   const invite = await getInitialInviteLanding(db, token);
 
   return (
-    <main className="closer-shell closer-onboarding-shell">
-      <header className="closer-topbar"><span className="closer-wordmark">Closer <span aria-hidden="true">♥</span></span><span className="closer-pair-mark" aria-hidden="true"><i /> <i /></span></header>
+    <CloserPageShell className="flex flex-col">
+      <CloserTopbar />
       <AnonymousSession>
         <JoinPairForm inviterDisplayName={invite?.inviterDisplayName ?? null} token={token} />
       </AnonymousSession>
-    </main>
+    </CloserPageShell>
   );
 }

@@ -23,8 +23,8 @@ export default function InviteQrCode({ value }: { value: string }) {
   }, [value]);
 
   if (!svg) {
-    return <div aria-label="Preparing QR code" className="closer-qr-placeholder" role="img" />;
+    return <div aria-label="Preparing QR code" className="block size-[min(224px,62vw)] rounded-lg bg-[repeating-linear-gradient(45deg,#f2f0f5_0_8px,#e9e6ed_8px_16px)]" role="img" />;
   }
 
-  return <div className="closer-qr-image" dangerouslySetInnerHTML={{ __html: svg }} />;
+  return <div className="block size-[min(224px,62vw)] [&_svg]:block [&_svg]:size-full" dangerouslySetInnerHTML={{ __html: svg }} />;
 }

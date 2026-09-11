@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import { Separator } from "@Closer/ui/components/separator";
 
 import { ModeToggle } from "./mode-toggle";
 import UserMenu from "./user-menu";
@@ -27,7 +28,7 @@ export default function Header() {
           <UserMenu />
         </div>
       </div>
-      <hr />
+      <Separator />
     </div>
   );
 }

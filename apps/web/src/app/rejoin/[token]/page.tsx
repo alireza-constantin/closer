@@ -1,4 +1,5 @@
 import AnonymousSession from "@/components/anonymous-session";
+import { CloserPageShell, CloserTopbar } from "@/components/closer/page-shell";
 import JoinPairForm from "@/components/join-pair-form";
 import { db, getRejoinInviteLanding } from "@Closer/auth/closer";
 
@@ -10,11 +11,11 @@ export default async function RejoinPage({ params }: { params: Promise<{ token: 
   const invite = await getRejoinInviteLanding(db, token);
 
   return (
-    <main className="closer-shell closer-onboarding-shell">
-      <header className="closer-topbar"><span className="closer-wordmark">Closer <span aria-hidden="true">♥</span></span><span className="closer-pair-mark" aria-hidden="true"><i /> <i /></span></header>
+    <CloserPageShell className="flex flex-col">
+      <CloserTopbar />
       <AnonymousSession>
         <JoinPairForm inviterDisplayName={null} kind="rejoin" token={token} unavailable={!invite} />
       </AnonymousSession>
-    </main>
+    </CloserPageShell>
   );
 }
