@@ -1,7 +1,7 @@
-import { db, getParticipantByAuthUserId, isInitialInviteUsable, issueInitialInvite, revokeInitialInvites } from "@Closer/auth/closer";
+import { db, getInitialInviteStatus, getParticipantByAuthUserId, isInitialInviteUsable, issueOrReuseInitialInvite, replaceInitialInvite } from "@Closer/auth/closer";
 
 import { getAuthUserIdFromRequest } from "@/lib/closer-server";
-import { clearInitialInviteCookie, getInitialInviteCookie, setInitialInviteCookie } from "@/lib/initial-invite-cookie";
+import { getInitialInviteCookie, setInitialInviteCookie } from "@/lib/initial-invite-cookie";
 
 export async function GET(request: Request, context: { params: Promise<{ pairId: string }> }) {
   const authUserId = await getAuthUserIdFromRequest(request.headers);
@@ -13,11 +13,19 @@ export async function GET(request: Request, context: { params: Promise<{ pairId:
     if (!participant) return Response.json({ error: "Not found." }, { status: 404 });
 
     const token = getInitialInviteCookie(request, pairId);
-    if (!token || !(await isInitialInviteUsable(db, { participantId: participant.id, pairId, token }))) {
-      return Response.json({ error: "No reusable invite." }, { status: 404 });
+    if (token && await isInitialInviteUsable(db, { participantId: participant.id, pairId, token })) {
+      const status = await getInitialInviteStatus(db, { participantId: participant.id, pairId });
+      if (status.state === "active") {
+        return Response.json({ state: "local" as const, token, expiresAt: status.expiresAt.toISOString() }, { headers: { "Cache-Control": "private, no-store" } });
+      }
     }
-
-    return Response.json({ token });
+    const status = await getInitialInviteStatus(db, { participantId: participant.id, pairId });
+    return Response.json(
+      status.state === "active"
+        ? { state: "active" as const, expiresAt: status.expiresAt.toISOString() }
+        : { state: "none" as const },
+      { headers: { "Cache-Control": "private, no-store" } },
+    );
   } catch {
     return Response.json({ error: "Not found." }, { status: 404 });
   }
@@ -32,16 +40,20 @@ export async function POST(request: Request, context: { params: Promise<{ pairId
     const participant = await getParticipantByAuthUserId(db, authUserId);
     if (!participant) return Response.json({ error: "Not found." }, { status: 404 });
 
-    const invite = await issueInitialInvite(db, { participantId: participant.id, pairId });
+    const invite = await issueOrReuseInitialInvite(db, { participantId: participant.id, pairId });
+    if (invite.state === "active") {
+      return Response.json({ state: "active" as const, expiresAt: invite.expiresAt.toISOString() }, { headers: { "Cache-Control": "private, no-store" } });
+    }
     const headers = new Headers({ "content-type": "application/json" });
     setInitialInviteCookie(headers, pairId, invite.token, invite.expiresAt);
-    return new Response(JSON.stringify({ token: invite.token, expiresAt: invite.expiresAt.toISOString() }), { headers });
+    headers.set("Cache-Control", "private, no-store");
+    return new Response(JSON.stringify({ state: "local", token: invite.token, expiresAt: invite.expiresAt.toISOString() }), { headers });
   } catch {
     return Response.json({ error: "Not found." }, { status: 404 });
   }
 }
 
-export async function DELETE(request: Request, context: { params: Promise<{ pairId: string }> }) {
+export async function PUT(request: Request, context: { params: Promise<{ pairId: string }> }) {
   const authUserId = await getAuthUserIdFromRequest(request.headers);
   if (!authUserId) return Response.json({ error: "Sign in is required." }, { status: 401 });
 
@@ -50,10 +62,10 @@ export async function DELETE(request: Request, context: { params: Promise<{ pair
     const participant = await getParticipantByAuthUserId(db, authUserId);
     if (!participant) return Response.json({ error: "Not found." }, { status: 404 });
 
-    await revokeInitialInvites(db, { participantId: participant.id, pairId });
-    const headers = new Headers();
-    clearInitialInviteCookie(headers, pairId);
-    return new Response(null, { headers, status: 204 });
+    const invite = await replaceInitialInvite(db, { participantId: participant.id, pairId });
+    const headers = new Headers({ "content-type": "application/json", "Cache-Control": "private, no-store" });
+    setInitialInviteCookie(headers, pairId, invite.token, invite.expiresAt);
+    return new Response(JSON.stringify({ state: "local", token: invite.token, expiresAt: invite.expiresAt.toISOString() }), { headers });
   } catch {
     return Response.json({ error: "Not found." }, { status: 404 });
   }

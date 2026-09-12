@@ -13,13 +13,14 @@ mock.module("@Closer/auth/closer", () => ({
     pair: { relationshipType: "friend" },
     members: [{ slot: "first", displayName: "Ali" }],
   }),
+  getInitialInviteStatus: async () => ({ state: "active", expiresAt: new Date("2030-01-01T00:00:00.000Z") }),
   getParticipantByAuthUserId: async () => ({ id: "participant-1" }),
   isInitialInviteUsable: async () => true,
-  issueInitialInvite: async () => ({ token: "fresh-token", expiresAt: new Date("2030-01-01T00:00:00.000Z") }),
+  issueOrReuseInitialInvite: async () => ({ state: "issued", token: "fresh-token", expiresAt: new Date("2030-01-01T00:00:00.000Z") }),
   listActivePairsForParticipant,
   listActivePrivateConversations: async () => [],
   resolveOrCreateParticipant: mock(async () => ({ id: "participant-1", displayName: "Ari" })),
-  revokeInitialInvites: async () => undefined,
+  replaceInitialInvite: async () => ({ token: "replacement-token", expiresAt: new Date("2030-01-02T00:00:00.000Z") }),
 }));
 
 mock.module("@/lib/closer-server", () => ({

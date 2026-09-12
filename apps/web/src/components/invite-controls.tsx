@@ -22,6 +22,7 @@ export default function InviteControls({
   autoGenerate?: boolean;
 }) {
   const [inviteUrl, setInviteUrl] = useState<string | null>(null);
+  const [activeExpiresAt, setActiveExpiresAt] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [isWorking, setIsWorking] = useState(false);
   const [didCopy, setDidCopy] = useState(false);
@@ -29,6 +30,26 @@ export default function InviteControls({
   const reuseRequestRef = useRef<Promise<void> | null>(null);
   const endpoint = `/api/pairs/${encodeURIComponent(pairId)}/${kind === "initial" ? "invite" : "rejoin"}`;
   const isRejoin = kind === "rejoin";
+
+  function setInitialInvite(body: Record<string, unknown>) {
+    const expiresAt = typeof body.expiresAt === "string" ? body.expiresAt : null;
+    if (body.state === "local" && typeof body.token === "string" && expiresAt) {
+      setInviteUrl(`${window.location.origin}/join/${body.token}`);
+      setActiveExpiresAt(expiresAt);
+      return true;
+    }
+    if (body.state === "active" && expiresAt) {
+      setInviteUrl(null);
+      setActiveExpiresAt(expiresAt);
+      return true;
+    }
+    if (body.state === "none") {
+      setInviteUrl(null);
+      setActiveExpiresAt(null);
+      return true;
+    }
+    return false;
+  }
 
   useEffect(() => {
     setCanShare(
@@ -43,6 +64,12 @@ export default function InviteControls({
     try {
       const response = await fetch(endpoint, { method: "POST" });
       const body: unknown = await response.json();
+      if (!isRejoin && body && typeof body === "object" && setInitialInvite(body as Record<string, unknown>)) {
+        if ((body as { state?: unknown }).state === "active") {
+          setMessage("An active invitation already exists. This browser does not have its link.");
+        }
+        return;
+      }
       if (
         !response.ok ||
         !body ||
@@ -86,6 +113,14 @@ export default function InviteControls({
       try {
         const response = await fetch(endpoint, { cache: "no-store" });
         const body: unknown = await response.json();
+        if (!isRejoin && response.ok && body && typeof body === "object") {
+          const parsed = body as Record<string, unknown>;
+          if (setInitialInvite(parsed)) {
+            if (parsed.state === "none") await generateInvite();
+            else if (parsed.state === "active") setMessage("An active invitation already exists. This browser does not have its link.");
+            return;
+          }
+        }
         if (response.ok && body && typeof body === "object" && "token" in body && typeof body.token === "string") {
           setInviteUrl(`${window.location.origin}/${isRejoin ? "rejoin" : "join"}/${body.token}`);
           return;
@@ -140,6 +175,27 @@ export default function InviteControls({
   }
 
   async function revokeInvite() {
+    if (!isRejoin) {
+      const confirmed = window.confirm("Replace this invitation? The previous link will stop working.");
+      if (!confirmed) return;
+      setIsWorking(true);
+      setMessage(null);
+      try {
+        const response = await fetch(endpoint, { method: "PUT" });
+        const body: unknown = await response.json();
+        if (!response.ok || !body || typeof body !== "object" || !setInitialInvite(body as Record<string, unknown>)) {
+          setMessage("Unable to replace the invitation.");
+          return;
+        }
+        setDidCopy(false);
+        setMessage("The previous invitation no longer works. Share the new link instead.");
+      } catch {
+        setMessage("Unable to replace the invitation.");
+      } finally {
+        setIsWorking(false);
+      }
+      return;
+    }
     setIsWorking(true);
     setMessage(null);
     try {
@@ -169,6 +225,10 @@ export default function InviteControls({
       setIsWorking(false);
     }
   }
+
+  const expirationCopy = activeExpiresAt
+    ? `Expires ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(activeExpiresAt))}.`
+    : null;
 
   return (
     <section className="relative mx-auto mt-5 w-full max-w-136 overflow-hidden rounded-[1.625rem] border border-closer-navy/10 bg-white/70 px-5 pb-5 pt-6 text-center shadow-closer-soft">
@@ -207,6 +267,11 @@ export default function InviteControls({
             </Field>
           </>
         ) : null}
+        {isRejoin || !activeExpiresAt ? null : (
+          <p className="mt-3 text-[.88rem] leading-relaxed text-closer-muted" role="status">
+            {inviteUrl ? `This invitation is active. ${expirationCopy}` : `An invitation is already active. ${expirationCopy} Its link is only available in the browser that created it.`}
+          </p>
+        )}
         {message ? (
           <p
             className="mt-3 text-[.88rem] leading-relaxed text-closer-navy"
@@ -217,13 +282,13 @@ export default function InviteControls({
         ) : null}
         <div className="mt-4 grid gap-2.5">
           <AsyncButton
-            onClick={() => void generateInvite()}
+            onClick={() => void (isRejoin ? generateInvite() : reuseOrGenerateInvite())}
             pending={isWorking}
             pendingText="Getting it ready…"
             size="lg"
             type="button"
           >
-            {inviteUrl ? "Make a fresh link" : isRejoin ? "Create rejoin link" : "Create invite link"}
+            {isRejoin ? "Create rejoin link" : inviteUrl ? "Reuse invitation" : activeExpiresAt ? "Check invitation" : "Create invite link"}
           </AsyncButton>
           {inviteUrl ? (
             <div className="grid grid-cols-2 gap-2">
@@ -268,7 +333,19 @@ export default function InviteControls({
               variant="ghost"
             >
               <RotateCcw aria-hidden="true" data-icon="inline-start" />
-              Revoke link
+              {isRejoin ? "Revoke link" : "Replace invitation"}
+            </Button>
+          ) : !isRejoin && activeExpiresAt ? (
+            <Button
+              className="mx-auto w-fit px-2 text-closer-muted"
+              disabled={isWorking}
+              onClick={() => void revokeInvite()}
+              size="sm"
+              type="button"
+              variant="ghost"
+            >
+              <RotateCcw aria-hidden="true" data-icon="inline-start" />
+              Replace invitation
             </Button>
           ) : null}
         </div>

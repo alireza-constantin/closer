@@ -13,7 +13,7 @@ const {
   endTogetherSession,
   getTogetherSessionForParticipant,
   listEligibleTogetherQuestions,
-  issueInitialInvite,
+  issueOrReuseInitialInvite,
   redeemInitialInvite,
   resolveOrCreateParticipant,
   setTogetherSessionLike,
@@ -44,6 +44,12 @@ async function createParticipant(displayName: string) {
   return resolveOrCreateParticipant(db, { authUserId, displayName });
 }
 
+async function issueFreshInitialInvite(participantId: string, pairId: string) {
+  const invite = await issueOrReuseInitialInvite(db, { participantId, pairId });
+  if (invite.state !== "issued") throw new Error("Fresh pair unexpectedly had an invitation.");
+  return invite.token;
+}
+
 async function createPair(
   relationshipType: "partner" | "friend" = "partner",
   joined = true,
@@ -53,9 +59,9 @@ async function createPair(
   createdPairIds.push(result.pair.id);
   if (!joined) return { ...result, creator, invitee: null };
 
-  const invite = await issueInitialInvite(db, { participantId: creator.id, pairId: result.pair.id });
+  const token = await issueFreshInitialInvite(creator.id, result.pair.id);
   const invitee = await createParticipant("Other");
-  await redeemInitialInvite(db, { token: invite.token, participantId: invitee.id });
+  await redeemInitialInvite(db, { token, participantId: invitee.id });
   return { ...result, creator, invitee };
 }
 

@@ -23,7 +23,7 @@ function isConnectedPairStatus(value: unknown): value is { state: "connected"; o
   );
 }
 
-export default function ConnectPerson({ pairId }: { pairId: string }) {
+export default function ConnectPerson({ pairId, issueOnEntry = false }: { pairId: string; issueOnEntry?: boolean }) {
   const router = useRouter();
   const [joinedDisplayName, setJoinedDisplayName] = useState<string | null>(null);
   const [isRedirecting, setIsRedirecting] = useState(false);
@@ -57,7 +57,7 @@ export default function ConnectPerson({ pairId }: { pairId: string }) {
         <CloserSubtitle>Private questions work when you can each answer on your own phone. Send them the link below, then come back here together.</CloserSubtitle>
       </section>
       {joinedDisplayName ? <p className="mx-auto mt-4 inline-flex items-center rounded-full bg-closer-mint px-3 py-2 text-sm text-closer-success-foreground" role="status"><strong>{joinedDisplayName}</strong> joined. Opening your space…</p> : null}
-      {isRedirecting ? <p className="text-center text-sm text-closer-muted" role="status">Opening your shared space…</p> : <InviteControls autoGenerate kind="initial" pairId={pairId} />}
+      {isRedirecting ? <p className="text-center text-sm text-closer-muted" role="status">Opening your shared space…</p> : <InviteControls autoGenerate={issueOnEntry} kind="initial" pairId={pairId} />}
     </CloserPageShell>
   );
 }

@@ -229,37 +229,56 @@ async function requireActivePairAccess(database: Database, participantId: string
   return rows[0];
 }
 
-async function issueInitialInviteInTransaction(
+async function requireSoleUnclaimedPairMemberInTransaction(
   tx: Parameters<Parameters<Database["transaction"]>[0]>[0],
+  participantId: string,
   pairId: string,
 ) {
   await tx.execute(sql`select id from "pair" where id = ${pairId} for update`);
-  const occupiedSecondSlot = await tx
-    .select({ id: pairMembership.id })
+  const activeMemberships = await tx
+    .select({ participantId: pairMembership.participantId, slot: pairMembership.slot })
     .from(pairMembership)
     .where(
       and(
         eq(pairMembership.pairId, pairId),
-        eq(pairMembership.slot, "second"),
         isNull(pairMembership.endedAt),
       ),
-    )
-    .limit(1);
-  if (occupiedSecondSlot[0]) throw new CloserDomainError("INVITE_UNAVAILABLE");
+    );
+  if (
+    activeMemberships.length !== 1
+    || activeMemberships[0]?.participantId !== participantId
+    || activeMemberships[0]?.slot !== "first"
+  ) {
+    throw new CloserDomainError("INVITE_UNAVAILABLE");
+  }
+}
 
-  const token = createInviteToken();
-  const expiresAt = new Date(Date.now() + INITIAL_INVITE_LIFETIME_MS);
-
-  await tx
-    .update(initialInvite)
-    .set({ revokedAt: new Date() })
+async function findUsableInitialInvite(
+  database: Pick<Database, "select">,
+  pairId: string,
+) {
+  const rows = await database
+    .select({ id: initialInvite.id, expiresAt: initialInvite.expiresAt })
+    .from(initialInvite)
     .where(
       and(
         eq(initialInvite.pairId, pairId),
         isNull(initialInvite.revokedAt),
         isNull(initialInvite.redeemedAt),
+        gt(initialInvite.expiresAt, new Date()),
       ),
-    );
+    )
+    .orderBy(desc(initialInvite.createdAt))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+async function createInitialInviteInTransaction(
+  tx: Parameters<Parameters<Database["transaction"]>[0]>[0],
+  pairId: string,
+) {
+  const token = createInviteToken();
+  const expiresAt = new Date(Date.now() + INITIAL_INVITE_LIFETIME_MS);
 
   await tx.insert(initialInvite).values({
     pairId,
@@ -348,12 +367,60 @@ export async function updateIntendedPersonName(
   });
 }
 
-export async function issueInitialInvite(
+export async function getInitialInviteStatus(
   database: Database,
   input: { participantId: string; pairId: string },
 ) {
   await requireActivePairAccess(database, input.participantId, input.pairId);
-  return database.transaction((tx) => issueInitialInviteInTransaction(tx, input.pairId));
+  return database.transaction(async (tx) => {
+    await requireSoleUnclaimedPairMemberInTransaction(tx, input.participantId, input.pairId);
+    const usable = await findUsableInitialInvite(tx, input.pairId);
+    return usable ? { state: "active" as const, expiresAt: usable.expiresAt } : { state: "none" as const };
+  });
+}
+
+/**
+ * Issues a raw credential only when no usable one exists. A caller that does
+ * not retain the previous raw credential receives its existence and expiry,
+ * never a silently rotated replacement.
+ */
+export async function issueOrReuseInitialInvite(
+  database: Database,
+  input: { participantId: string; pairId: string },
+) {
+  await requireActivePairAccess(database, input.participantId, input.pairId);
+  return database.transaction(async (tx) => {
+    await requireSoleUnclaimedPairMemberInTransaction(tx, input.participantId, input.pairId);
+    const existing = await findUsableInitialInvite(tx, input.pairId);
+    if (existing) return { state: "active" as const, expiresAt: existing.expiresAt };
+
+    // Expired credentials are not usable. Mark them terminal before creating
+    // the fresh credential, keeping lifecycle rows auditable without allowing
+    // an unbounded set of apparently-live rows.
+    await tx
+      .update(initialInvite)
+      .set({ revokedAt: new Date() })
+      .where(and(eq(initialInvite.pairId, input.pairId), isNull(initialInvite.revokedAt), isNull(initialInvite.redeemedAt)));
+    const issued = await createInitialInviteInTransaction(tx, input.pairId);
+    return { state: "issued" as const, ...issued };
+  });
+}
+
+export async function replaceInitialInvite(
+  database: Database,
+  input: { participantId: string; pairId: string },
+) {
+  await requireActivePairAccess(database, input.participantId, input.pairId);
+  return database.transaction(async (tx) => {
+    await requireSoleUnclaimedPairMemberInTransaction(tx, input.participantId, input.pairId);
+    const existing = await findUsableInitialInvite(tx, input.pairId);
+    if (!existing) throw new CloserDomainError("INVITE_UNAVAILABLE");
+    await tx
+      .update(initialInvite)
+      .set({ revokedAt: new Date() })
+      .where(and(eq(initialInvite.pairId, input.pairId), isNull(initialInvite.revokedAt), isNull(initialInvite.redeemedAt)));
+    return createInitialInviteInTransaction(tx, input.pairId);
+  });
 }
 
 export async function isInitialInviteUsable(
@@ -404,8 +471,13 @@ export async function revokeInitialInvites(
  */
 export async function getInitialInviteLanding(database: Database, token: string) {
   const rows = await database
-    .select({ inviterDisplayName: participant.displayName })
+    .select({
+      inviterDisplayName: participant.displayName,
+      relationshipType: pair.relationshipType,
+      intendedPersonName: pair.intendedPersonName,
+    })
     .from(initialInvite)
+    .innerJoin(pair, eq(pair.id, initialInvite.pairId))
     .innerJoin(
       pairMembership,
       and(

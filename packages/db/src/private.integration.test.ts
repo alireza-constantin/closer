@@ -13,7 +13,7 @@ const {
   createPairForParticipant,
   getPrivateRoundForParticipant,
   getPrivateRoundStatusForParticipant,
-  issueInitialInvite,
+  issueOrReuseInitialInvite,
   listActivePrivateConversations,
   listEligiblePrivateQuestions,
   markPrivateRevealViewed,
@@ -50,13 +50,19 @@ async function createParticipant(name: string) {
   return resolveOrCreateParticipant(db, { authUserId: await createAuthUser(name), displayName: name });
 }
 
+async function issueFreshInitialInvite(participantId: string, pairId: string) {
+  const invite = await issueOrReuseInitialInvite(db, { participantId, pairId });
+  if (invite.state !== "issued") throw new Error("Fresh pair unexpectedly had an invitation.");
+  return invite.token;
+}
+
 async function createJoinedPair(relationshipType: "partner" | "friend" = "partner") {
   const first = await createParticipant("Ali");
   const created = await createPairForParticipant(db, { participantId: first.id, intendedPersonName: "Fafa", relationshipType });
   pairIds.push(created.pair.id);
   const second = await createParticipant("Fafa");
-  const invite = await issueInitialInvite(db, { participantId: first.id, pairId: created.pair.id });
-  await redeemInitialInvite(db, { token: invite.token, participantId: second.id });
+  const token = await issueFreshInitialInvite(first.id, created.pair.id);
+  await redeemInitialInvite(db, { token, participantId: second.id });
   return { pairId: created.pair.id, first, second };
 }
 
@@ -131,14 +137,14 @@ describe("Closer Slice 01B Private rounds", () => {
     const partnerSpace = await createPairForParticipant(db, { participantId: first.id, intendedPersonName: "Fafa", relationshipType: "partner" });
     pairIds.push(partnerSpace.pair.id);
     const partner = await createParticipant("Fafa");
-    const partnerInvite = await issueInitialInvite(db, { participantId: first.id, pairId: partnerSpace.pair.id });
-    await redeemInitialInvite(db, { token: partnerInvite.token, participantId: partner.id });
+    const partnerToken = await issueFreshInitialInvite(first.id, partnerSpace.pair.id);
+    await redeemInitialInvite(db, { token: partnerToken, participantId: partner.id });
 
     const friendSpace = await createPairForParticipant(db, { participantId: first.id, intendedPersonName: "Nima", relationshipType: "friend" });
     pairIds.push(friendSpace.pair.id);
     const friend = await createParticipant("Nima");
-    const friendInvite = await issueInitialInvite(db, { participantId: first.id, pairId: friendSpace.pair.id });
-    await redeemInitialInvite(db, { token: friendInvite.token, participantId: friend.id });
+    const friendToken = await issueFreshInitialInvite(first.id, friendSpace.pair.id);
+    await redeemInitialInvite(db, { token: friendToken, participantId: friend.id });
 
     const partnerRound = await createRound(partnerSpace.pair.id, first.id, questionIds.relationship);
     expect(await listActivePrivateConversations(db, { pairId: friendSpace.pair.id, participantId: first.id })).toEqual([]);
