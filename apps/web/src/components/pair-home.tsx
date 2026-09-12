@@ -87,11 +87,13 @@ export default function PairHome({
   pairId,
   memberNames,
   isComplete,
+  hasMultipleSpaces,
   activeConversations: initialActiveConversations,
 }: {
   pairId: string;
   memberNames: [string, string | null];
   isComplete: boolean;
+  hasMultipleSpaces: boolean;
   activeConversations: ActiveConversation[];
 }) {
   const [activeConversations, setActiveConversations] = useState(initialActiveConversations);
@@ -111,7 +113,10 @@ export default function PairHome({
 
   return (
     <CloserPageShell>
-      <CloserTopbar href={`/pair/${pairId}`} />
+      <CloserTopbar
+        action={hasMultipleSpaces ? <Link className="text-sm font-extrabold text-closer-muted underline-offset-4 hover:text-closer-navy hover:underline" href="/">Your spaces</Link> : undefined}
+        href={`/pair/${pairId}`}
+      />
       <section className="pb-7 pt-8 text-center">
         <CloserCompanions />
         <CloserPageTitle>{isComplete ? `${memberNames[0]} + ${memberNames[1] ?? "your person"}` : `${memberNames[0]} + your person`}</CloserPageTitle>
@@ -119,8 +124,9 @@ export default function PairHome({
       </section>
       <section className="grid gap-3" aria-label="Choose a way to connect">
         <CloserModeCard href={`/pair/${pairId}/together`} kind="together" icon={<MessageCircleMore aria-hidden="true" />} title="Talk Together" description="Use this phone and talk face-to-face" />
-        <CloserModeCard href={`/pair/${pairId}/private`} kind="private" icon={<LockKeyhole aria-hidden="true" />} title="Answer Privately" description={isComplete ? "Answer separately, reveal together" : "Connect your person to answer on two phones"} />
+        <CloserModeCard href={`/pair/${pairId}/private`} kind="private" icon={<LockKeyhole aria-hidden="true" />} title="Answer Privately" description={isComplete ? "Answer separately, reveal together" : "Invite them to answer separately"} />
       </section>
+      {!isComplete ? <Link className="mx-auto mt-5 block w-fit text-xs text-closer-muted underline-offset-4 hover:text-closer-navy hover:underline" href={`/pair/${pairId}/invite` as never}>Invite them to Closer</Link> : null}
       {activeConversations.length > 0 ? (
         <section className="mt-8" aria-labelledby="private-conversations-heading">
           <h2 className="mb-3 text-[1.15rem] font-extrabold tracking-[-.025em]" id="private-conversations-heading">Your conversations</h2>

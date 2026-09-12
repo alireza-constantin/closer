@@ -37,8 +37,8 @@ export function CloserPairMark() {
   return <span aria-hidden="true" className="flex items-center gap-1"><i className="block size-3 rounded-[60%_40%_62%_38%] bg-closer-coral" /><i className="mt-1 block size-3 rounded-[60%_40%_62%_38%] bg-closer-lavender" /></span>;
 }
 
-export function CloserTopbar({ href }: { href?: string }) {
-  return <header className="flex min-h-[42px] items-center justify-between"><CloserWordmark href={href} /><CloserPairMark /></header>;
+export function CloserTopbar({ href, action }: { href?: string; action?: ReactNode }) {
+  return <header className="flex min-h-[42px] items-center justify-between gap-3"><CloserWordmark href={href} />{action ?? <CloserPairMark />}</header>;
 }
 
 export function CloserRoundHeader({ children }: { children: ReactNode }) {

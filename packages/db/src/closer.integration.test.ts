@@ -9,13 +9,13 @@ const { createDb } = await import("./index");
 const {
   CloserDomainError,
   createPairForParticipant,
-  getActivePairForParticipant,
   getPairForParticipant,
   getPairStatusForParticipant,
   getParticipantByAuthUserId,
   getRejoinInviteLanding,
   issueInitialInvite,
   issueRejoinInvite,
+  listActivePairsForParticipant,
   redeemRejoinInvite,
   redeemInitialInvite,
   resolveOrCreateParticipant,
@@ -119,16 +119,82 @@ describe("Closer Slice 01A", () => {
     expect(await db.select().from(pair).where(eq(pair.id, first.pair.id))).toHaveLength(1);
   });
 
-  test("resolves the participant's active pair for server-side root routing", async () => {
+  test("lists zero, one, and multiple active spaces without choosing one", async () => {
     const participantWithoutPair = await createParticipant("Not paired yet");
-    expect(await getActivePairForParticipant(db, participantWithoutPair.id)).toBeNull();
+    expect(await listActivePairsForParticipant(db, participantWithoutPair.id)).toEqual([]);
 
     const created = await createPair();
-    expect(await getActivePairForParticipant(db, created.creator.id)).toMatchObject({ pairId: created.pair.id });
+    expect(await listActivePairsForParticipant(db, created.creator.id)).toEqual([
+      expect.objectContaining({
+        pairId: created.pair.id,
+        relationshipType: "partner",
+        state: "waiting",
+        otherParticipantDisplayName: null,
+      }),
+    ]);
 
     const invitee = await createParticipant("Invitee");
     await redeemInitialInvite(db, { token: created.invite.token, participantId: invitee.id });
-    expect(await getActivePairForParticipant(db, invitee.id)).toMatchObject({ pairId: created.pair.id });
+    expect(await listActivePairsForParticipant(db, invitee.id)).toEqual([
+      expect.objectContaining({
+        pairId: created.pair.id,
+        relationshipType: "partner",
+        state: "connected",
+        otherParticipantDisplayName: "Creator",
+      }),
+    ]);
+  });
+
+  test("one participant can keep Partner, Friend, and multiple Friend spaces active", async () => {
+    const creator = await createParticipant("Ali");
+    const partner = await createPairForParticipant(db, { participantId: creator.id, relationshipType: "partner" });
+    const friend = await createPairForParticipant(db, { participantId: creator.id, relationshipType: "friend" });
+    const anotherFriend = await createPairForParticipant(db, { participantId: creator.id, relationshipType: "friend" });
+    createdPairIds.push(partner.pair.id, friend.pair.id, anotherFriend.pair.id);
+
+    const friendSpaces = await listActivePairsForParticipant(db, creator.id);
+    expect(friendSpaces).toHaveLength(3);
+    expect(friendSpaces).toEqual(expect.arrayContaining([
+      expect.objectContaining({ pairId: partner.pair.id, relationshipType: "partner", state: "waiting" }),
+      expect.objectContaining({ pairId: friend.pair.id, relationshipType: "friend", state: "waiting" }),
+      expect.objectContaining({ pairId: anotherFriend.pair.id, relationshipType: "friend", state: "waiting" }),
+    ]));
+
+    const membershipRows = await db
+      .select()
+      .from(pairMembership)
+      .where(and(eq(pairMembership.participantId, creator.id), isNull(pairMembership.endedAt)));
+    expect(membershipRows).toHaveLength(3);
+  });
+
+  test("an existing participant can redeem a new invite without losing another space", async () => {
+    const existingSpace = await createPair("Existing creator", "partner");
+    const existingParticipant = await createParticipant("Ali");
+    await redeemInitialInvite(db, { token: existingSpace.invite.token, participantId: existingParticipant.id });
+
+    const newSpaceOwner = await createPair("New friend", "friend");
+    await redeemInitialInvite(db, { token: newSpaceOwner.invite.token, participantId: existingParticipant.id });
+
+    const spaces = await listActivePairsForParticipant(db, existingParticipant.id);
+    expect(spaces).toHaveLength(2);
+    expect(spaces).toEqual(expect.arrayContaining([
+      expect.objectContaining({ pairId: existingSpace.pair.id, relationshipType: "partner", otherParticipantDisplayName: "Existing creator" }),
+      expect.objectContaining({ pairId: newSpaceOwner.pair.id, relationshipType: "friend", otherParticipantDisplayName: "New friend" }),
+    ]));
+  });
+
+  test("a pending space coexists with a completed space", async () => {
+    const completedSpace = await createPair("Partner owner", "partner");
+    const participant = await createParticipant("Ali");
+    await redeemInitialInvite(db, { token: completedSpace.invite.token, participantId: participant.id });
+
+    const pendingSpace = await createPairForParticipant(db, { participantId: participant.id, relationshipType: "friend" });
+    createdPairIds.push(pendingSpace.pair.id);
+
+    expect(await listActivePairsForParticipant(db, participant.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ pairId: completedSpace.pair.id, state: "connected", otherParticipantDisplayName: "Partner owner" }),
+      expect.objectContaining({ pairId: pendingSpace.pair.id, state: "waiting", otherParticipantDisplayName: null }),
+    ]));
   });
 
   test("redeems an opaque initial invite into the empty second slot and authorizes both members", async () => {

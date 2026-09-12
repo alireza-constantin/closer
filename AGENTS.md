@@ -151,3 +151,13 @@ Whenever a new implementation introduces a pattern already present elsewhere:
 Do not knowingly introduce a second implementation of the same Closer product concept.
 
 Before completing substantial frontend work, perform a quick duplication review of the files touched.
+
+## Agent skills
+
+### Issue tracker
+
+This repository tracks implementation work as local Markdown tickets in `.scratch/`. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+This repository uses a single domain context: the root glossary and the repository ADRs. See `docs/agents/domain.md`.

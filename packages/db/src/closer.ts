@@ -145,20 +145,56 @@ export async function getParticipantByAuthUserId(database: Database, authUserId:
 }
 
 /**
- * Resolve the participant's current space for server-side routing. This is
- * deliberately a projection of active membership only; it does not impose a
- * database-wide one-pair-per-participant constraint, so future multi-pair
- * navigation remains possible. Until that exists, the most recently started
- * active membership is the participant's current space.
+ * List every active space the participant can access.
+ *
+ * Pair membership is the authority for this projection. The member lookup is
+ * intentionally restricted to the returned pair IDs, so the display name is
+ * always the other member of an authorized space and never a client-selected
+ * participant lookup.
  */
-export async function getActivePairForParticipant(database: Database, participantId: string) {
-  const rows = await database
-    .select({ pairId: pairMembership.pairId, startedAt: pairMembership.startedAt })
+export async function listActivePairsForParticipant(database: Database, participantId: string) {
+  const memberships = await database
+    .select({
+      pairId: pairMembership.pairId,
+      relationshipType: pair.relationshipType,
+    })
     .from(pairMembership)
+    .innerJoin(pair, eq(pairMembership.pairId, pair.id))
     .where(and(eq(pairMembership.participantId, participantId), isNull(pairMembership.endedAt)))
-    .orderBy(desc(pairMembership.startedAt), desc(pairMembership.id))
-    .limit(1);
-  return rows[0] ?? null;
+    .orderBy(desc(pair.createdAt), desc(pair.id));
+
+  if (!memberships.length) return [];
+
+  const pairIds = memberships.map((membership) => membership.pairId);
+  const members = await database
+    .select({
+      pairId: pairMembership.pairId,
+      participantId: pairMembership.participantId,
+      displayName: participant.displayName,
+    })
+    .from(pairMembership)
+    .innerJoin(participant, eq(pairMembership.participantId, participant.id))
+    .where(and(inArray(pairMembership.pairId, pairIds), isNull(pairMembership.endedAt)));
+
+  const membersByPair = new Map<string, typeof members>();
+  for (const member of members) {
+    const pairMembers = membersByPair.get(member.pairId) ?? [];
+    pairMembers.push(member);
+    membersByPair.set(member.pairId, pairMembers);
+  }
+
+  return memberships.map((membership) => {
+    const otherMember = membersByPair
+      .get(membership.pairId)
+      ?.find((member) => member.participantId !== participantId);
+
+    return {
+      pairId: membership.pairId,
+      relationshipType: membership.relationshipType,
+      state: otherMember ? ("connected" as const) : ("waiting" as const),
+      otherParticipantDisplayName: otherMember?.displayName ?? null,
+    };
+  });
 }
 
 async function requireActivePairAccess(database: Database, participantId: string, pairId: string) {
@@ -267,6 +303,27 @@ export async function issueInitialInvite(
 ) {
   await requireActivePairAccess(database, input.participantId, input.pairId);
   return database.transaction((tx) => issueInitialInviteInTransaction(tx, input.pairId));
+}
+
+export async function isInitialInviteUsable(
+  database: Database,
+  input: { participantId: string; pairId: string; token: string },
+) {
+  await requireActivePairAccess(database, input.participantId, input.pairId);
+  const rows = await database
+    .select({ id: initialInvite.id })
+    .from(initialInvite)
+    .where(
+      and(
+        eq(initialInvite.pairId, input.pairId),
+        eq(initialInvite.tokenHash, hashInviteToken(input.token)),
+        isNull(initialInvite.revokedAt),
+        isNull(initialInvite.redeemedAt),
+        gt(initialInvite.expiresAt, new Date()),
+      ),
+    )
+    .limit(1);
+  return Boolean(rows[0]);
 }
 
 export async function revokeInitialInvites(

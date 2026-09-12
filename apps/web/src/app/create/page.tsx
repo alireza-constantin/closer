@@ -1,30 +1,24 @@
 import { db, listActivePairsForParticipant } from "@Closer/auth/closer";
-import { redirect } from "next/navigation";
 
 import AnonymousSession from "@/components/anonymous-session";
 import { CloserPageShell, CloserTopbar } from "@/components/closer/page-shell";
 import CreatePairForm from "@/components/create-pair-form";
-import YourSpaces from "@/components/your-spaces";
 import { getCurrentParticipant } from "@/lib/closer-server";
 
-// Membership can be completed in another browser while this route is cached.
-// Resolve it on every request so an active participant never sees onboarding.
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-export default async function Home() {
+export default async function CreateSpacePage() {
   const currentParticipant = await getCurrentParticipant();
-  if (currentParticipant) {
-    const spaces = await listActivePairsForParticipant(db, currentParticipant.id);
-    if (spaces.length === 1) redirect(`/pair/${spaces[0].pairId}`);
-    if (spaces.length > 1) return <YourSpaces spaces={spaces} />;
-  }
+  const spaces = currentParticipant
+    ? await listActivePairsForParticipant(db, currentParticipant.id)
+    : [];
 
   return (
     <CloserPageShell className="flex flex-col">
-      <CloserTopbar />
+      <CloserTopbar href="/" />
       <AnonymousSession>
-        <CreatePairForm isFirstSpace />
+        <CreatePairForm isFirstSpace={spaces.length === 0} />
       </AnonymousSession>
     </CloserPageShell>
   );

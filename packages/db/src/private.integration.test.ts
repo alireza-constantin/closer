@@ -124,6 +124,25 @@ describe("Closer Slice 01B Private rounds", () => {
     expect(await capture(listEligiblePrivateQuestions(db, { participantId: friend.first.id, pairId: friend.pairId, category: "relationship" }))).toMatchObject({ code: "QUESTION_UNAVAILABLE" });
   });
 
+  test("Private conversations and relationship categories stay isolated across a participant's spaces", async () => {
+    const first = await createParticipant("Ali");
+    const partnerSpace = await createPairForParticipant(db, { participantId: first.id, relationshipType: "partner" });
+    pairIds.push(partnerSpace.pair.id);
+    const partner = await createParticipant("Fafa");
+    await redeemInitialInvite(db, { token: partnerSpace.invite.token, participantId: partner.id });
+
+    const friendSpace = await createPairForParticipant(db, { participantId: first.id, relationshipType: "friend" });
+    pairIds.push(friendSpace.pair.id);
+    const friend = await createParticipant("Nima");
+    await redeemInitialInvite(db, { token: friendSpace.invite.token, participantId: friend.id });
+
+    const partnerRound = await createRound(partnerSpace.pair.id, first.id, questionIds.relationship);
+    expect(await listActivePrivateConversations(db, { pairId: friendSpace.pair.id, participantId: first.id })).toEqual([]);
+    expect(await listEligiblePrivateQuestions(db, { pairId: partnerSpace.pair.id, participantId: first.id, category: "relationship" })).not.toEqual([]);
+    expect(await listEligiblePrivateQuestions(db, { pairId: friendSpace.pair.id, participantId: first.id, category: "friendship" })).not.toEqual([]);
+    expect(await capture(getPrivateRoundForParticipant(db, { pairId: friendSpace.pair.id, participantId: first.id, roundId: partnerRound.id }))).toMatchObject({ code: "ROUND_NOT_FOUND" });
+  });
+
   test("multiple category conversations coexist and retain participant-relative independent state", async () => {
     const { pairId, first, second } = await createJoinedPair();
     const roundA = await createRound(pairId, first.id, questionIds.deep);

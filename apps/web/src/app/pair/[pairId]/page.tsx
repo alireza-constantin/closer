@@ -1,4 +1,4 @@
-import { db, getPairForParticipant, listActivePrivateConversations } from "@Closer/auth/closer";
+import { db, getPairForParticipant, listActivePairsForParticipant, listActivePrivateConversations } from "@Closer/auth/closer";
 import { notFound } from "next/navigation";
 
 import PairHome from "@/components/pair-home";
@@ -17,6 +17,7 @@ export default async function PairPage({ params }: { params: Promise<{ pairId: s
 
   try {
     const pairView = await getPairForParticipant(db, currentParticipant.id, pairId);
+    const spaces = await listActivePairsForParticipant(db, currentParticipant.id);
     const firstMember = pairView.members.find((member) => member.slot === "first");
     const secondMember = pairView.members.find((member) => member.slot === "second");
 
@@ -27,6 +28,7 @@ export default async function PairPage({ params }: { params: Promise<{ pairId: s
     return (
       <PairHome
         activeConversations={activeConversations}
+        hasMultipleSpaces={spaces.length > 1}
         isComplete={Boolean(secondMember)}
         memberNames={[firstMember.displayName, secondMember?.displayName ?? null]}
         pairId={pairId}

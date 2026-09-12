@@ -2,272 +2,472 @@
 
 ## Authority and current state
 
-This document defines the minimum architecture for Closer V1. It describes boundaries and invariants, not a completed implementation or a prescriptive table-by-table design. Product behavior is controlled by [`PRD.md`](./PRD.md); accepted decisions are recorded in [`adr/`](./adr/).
+This document defines the canonical V1 domain boundaries, invariants, authorization model, lifecycle behavior, and storage obligations. It intentionally does not prescribe a table-for-every-concept design. User-visible behavior is controlled by [`PRD.md`](./PRD.md); accepted decisions and their reasoning are recorded in [`adr/`](./adr/); canonical vocabulary is maintained in [`../CONTEXT.md`](../CONTEXT.md).
 
-The repository began as a generated Better-T-Stack scaffold and now contains the Closer pair, invitation, Together, and Private slices described by this document. Product behavior remains governed by the PRD and the accepted ADRs.
+The repository implementation predates parts of this contract. [`IMPLEMENTATION-GAPS.md`](./IMPLEMENTATION-GAPS.md) records the known differences; those differences are not alternative behavior.
 
-## 1. Stack
+## 1. Runtime architecture
 
-Versions below were resolved from the installed repository at the time this document was established:
+Closer is a Bun workspace whose Next.js App Router application is the full-stack application and server boundary.
 
 | Concern | Current choice |
 | --- | --- |
-| Web application | Next.js 16.3.4 App Router with React 19.3.0 |
-| Language | TypeScript 6.0.3 |
-| Package manager/runtime for scripts | Bun 1.3.14 |
-| Authentication | Better Auth 1.7.1 |
-| Database | PostgreSQL 18 Docker image; local inspected server/tooling 18.6 |
-| ORM and schema tooling | Drizzle ORM 0.45.2 and Drizzle Kit 0.31.10 |
-| PostgreSQL driver | `pg` 8.23.0 |
-| Local database | Docker Compose |
-| Later web deployment | Vercel |
+| Web application | Next.js App Router with React |
+| Language | TypeScript |
+| Authentication | Better Auth |
+| Database | PostgreSQL |
+| ORM and schema tooling | Drizzle ORM and Drizzle Kit |
+| Later deployment | Vercel |
 
-The Next.js application is the full-stack application and server boundary. V1 has no separate backend service, tRPC/oRPC layer, WebSocket infrastructure, or Turborepo.
+V1 does not require a separate backend service, microservices, tRPC/oRPC, WebSockets, or a generalized group platform. Route handlers and server-rendered pages are adapters around server/domain behavior; they must not become independent sources of product rules.
 
-## 2. Repository structure
+Logical modules inside this application are:
 
-The current repository is a Bun workspace with this relevant shape:
+- **Authentication:** verifies a Better Auth session and resolves its domain Participant.
+- **Participant identity:** owns stable Participant identity and current display name.
+- **Pair access:** owns Pair slots, memberships, membership boundaries, relationship type, credentials, and termination.
+- **Question content:** owns logical Questions, immutable revisions, eligibility, deactivation, withdrawal, and intensity metadata.
+- **Together:** owns bounded shared-device Sessions and their shown-question occurrences.
+- **Private:** owns era-scoped Conversations, candidates, Rounds, answers, reveal views, reactions, and replies.
+- **History:** produces viewer-authorized read-only projections across active and ended memberships.
+- **Behavioral events:** records non-authoritative product events without duplicating secret answer content or creating a second lifecycle source of truth.
+- **Notifications:** may deliver state-neutral prompts later; delivery never mutates reveal or progression state.
 
-```text
-Closer/
-├── apps/
-│   └── web/                 Next.js App Router application and generated routes
-├── packages/
-│   ├── auth/                Better Auth server configuration
-│   ├── db/                  Drizzle connection, schema, and local PostgreSQL Compose file
-│   ├── env/                 Validated server and browser environment access
-│   ├── ui/                  Shared UI primitives and styles
-│   └── config/              Shared TypeScript configuration
-├── scripts/                 Repository scripts, currently Vercel environment sync
-├── docs/                    Product, architecture, ADR, and design authority
-├── package.json             Workspace scripts and dependency catalog
-├── bts.jsonc                Better-T-Stack generation metadata
-└── vercel.json              Later Vercel service configuration
-```
+## 2. Identity and authentication
 
-The generated web app currently exposes scaffold pages for `/`, `/login`, and `/dashboard`, plus the Better Auth route `/api/auth/[...all]` and `/manifest.webmanifest`. These routes are not Closer's product information architecture.
-
-## 3. Domain boundaries and language
-
-These are logical modules inside the Next.js full-stack application, not separate deployable services:
-
-- **Authentication** verifies a Better Auth session and identifies the current auth user. It does not own pair membership or product history.
-- **Participant identity** maps the current auth user to a stable domain participant, owns the participant's current display name, and preserves that identity across guest-to-registered linking.
-- **Pair access** owns the two-slot pair, relationship type, active membership, initial invitation, and rejoin authority.
-- **Question content** owns the curated deck and the small V1 metadata taxonomy.
-- **Together sessions** own shared-device session progress, the category selected at session start, and pair/session-level Like, Skip, Next, and End signals. They never own typed answers.
-- **Private conversations** group a pair's sequential category-specific Private rounds and own the current-round lifecycle. **Private rounds** own one question instance, participant answer submissions, mutual reveal, reactions, and short replies.
-- **History** presents authorized chronological pair activity within each participant's membership-time boundary.
-- **Behavioral events** record raw product actions for later analysis. Event data must not become an alternate store that leaks private answer bodies.
-- **Notifications** will own web-push subscriptions and background notification delivery later in V1; polling owns active waiting-page freshness before then.
-
-Canonical terms:
-
-- **Auth user**: a Better Auth identity used for authentication and session management.
-- **Participant**: the stable Closer domain identity that owns memberships and product data.
-- **Display name**: the participant's required, non-unique current name shown to the other pair member and in authorized history.
-- **Pair**: one Partner or Friend relationship with exactly two logical slots.
-- **Pair slot**: one of the two stable positions in a pair; it can be empty or actively occupied.
-- **Active membership**: the association that allows a participant to act through one pair slot.
-- **Initial invitation**: a credential that can claim only the pair's empty second slot.
-- **Rejoin link**: a fresh recovery credential generated by the other active member for a specific slot whose guest participant lost their session.
-- **Together eligibility**: an active membership for the requesting participant; the second slot may be empty.
-- **Private eligibility**: an active membership for the requesting participant plus active memberships in both logical slots.
-- **Private round**: one shared question and the two independent participant answer positions leading to mutual reveal.
-- **Private conversation**: one pair's ongoing category run of sequential Private rounds. It is neither an auth session nor a chat thread.
-- **Reveal-ready**: both answers exist and server authorization may expose both to either active round participant.
-
-## 4. Authentication model
-
-The domain participant is not the Better Auth user:
+The authenticated Better Auth user is not the domain Participant:
 
 ```text
 participant.id != better_auth.user.id
 ```
 
-Guest-first access uses the Better Auth anonymous plugin alongside email/password authentication and `nextCookies()`.
+A Better Auth session proves an auth-user identity. Every product request must resolve that auth user to the current stable Participant on the server. Client-supplied auth-user, Participant, Pair, membership, Conversation, Round, candidate, or Session identifiers are selectors, never proof of authority.
 
-Every authenticated request that touches product data must resolve the session's auth user to an active domain participant on the server. Client-supplied participant, pair, membership, or auth-user IDs are never proof of ownership.
+Participant onboarding is independent of Pair creation. A Participant may exist with zero active or historical Pairs. The Participant owns one current, non-unique display name, trimmed to 1–40 characters.
 
-A guest has a stable `participant.id` associated with a Better Auth anonymous user/session. If the guest later registers, Better Auth 1.7.x linking may expose an `anonymousUser` and `newUser`, and the anonymous auth user may be deleted. The eventual `participant.auth_user_id` repoint must therefore be transaction-sensitive and idempotent. Pair memberships, answers, reactions, replies, history, and events continue to reference the same `participant.id`; domain records are not copied to a new participant.
+Guest-to-registered linking preserves the same `participant.id` even if Better Auth replaces or deletes the anonymous auth user. The auth-user mapping change must be idempotent and transaction-safe; domain ownership is not copied to a second Participant. This boundary is governed by [ADR 001](./adr/001-domain-participant-identity.md).
 
-The linking flow is specified by [ADR 001](./adr/001-domain-participant-identity.md) but is not implemented by this documentation task.
+## 3. Canonical domain model
 
-## 5. Participant and pair model
+### Participant
 
-A Pair has:
+A stable Closer identity that may hold memberships in zero, one, or many Pairs. Authentication identity may change without changing the Participant.
 
-- Exactly two logical slots; the model does not generalize to groups.
-- One relationship type: `partner` or `friend`.
-- At most one active membership per slot.
-- Access to Together mode through either active member.
-- Access to Private mode only when both slots are actively joined.
+### Pair
 
-Pair existence, pair completeness, and mode eligibility are distinct concepts. Pair creation occupies the first slot and does not require the second slot to be claimed. Onboarding chooses the relationship type before the mode. Together proceeds directly to category selection; Private checks completeness and presents the connection flow when the second slot is empty.
+One immutable Partner or Friend relationship with exactly two stable logical slots. A Pair is presented as a Space; there is no separate Space entity.
 
-Participant identity and active-membership time bound historical access. A logical slot does not own a timeless identity or grant a replacement participant access to the previous occupant's activity. A replacement may see pair history only from the beginning of their new active membership onward, while the continuing participant may retain access to earlier interactions in which they were authorized to participate. This distinction is essential to the rejoin boundary.
+A Pair may be unclaimed in slot 2 and still be active, usable in Together, and capable of retaining Together history. Pair history and future activity are always Pair-scoped. A later Pair between the same Participants is a different aggregate and inherits nothing.
 
-Every guest must supply a display name when their domain participant is created or joins through an invitation. The server trims the value and accepts 1–40 characters; names are not unique. V1 may permit a participant to change their own display name. Historical activity references the participant identity and renders that participant's current display name rather than storing a name snapshot on each event or interaction.
+Pair storage must support a terminal, irreversible termination state. Relationship type cannot be updated in V1.
 
-Question content must preserve the V1 category validity invariant: `Relationship` questions have `relationship_fit = partner`, and `Friendship` questions have `relationship_fit = friend`. Fun, Deep, and Memories may use any existing relationship-fit value. No additional metadata is introduced.
+### Pair Membership
 
-Together actions may identify the participant who started the session, but Like, Skip, and Next remain unattributed pair/session signals because both people share one device.
+The association between one Participant and one Pair slot for one continuous occupancy period. At most one membership is active per slot, and the same Participant cannot occupy both slots in one Pair.
 
-## 6. Initial invitation and rejoin model
+A membership records its start, its optional end, and the Participant display-name snapshot taken at end. Current-product views use the Participant's live display name while membership remains active; history after membership end uses the frozen snapshot.
 
-Initial invitation and rejoin are different credentials with different authority.
+Membership identity—not just slot identity—owns authorization. A replacement Participant in a reused slot never inherits the former occupant's authority.
 
-An initial invitation:
+### Intended-person name
 
-- Is an opaque, cryptographically strong token bound to the pair's empty second slot.
-- Does not expose sequential database identifiers.
-- Is revocable and can be redeemed only for its intended purpose.
-- Expires 7 days after issuance and is single-use.
-- Claims the slot atomically only while it is empty.
-- Cannot replace an active membership.
-- Cannot be reused as a recovery credential after redemption.
-- May be freshly generated by the active member if the prior invitation expires while the second slot remains empty.
+A required, pair-local string captured at Pair creation, trimmed to 1–40 characters and not unique. It is contextual copy, not identity, authentication, an alias, or a placeholder Participant.
 
-The invite URL may be presented as plain text, a copy action, a supported native share action, or a QR code. QR generation encodes exactly the same opaque URL used by normal invitation redemption and does not create a separate credential or joining route.
+The sole active member may edit it while slot 2 remains unclaimed; editing does not affect credentials. Initial claim atomically clears it without retaining hidden claimant metadata. If the Pair terminates unclaimed, it remains as read-only contextual Pair information.
 
-A rejoin link:
+### Pair membership era
 
-- Obeys the invariant: a replacement rejoin link may only target a slot whose current participant is a guest participant eligible for guest-session recovery.
-- Can target only a slot whose current participant is a guest eligible for recovery after guest-session loss; a registered participant uses normal sign-in or account recovery and cannot be replaced through this mechanism.
-- Can be generated only by the other currently active member, never by a participant for their own slot.
-- Targets the other logical slot symmetrically, regardless of who originally created the pair.
-- Is fresh, high entropy, single-use, revocable, and expires 24 hours after issuance.
-- Cannot derive authority from the redeemed initial invitation.
-- On successful redemption, creates a new domain participant and new active membership for the target slot without transferring the previous participant's identity or data.
-- Grants the replacement access to pair history only from the start of the new membership; earlier Private answers, reactions, replies, Together sessions, and other pair history remain inaccessible to the replacement.
+One continuous configuration of the Pair's two active memberships. It is an internal authorization and history boundary, not a user-facing Space and not necessarily a dedicated database row.
 
-Rejoin URLs have the same presentation rule: copy, supported native share, and QR all use the exact same secure rejoin URL. The QR is not asymmetric and does not alter which active member may issue the link.
+The first two-member era begins at initial claim. Guest replacement ends the current era and begins a new one. Pair termination ends the active configuration without permitting another era in that Pair.
 
-Redemption, revocation, expiry, slot state, and authorization must be validated server-side in a transaction so concurrent requests cannot claim or replace a slot twice. Detailed token encoding and persistence shape remain implementation choices constrained by [ADR 002](./adr/002-invite-and-rejoin-security.md).
+The implementation must persist or derive one stable, authoritative era/configuration identity sufficient to bind Private Conversations and history. It must not use two independent closure timestamps that can disagree. The exact representation—an explicit era row, stable membership-configuration key, or equivalent—is deferred until implementation.
 
-## 7. Private conversation and round lifecycle
+### Initial Invitation
 
-Multiple Private conversations may be active concurrently for one pair, in different categories. A conversation belongs to one pair and category, groups its sequential rounds, and normally has at most one active conversation per pair/category. Each round belongs to exactly one conversation and retains its pair, question, initiating participant, participant answers, answer-derived reveal readiness, per-participant reveal-view timing, reactions, optional replies, and timestamps. The round's pair must agree with its conversation's pair. Authorization and reveal remain evaluated per round; no pair-wide `current private round` exists.
+A high-entropy bearer credential bound to an unclaimed second slot. The server stores only its hash and lifecycle metadata. At most one valid initial invitation is usable at a time.
 
-A conversation has at most one unresolved current round at a time. Starting or resuming a category returns that current round; it does not create a duplicate category conversation. Once both answers are committed, `Next question` may safely create the next round in that same conversation and category. The operation must serialize creation at the conversation boundary so retries and double clicks resolve to one current round. Leaving a conversation is sufficient to switch topics; V1 does not persist a paused state. Future History groups Private activity by conversation, not individual questions.
+Initial invitation issuance is lazy: Pair creation does not issue it. It is created or reused only after explicit Invite/Connect or entry to Private while slot 2 is unclaimed. Replacement of a still-valid invitation is explicit and atomic.
 
-Each round's answer-derived lifecycle is:
+### Together Session
+
+A bounded use of Together within one Pair membership configuration. It owns one category, one ordered set of shown Question revisions, and Like/Skip/Next state. It stores no verbal answers.
+
+Initial claim, guest replacement, and Pair termination end active Sessions that began before their boundary.
+
+### Private Conversation
+
+A persistent, category-specific sequential Question stack belonging to one Pair membership era. There is at most one Conversation for each `(Pair, membership era, category)` tuple.
+
+Its creator is the Participant whose transaction first creates it and is immutable. The Conversation becomes read-only when its era ends or the Pair terminates. It has no user-triggered Finish, Restart, or generic Private Session lifecycle.
+
+### Private Question Candidate
+
+One persisted, unresolved occurrence of an eligible Question revision offered only to the Conversation creator before a Round exists. The candidate includes a stable occurrence identity, its pinned revision, its selection context/seed, creator-attributed Like state, and one terminal resolution: Asked, Skipped, or invalidated.
+
+Ask and Skip consume the candidate and are mutually exclusive. Like is toggleable only while unresolved. Invalidation due to an era or Pair boundary creates no Round. Emergency withdrawal also invalidates an unresolved candidate.
+
+### Private Round
+
+One numbered Question Asked inside a Conversation. Ask assigns the next stable positive number. Skips create no Round and do not affect numbering. Declined Rounds remain numbered Rounds.
+
+The Round pins the candidate's exact Question revision and has an answer/reveal lifecycle independent of every other Round and Conversation.
+
+### Private Answer
+
+One immutable, trimmed 1–2000 character answer submitted by one Round Participant. There is at most one answer per `(Round, Participant)`. The answer position belongs to the Participant/membership represented in the Round, not to whoever later occupies the slot.
+
+### Reveal View
+
+An idempotent record that one Round Participant explicitly opened a reveal-ready Round. Reveal readiness and reveal viewing are distinct:
+
+- two persisted answers make content reveal-ready;
+- each Participant's Reveal View records their own presentation event;
+- both Reveal Views are required before creator progression.
+
+There is no global `REVEALED` state and notification delivery never creates a Reveal View.
+
+### Reaction and Reply
+
+Post-reveal content owned by one Round Participant. Each Participant has at most one reaction and one optional reply per Round. Reactions target the other Participant's answer. Replies are trimmed to 1–500 characters. Owners may change/remove these only while the enclosing era and Pair remain mutable.
+
+### Question and Question Revision
+
+A Question is the stable logical identity used for consumption and no-repeat rules. A Question revision is one immutable version of its text, category, Partner/Friend fit, mode fit, intensity, and other revisioned selection metadata. Deactivation and withdrawal are separate lifecycle controls over future or unresolved use.
+
+Candidates, Private Rounds, and Together shown-question occurrences reference the exact revision presented. Historical wording and eligibility never change when a later revision is created.
+
+`intensity` has values `light`, `medium`, and `deep`. It is internal selection metadata distinct from the user-facing Deep category.
+
+## 4. Pair invariants and lifecycle
+
+Pair creation requires an existing Participant, intended-person name, and relationship type. It creates slot-1 membership only. It does not issue an invitation.
+
+The following invariants apply:
+
+- A Participant may belong to multiple Pairs.
+- No Participant may occupy both slots of one Pair.
+- At most one active membership may occupy a Pair slot.
+- At most one active, fully claimed Pair may exist for the same unordered Participant pair, independent of relationship type.
+- Multiple unclaimed Pairs are allowed; intended-person names cannot identify or deduplicate a Participant.
+- Relationship type is immutable.
+- Pair termination is terminal and idempotent.
+
+### Initial claim
+
+Initial claim is distinct from guest replacement. In one transaction it:
+
+1. locks/revalidates the active Pair and invitation;
+2. verifies slot 2 is empty and the claimant is not slot 1;
+3. rejects if the two Participants already share another active, fully claimed Pair;
+4. inserts slot-2 membership;
+5. consumes the invitation;
+6. clears the intended-person name;
+7. begins the first two-member era;
+8. ends active pre-claim Together Sessions.
+
+If any invariant rejects the claim, the transaction does not consume the invitation. The claimant receives no pre-claim Together history.
+
+### Guest replacement
+
+Guest rejoin targets a specific active guest membership and requires authority from the other active member. Registered Participants use normal authentication recovery.
+
+Successful replacement atomically:
+
+1. ends the target membership and freezes its display name;
+2. invalidates credentials targeting the ended membership;
+3. ends the current membership era;
+4. makes its Private Conversations and Rounds read-only;
+5. invalidates unresolved candidates without creating Rounds;
+6. ends active Together Sessions;
+7. creates the replacement Participant's new membership in the same slot;
+8. begins a new membership era.
+
+The continuing Participant keeps only previously authorized history. The replacement receives no earlier Private or Together content. Conversation creator authority never transfers; a category selected in the new era creates a new Conversation and creator.
+
+### Pair termination
+
+Either active member may initiate termination without consent from the other. One idempotent transaction:
+
+1. records the Pair's terminal state;
+2. ends all active memberships and freezes their current display names;
+3. ends the active membership configuration;
+4. invalidates unresolved candidates;
+5. revokes active initial and rejoin credentials;
+6. ends active Together Sessions.
+
+Termination does not delete or rewrite existing Private Rounds, answers, Reveal Views, reactions, replies, or Together history. All later Pair-scoped product mutations are rejected. Reads use Former-Pair authorization.
+
+Membership-era, termination, and historical authorization reasoning is recorded in [ADR 005](./adr/005-pair-membership-era-termination-and-history.md).
+
+## 5. Credential model
+
+Initial invitations and rejoin links are separate credential types with distinct authority. Both are opaque, cryptographically strong, revocable, expiring bearer credentials persisted only as hashes. QR codes, copy, and native share are presentations of the same URL, not new credentials.
+
+### Initial invitation rules
+
+- Bound to slot 2 while it is unclaimed.
+- Expires after 7 days.
+- Single-use and revocable.
+- Created lazily; one usable invitation at a time.
+- Reused while valid.
+- Raw token redisplay depends on local retention by the issuing browser.
+- Other devices may read existence and expiry only.
+- Explicit `Replace invitation` revokes the valid credential and creates a new one atomically.
+- Never authorizes replacement or recovery after claim.
+
+The landing projection for a valid token exposes only the inviter's current display name, immutable relationship type, intended-person contextual copy, and the current claimant's own display name. Redemption requires explicit `Join space`; landing-page reads, navigation away, and UI decline are non-consuming.
+
+### Rejoin rules
+
+- Targets one active guest membership and slot.
+- May be issued only by the other active member.
+- Cannot target the issuer or a registered Participant.
+- Expires after 24 hours.
+- Is fresh, single-use, revocable, and not derived from the original invitation.
+- Creates a new Participant/membership rather than transferring identity.
+
+Detailed security reasoning is recorded in [ADR 002](./adr/002-invite-and-rejoin-security.md).
+
+## 6. Private Conversation state and progression
+
+Conversation creation serializes on `(Pair, current era, category)`. If two Participants start the same category concurrently, the first commit creates the Conversation and becomes creator; the other request returns that Conversation with non-creator state.
+
+At any point, a Conversation has at most one progression focus:
+
+- an unresolved candidate;
+- an Asked Round awaiting answers;
+- a reveal-ready Round awaiting one or both Reveal Views;
+- a mutually completed or Declined Round from which the creator may request the next candidate;
+- exhausted eligible content.
+
+Starting/resuming a category returns the existing unresolved focus. It never creates a second candidate or overlapping next Round.
+
+The creator alone may enter candidate selection. When no candidate already exists, selection deterministically chooses and persists one revision. The non-creator never receives unresolved candidate identity, text, Like state, or eligibility details.
+
+Candidate transitions are:
 
 ```text
-ACTIVE: fewer than two answers
-    → REVEAL_READY: both answers exist
+UNRESOLVED --Ask--> ASKED + numbered Private Round
+UNRESOLVED --Skip--> SKIPPED + no Round
+UNRESOLVED --era/Pair end or withdrawal--> INVALIDATED + no Round
 ```
 
-Reveal readiness is derived solely from both participant answers being persisted. V1 does not require or model one global round-wide `REVEALED` acknowledgement. Instead, the system persists reveal-view/completion timing for each participant independently. Once a round is reveal-ready, each participant's view is either `Ready to reveal` when their own timing is absent or reveal already viewed when it is present. Viewing by one participant must not write or imply reveal completion for the other.
+Ask and Skip are idempotent for the candidate occurrence and serialize against each other. A Like mutation is valid only while unresolved; Ask, Skip, or invalidation freezes its final state.
 
-V1 does not persist a separate paused state. Leaving a conversation simply keeps it active. Within a conversation's current round, Pair Home or another lightweight conversation surface derives the participant-relative view:
+### Asked Round lifecycle
 
-| Per-round data | Current participant view |
+```text
+OPEN --first answer--> OPEN
+OPEN --second answer--> REVEAL_READY
+OPEN --eligible Decline--> DECLINED
+REVEAL_READY --one Reveal View--> REVEAL_READY
+REVEAL_READY --second Reveal View--> MUTUALLY_COMPLETED
+```
+
+Decline is available only to a Participant who has not answered. It is unavailable after both answers exist. Decline and answer submission for the same position serialize; the first commit wins. Decline is terminal, permits no reveal/reaction/reply mutation, and immediately permits creator candidate progression. A lone answer remains private to its author.
+
+The creator may request another candidate only after the current Round is Declined or mutually completed. For a non-declined Round, the server requires both answers and both Reveal Views. Creator status, elapsed time, one Reveal View, notification delivery, or client state cannot bypass the gate.
+
+Private authorization and lifecycle reasoning is recorded in [ADR 003](./adr/003-private-answer-reveal.md).
+
+## 7. Private confidentiality and projections
+
+Before both answers exist, a viewer-aware server projection may return only:
+
+- the viewer's own answer, if present;
+- public Question revision content for an Asked Round;
+- non-sensitive Round and waiting state.
+
+The other answer must not appear in route payloads, server component props, client caches, logs, behavioral events, hidden UI, or polling responses.
+
+Once both answers exist, an active Round Participant may explicitly record their Reveal View and receive both answers. Reaction/reply mutations require that the actor has viewed Reveal and that the Pair/era remains mutable.
+
+Pair and era boundaries change mutability but do not rewrite the answer state that committed before them:
+
+- For a never-ready Round, each former Participant can read only their own answer.
+- If both answers committed before the boundary, both former Participants can read both answers whether or not either had recorded a Reveal View.
+- Existing reactions and replies remain readable but immutable.
+- A Declined Round exposes a lone answer only to its author.
+
+This former-history visibility rule is deliberately distinct from active progression: both Reveal Views are required to continue an active Conversation, but they are not required to read an already-mutually-answered Round after the era or Pair has ended.
+
+## 8. History authorization
+
+History is a server-derived, viewer-specific projection. It must join activity to the viewer's actual membership interval and, for Private content, the Participant identities authorized in that Conversation/Round. Slot occupancy alone is insufficient.
+
+Active views display live Participant names. Ended-membership history uses membership-end name snapshots. A continuing member may see old-era content they were already authorized to access; a replacement sees nothing created before their membership began.
+
+Former-Pair history is read-only. It includes authorized Together history and Conversation-grouped Private history, including neutral Declined entries. No ended Pair or era can accept an answer, reveal, reaction, reply, candidate, Round, Together, invitation, rejoin, or other product mutation.
+
+The history model must preserve Pair boundaries. A new Pair between the same Participants cannot query or continue the old Pair through identity matching.
+
+## 9. Question identity and selection
+
+Question selection operates on logical identity plus immutable revision:
+
+1. determine revisions eligible for category, relationship type, mode, activation, and withdrawal state;
+2. exclude logical Questions consumed within the relevant Conversation or shown within the Together Session;
+3. determine the current preferred intensity;
+4. choose the first intensity band with eligible content using the defined fallback order;
+5. apply a stable Conversation- or Session-scoped deterministic ordering within that band;
+6. persist the chosen revision occurrence before returning it.
+
+Selection must be injectable or otherwise deterministic under test. Concurrent selection and retries for one progression point must converge on the same persisted candidate or shown-question occurrence. New eligible revisions added later may become available, but never replace a persisted unresolved candidate.
+
+### Consumption boundaries
+
+- Private consumption is scoped to one Conversation and uses stable logical Question IDs.
+- Asked and creator-Skipped Questions are consumed.
+- Likes, Declines, answers, Reveal Views, reactions, and replies do not independently alter consumption.
+- A Private Conversation never cycles consumed Questions.
+- Together consumption is scoped to one Session; every shown logical Question is consumed for that Session.
+- A new Conversation in a new era and a new Together Session begin with empty consumption.
+
+### Intensity ramps
+
+Private target intensity is based on mutually completed Rounds:
+
+- 0–1 → Light;
+- 2–3 → Medium;
+- 4+ → Deep.
+
+Together target intensity is based only on completed `Next` transitions:
+
+- 0–1 → Light;
+- 2–3 → Medium;
+- 4+ → Deep.
+
+Private Skip/Decline/Like and Together Skip/Like do not advance a ramp. Deep remains preferred after the threshold. Fallback bands are:
+
+- Light target: Light → Medium → Deep;
+- Medium target: Medium → Light → Deep;
+- Deep target: Deep → Medium → Light.
+
+Exhaustion returns a terminal-for-now result to the UI: `You've reached the end for now.` It does not cycle, close a Private Conversation, create a replacement Conversation, or prevent later continuation if new eligible content is added.
+
+### Deactivation and withdrawal
+
+Ordinary deactivation excludes a revision from future selection but does not invalidate a persisted candidate or rewrite a shown/Asked occurrence. Emergency withdrawal invalidates unresolved candidates. Handling of already-Asked and historical occurrences after withdrawal is deliberately deferred to a separate moderation/content-governance contract.
+
+Question architecture is recorded in [ADR 006](./adr/006-question-identity-revisions-and-selection.md).
+
+## 10. Together lifecycle
+
+Together start requires one active membership and a valid category for the Pair's relationship type. A Session persists its membership-configuration boundary, category, starter, start/end timestamps, selection seed/context, and ordered shown revision occurrences.
+
+Only one shown question is current. Like toggles feedback on that occurrence. Skip marks it skipped and chooses another without advancing intensity. Next marks it advanced, increments the progression signal, and chooses another. Retried start or transition requests must converge without duplicating Sessions or positions.
+
+Together actions are Session-level and intentionally not attributed to the person who tapped on the shared device, although the Session starter may be known. Together never owns Private Answers or Reveal Views.
+
+Initial claim, guest replacement, and Pair termination serialize against Together mutations. The first committing transaction determines whether the mutation is retained before the boundary or rejected after it. Boundary transitions end active Sessions and prevent continuation.
+
+## 11. Server-side authorization matrix
+
+| Operation | Required authority and state |
 | --- | --- |
-| Current participant has not answered | `Your turn` |
-| Current participant answered and the other has not | `Waiting for <name>` |
-| Both answers exist; participant has not viewed reveal | `Ready to reveal` |
-| Both answers exist; participant has viewed reveal | Reveal already viewed |
+| Read active Pair | Current Participant has an active membership in that Pair |
+| Read Former-Pair history | Current Participant has an ended membership and the requested content lies within that membership's authorization boundary |
+| Issue/reuse initial invitation | Current Participant is the sole active member; slot 2 is unclaimed; Pair is active |
+| Replace initial invitation | Same as issue, plus explicit replacement intent |
+| Claim initial invitation | Valid credential, active Pair, empty slot 2, claimant not slot 1, no duplicate active fully claimed Pair |
+| Issue rejoin link | Actor is the other active member; target is an eligible active guest membership |
+| Redeem rejoin link | Valid target-bound credential and unchanged target membership |
+| Start/mutate Together | Actor has active Pair membership; Session belongs to the current configuration and remains active |
+| Start/resume Private category | Both slots active; return/create Conversation in current era |
+| View candidate | Actor is immutable Conversation creator and candidate/era is active |
+| Like/Ask/Skip candidate | Actor is creator; candidate unresolved; Pair and era active |
+| Submit answer | Actor is a Round Participant, has not answered or Declined, and Pair/era/Round are mutable |
+| Decline Round | Actor is a Round Participant who has not answered; fewer than two answers; Round mutable |
+| View/record Reveal | Actor is a Round Participant; both answers exist; active Pair/era for mutation |
+| React/reply | Actor viewed Reveal; Round reveal-ready; Pair/era mutable; actor owns mutation |
+| Progress Conversation | Actor is creator; current Round Declined or both answers and both Reveal Views exist |
+| Terminate Pair | Actor has an active membership; confirmation is a UI requirement; operation is idempotent |
 
-Participants may resume unfinished conversations, revisit a current round while waiting, open any reveal-ready round, and select another category without first revealing or acknowledging another round. Reveal-ready items should be visually easy to find, but they are not a pair-wide lock. This surface remains conversation-based and must not acquire chat-inbox, arbitrary-message, nested-thread, typing-indicator, unread-message, or folder behavior.
+Authorization failures should not disclose whether unrelated Pair, membership, credential, Conversation, candidate, Round, answer, or Participant identifiers exist.
 
-Supporting multiple conversations does not authorize accidental duplicate creation from double submission, request retry, or concurrent retry of the same user action. Creation should be safely idempotent at the category-conversation boundary, without enforcing a pair-wide one-conversation limit or prescribing a particular idempotency mechanism.
+## 12. Transaction and concurrency requirements
 
-Before reveal-ready, a response may include the current participant's own answer and non-sensitive round status only. It must not include the other participant's answer in serialized server responses, page props, route payloads, caches, logs, behavioral events, or client-side hidden state. Once both persisted answers exist, the server may return both answers to either authorized active participant in that round.
+Correctness depends on serialization at the Pair, membership configuration, Conversation, candidate, or Round boundary as appropriate. A particular lock primitive is not mandated, but these observable outcomes are:
 
-Per-participant Private content follows these invariants:
+- **Claim versus Pair termination:** first commit wins; a post-termination claim is rejected without consuming a credential.
+- **Claim versus Together mutation:** first commit wins; claim ends active pre-claim Sessions and later Session mutation is rejected.
+- **Replacement versus Together mutation:** first commit wins; replacement ends old-configuration Sessions and later mutation is rejected.
+- **Duplicate active Pair check at claim:** checked transactionally with slot claim so two Participants cannot gain a second active fully claimed Pair through racing claims.
+- **Conversation creation race:** one `(Pair, era, category)` Conversation and one immutable creator; losing requests resolve to it.
+- **Candidate selection race:** one persisted candidate for the progression point.
+- **Ask versus Skip:** exactly one terminal candidate result; retries return the committed result.
+- **Decline versus answer:** first commit determines the valid terminal/answer state; impossible combinations are rejected.
+- **Answer versus Pair termination:** an answer committed first remains in history; termination committed first causes rejection.
+- **Second answer versus termination:** if the answer commits first, the Round is mutually answered and both answers are readable in former history; otherwise it remains never-ready.
+- **Pair termination:** atomically applies all terminal effects, is idempotent, and rejects all later Pair-scoped mutations.
 
-- An answer is required, trimmed, 1–2000 characters, unique to the participant's answer position in that round, and immutable after submission in V1.
-- A reply is optional. A supplied reply is trimmed and 1–500 characters. A participant has at most one reply per round and may edit or remove only their own reply.
-- A participant has at most one reaction per round and may change or remove only their own reaction. The reaction target is deterministically the other active participant's answer in that two-person round, so a reaction is rendered on the other person's answer card rather than the owner's own card.
+Reads need not share mutation serialization, but every read must derive an internally consistent authorized projection from committed state.
 
-This invariant is specified by [ADR 003](./adr/003-private-answer-reveal.md).
+## 13. Persistence requirements without table prescription
 
-## 8. Together session lifecycle
+The storage model must be able to enforce or reconstruct:
 
-A Together session is authorized through either active member of its pair, including while the second pair slot is still empty. Starting a session validates the pair relationship and selected category, creates one session, selects one active eligible Together question, and records that card as shown. The category is fixed for the session.
+- terminal Pair state and immutable relationship type;
+- stable two-slot memberships, start/end boundaries, and end-name snapshots;
+- stable era/configuration identity for Conversations and Sessions;
+- intended-person name clearing or unclaimed-history retention;
+- one valid hash-only invitation plus explicit replacement lifecycle;
+- credential purpose, expiry, revocation, redemption, and target membership;
+- one Conversation per Pair/era/category and immutable creator;
+- one unresolved candidate per Conversation progression point with pinned revision and Like/resolution state;
+- stable Round numbering and Declined state/actor/time;
+- immutable answers and per-Participant Reveal Views;
+- reaction/reply ownership and terminal immutability;
+- stable logical Question identity and immutable revisions;
+- revision-pinned Private/Together occurrences and logical-ID consumption;
+- deterministic selection inputs and intensity progression signals;
+- authorized Former-Pair and former-era history.
 
-Only one shown card is current at a time. `Next` records advancement and selects another eligible question in the same session and category. `Skip` records the current card as skipped, then selects another eligible question in that same session and category. These shared-device actions are not attributed to the participant who tapped. `Like` is a pair-level signal on the current shown card and may be toggled; it is not a Private reaction.
+Automatic Conversation closure should either be derived from one authoritative era lifecycle or stored as its direct consequence. A legacy `private_conversation.ended_at` must not be retained as a second independent lifecycle flag that can disagree.
 
-Question selection requires an active question whose category matches the session, whose relationship fit matches the pair, and whose mode fit is `together` or `both`. A session does not repeat a question already shown while an unused eligible question remains. If the eligible set is exhausted, the UI presents an end-of-set state rather than silently cycling. Ending a session persists `ended_at`; later Together history can use the completed session, but no History UI is part of this slice. Together sessions contain no answer records.
+## 14. Polling, PWA, and notifications
 
-Together start and advance requests use narrow request identifiers so a retry or double-click converges on the original session/card transition. Mutations reject ended sessions, and all reads and writes verify the authenticated participant's active membership and the session's pair.
+V1 does not use WebSockets. Foreground polling may refresh waiting, reveal, and creator-progression state. It must poll only while useful/visible, refresh on foregrounding, stop when state is no longer actionable, and never include unrevealed answer content or creator-only candidate data for a non-creator.
 
-## 9. Server-side authorization principles
+Notification permission must not be requested during onboarding. A later contextual prompt may be offered after answer submission. Notification/reminder delivery is state-neutral: it cannot submit an answer, Decline, mark Reveal viewed, advance a Conversation, or satisfy a timeout. Exact notification/reminder behavior is deferred.
 
-All product reads and writes must be authorized on the server using the authenticated session and current participant mapping.
+## 15. Testing strategy
 
-- Pair access requires an active membership connecting the current participant to one of that pair's two slots.
-- Initial invitation redemption requires a valid token and an empty target slot; possession of a redeemed token grants no authority.
-- Rejoin creation requires the current participant to occupy the opposite active slot in the same pair.
-- Together start/read/write requires only active membership in the pair; Private conversation and round operations require both active slots.
-- Private answer reads are projected for the current participant and reveal state; no endpoint sends the other answer early.
-- Private answer writes require active membership in the pair and the participant's own answer position in the specified round.
-- Reactions and replies require an authorized participant and a reveal-ready round; ownership checks restrict changes or removal to that participant's own reaction or reply. Post-reveal reads may safely poll reactions and replies while the page is visible; active-question polling remains limited to participant-relative metadata and never includes an unrevealed answer.
-- History is filtered by the requesting participant's identity and active-membership start time; a replacement receives no access to pair activity from before that membership began.
+The primary correctness seam is the database/domain layer because it combines authorization, state transitions, and transaction ordering. Route tests should verify authentication, validation, no-store/confidential projections, and stable error mapping without duplicating domain tests. UI tests should cover role-specific states and actions, not re-prove database concurrency.
 
-Authorization failures should not reveal whether unrelated pair, round, answer, invitation, or participant identifiers exist.
+Tests should assert external behavior and invariants rather than lock choices, table names, or incidental query counts. Deterministic selection needs injectable seed/order control so normal tests do not rely on randomness or live content order.
 
-## 10. Private-state detection
+Required domain/integration coverage includes:
 
-V1 does not use WebSockets.
+- independent Participant onboarding and zero/multiple Pair memberships;
+- intended-person validation, edit, atomic claim clearing, and unclaimed termination retention;
+- lazy invitation issue/reuse, local raw-token limitation, explicit replacement, and hash-only persistence;
+- explicit non-consuming join landing and duplicate-active-Pair rejection;
+- claim/termination/Together transaction races;
+- replacement era transition, end-name snapshot, Session closure, and no inherited history;
+- Conversation creation race and immutable creator authorization;
+- persisted candidate stability and creator-only projection;
+- Ask/Skip mutual exclusion, idempotency, consumed sets, and Like freeze;
+- Decline/answer races and lone-answer confidentiality;
+- pre-reveal isolation, independent Reveal Views, and the both-view progression gate;
+- no timeout or non-creator progression bypass;
+- former-history answer boundaries and immutability;
+- Pair termination atomicity, idempotency, credential revocation, and later mutation rejection;
+- logical Question revisions and revision-pinned occurrences;
+- deactivation versus unresolved-candidate withdrawal;
+- deterministic no-repeat selection, exhaustion, later new-content continuation, and both intensity ramps.
 
-While a participant is visibly waiting for the other answer in a round, the client may use low-frequency status polling. It must:
+## 16. Explicitly deferred architecture
 
-- Poll only while the page is visible.
-- Stop polling when the page is hidden.
-- Refresh immediately when the page or tab regains focus.
-- Stop waiting-state polling when the round becomes reveal-ready or is otherwise no longer actionable.
+The following remain unresolved and must not be implemented by inference:
 
-Polling responses must expose only authorized status and never the other participant's unrevealed answer. Push notifications will cover background notification later in V1.
+- account deletion and permanent erasure;
+- retention duration and anonymization;
+- deletion rights of former Participants;
+- treatment of already-Asked or historical content after emergency Question withdrawal;
+- broader moderation and content-governance policy;
+- notification/reminder behavior beyond state-neutral delivery;
+- exact storage representation of membership era and automatic Conversation closure.
 
-## 11. PWA and push boundary
-
-The current scaffold includes a generated manifest route and icon assets. It does not currently contain a service worker or web-push implementation. The manifest's generated `start_url` is `/new`, but that route does not exist in the scaffold; this must be resolved when product routes and PWA behavior are implemented.
-
-Notification permission must not be requested during onboarding. The intended contextual trigger is after a participant submits a Private answer and waits:
-
-```text
-Notify me when <name> answers
-```
-
-On iOS, if Home Screen installation is required before Web Push can work, the product should show installation guidance instead of immediately requesting notification permission. Service-worker registration, push subscription storage, delivery infrastructure, and notification deep links are deferred within V1 and are not implemented in this documentation task.
-
-## 12. Testing expectations
-
-Closer does not mandate universal test-driven development. It does require deterministic, targeted integration tests for security and data-integrity invariants, including:
-
-- Each participant can read their own answer but not the other's before reveal.
-- Both authorized participants can read both answers only after both answers exist.
-- Reveal readiness is derived from persisted answers without a global reveal acknowledgement, and each participant's reveal-view timing changes independently.
-- Required display names and answers reject values outside their trimmed length bounds; submitted answers cannot be edited.
-- Reply and reaction cardinality, ownership, edit, and removal rules are enforced per participant and round.
-- Multiple category Private conversations can coexist for one pair, while a conversation serializes its own rounds.
-- Each round maintains independent answer and reveal state; reveal in one round never exposes data from another.
-- Accidental duplicate creation caused by retry, double submission, or concurrent duplicate requests is safely handled.
-- A retrying `Next question` action cannot create two unresolved rounds in the same conversation, and a pair's active-category resume resolves to the existing conversation.
-- One participant can have `Your turn` in one round while `Waiting for <name>` in another.
-- Reveal-ready rounds remain independently accessible and do not block another round from starting.
-- A redeemed or revoked initial invitation cannot take over an occupied pair slot.
-- Initial invitations expire after 7 days, and an expired invitation can be replaced only while the second slot remains empty.
-- Only the other active member can generate a rejoin link for a guest-occupied eligible target slot; self-rejoin and replacement of a registered participant are rejected.
-- Rejoin links expire after 24 hours and remain single-use and revocable.
-- A replacement participant cannot access any pair history from before their new active membership began.
-- Guest-to-registered linking preserves the same domain participant ownership even if the Better Auth user changes or the anonymous auth user is deleted.
-- Together mode creates no answer records and does not falsely attribute shared-device actions.
-
-Tests for these invariants should exercise the database and server authorization layer rather than relying only on UI assertions. UI tests should cover the lightweight active-question states, resuming rounds, waiting-page refresh behavior, independent mutual reveal, and contextual push guidance. Raw behavioral event logging remains the V1 analytics approach; no analytics dashboard is introduced.
-
-## 13. Explicitly deferred architecture
-
-The following are not part of the current architecture:
-
-- A separate backend service, microservices, tRPC/oRPC, WebSockets, or Turborepo.
-- AI question generation, recommendation infrastructure, or an AI coach.
-- Groups, family relationships, or a generalized multi-member membership model.
-- Chat, arbitrary messaging, nested conversation threads, unread-message infrastructure, journals, goals, scoring, streak, XP, subscription, premium, or theme systems.
-- A richer question taxonomy than category, relationship fit, mode fit, and depth.
-- Web-push/service-worker implementation in this documentation task.
-- Concrete product database tables, migrations, routes, or UI implementation in this documentation task.
-
-Vercel remains the intended later deployment target; no additional V1 infrastructure is introduced here.
+These deferrals do not make Pair termination a deletion mechanism, establish indefinite retention as final policy, or authorize exposing withdrawn historical content. Privacy/erasure and moderation contracts are required before production readiness.

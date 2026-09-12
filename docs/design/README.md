@@ -13,7 +13,7 @@ Product behavior is controlled by [`../PRD.md`](../PRD.md), and technical behavi
 
 The reference depicts the selected Pair Home, Private Question, Waiting, and Reveal direction. If this or a future reference image depicts behavior or features that conflict with the product or architecture documentation, follow the documentation.
 
-The Pair Home image was produced before V1 accepted multiple concurrently active Private questions. It remains authoritative for visual language, colors, typography, and component style, but its single Private-state content model is obsolete. Pair Home implementation must follow the PRD's lightweight `Active questions` behavior, including independently derived `Your turn`, `Waiting for <name>`, and `Ready to reveal` items. This task does not prescribe the revised layout or modify the image.
+The Pair Home image was produced before V1 accepted era-scoped, creator-owned Private Conversations and their server-backed candidate stage. It remains authoritative for visual language, colors, typography, and component style, but its single Private-state content model is obsolete. Pair Home and Private implementation must follow the PRD's Conversation-relative states, including creator/non-creator candidate waiting, `Your turn`, `Waiting for <name>`, `Ready to reveal`, both-Reveal progression, Decline, and exhaustion. This document does not prescribe a revised layout or modify the reference image.
 
 The Together reference in [`together-flow.png`](./together-flow.png) establishes the same visual language for shared-device category selection and question actions. It also illustrates that Together is an immediate, one-phone path; it must not acquire invitation, QR, or waiting-state UI merely because the second pair slot is empty.
 
@@ -46,7 +46,7 @@ Relationship and Friendship category treatments should fit this system without i
 - Treat mutual reveal as a central product moment while preserving clarity and restraint.
 - Keep waiting calm and informative; do not imply that unrevealed answer content is already on the device.
 - Request notification permission only from the contextual waiting action, never during onboarding.
-- Make Like, Skip, Next, End session, reactions, and replies understandable and comfortably tappable.
+- Make Together Like/Skip/Next/End session, Private candidate Like/Skip/Ask, Decline, reactions, and replies understandable and comfortably tappable.
 - Preserve accessible contrast, visible focus, readable text, and reduced-motion behavior when motion is introduced later.
 
 ## Scope boundary

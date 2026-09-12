@@ -1,6 +1,7 @@
 import { createPairForParticipant, db, resolveOrCreateParticipant } from "@Closer/auth/closer";
 
 import { getAuthUserIdFromRequest } from "@/lib/closer-server";
+import { setInitialInviteCookie } from "@/lib/initial-invite-cookie";
 
 function domainErrorResponse(error: unknown) {
   const message = error instanceof Error ? error.message : "Unable to create the pair.";
@@ -29,11 +30,13 @@ export async function POST(request: Request) {
       relationshipType,
       clientRequestId,
     });
-    return Response.json({
+    const headers = new Headers({ "content-type": "application/json" });
+    setInitialInviteCookie(headers, result.pair.id, result.invite.token, result.invite.expiresAt);
+    return new Response(JSON.stringify({
       pairId: result.pair.id,
       inviteToken: result.invite.token,
       expiresAt: result.invite.expiresAt.toISOString(),
-    });
+    }), { headers });
   } catch (error) {
     return domainErrorResponse(error);
   }

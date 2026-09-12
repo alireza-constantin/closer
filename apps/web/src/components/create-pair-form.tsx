@@ -42,7 +42,7 @@ function isConnectedPairStatus(value: unknown): value is { state: "connected"; o
   );
 }
 
-export default function CreatePairForm() {
+export default function CreatePairForm({ isFirstSpace = true }: { isFirstSpace?: boolean }) {
   const router = useRouter();
   const [result, setResult] = useState<PairCreation | null>(null);
   const [joinedDisplayName, setJoinedDisplayName] = useState<string | null>(null);
@@ -120,9 +120,9 @@ export default function CreatePairForm() {
   return (
     <OnboardingSurface as="form" onSubmit={form.handleSubmit(createPair)}>
       <OnboardingIcon tone="coral"><Sparkles aria-hidden="true" /></OnboardingIcon>
-      <CloserEyebrow className="mt-4">A space for two</CloserEyebrow>
-      <h1 className="mt-3 max-w-[12ch] text-balance text-[clamp(2rem,8.8vw,2.55rem)] font-extrabold leading-[1.03] tracking-[-.055em]">Let’s create your space</h1>
-      <p className="mt-3 max-w-[31ch] text-[.98rem] leading-relaxed text-closer-muted">A gentle place for the conversations that matter.</p>
+      <CloserEyebrow className="mt-4">{isFirstSpace ? "A space for two" : "Make room for another connection"}</CloserEyebrow>
+      <h1 className="mt-3 max-w-[12ch] text-balance text-4xl font-extrabold leading-[1.03] tracking-[-.055em]">{isFirstSpace ? "Let’s create your space" : "Create another space"}</h1>
+      <p className="mt-3 max-w-[31ch] text-[.98rem] leading-relaxed text-closer-muted">{isFirstSpace ? "A gentle place for the conversations that matter." : "A separate little place for another person who matters."}</p>
       <FieldGroup className="mt-6 gap-4">
         <DisplayNameField error={nameError} errorId="display-name-error" registration={form.register("displayName")} />
         <FieldSet data-invalid={!!form.formState.errors.relationshipType}>
@@ -145,10 +145,10 @@ export default function CreatePairForm() {
               >
                 {(["partner", "friend"] as const).map((value) => (
                   <Field key={value}>
-                    <FieldLabel className={cn("min-h-[88px] w-full cursor-pointer flex-col justify-center rounded-[1.25rem] border-2 border-transparent p-4 transition-[transform,border-color] hover:-translate-y-0.5 focus-within:ring-2 focus-within:ring-closer-lavender focus-within:ring-offset-2 focus-within:ring-offset-closer-cream", value === "partner" ? "bg-closer-peach" : "bg-closer-lavender-soft", field.value === value && "border-closer-navy")}>
+                    <FieldLabel className={cn("min-h-[88px] w-full cursor-pointer flex-col justify-center rounded-[1.25rem] border-2 border-transparent p-3 px-1 transition-[transform,border-color] hover:-translate-y-0.5 focus-within:ring-2 focus-within:ring-closer-lavender focus-within:ring-offset-2 focus-within:ring-offset-closer-cream", value === "partner" ? "bg-closer-peach" : "bg-closer-lavender-soft", field.value === value && "border-closer-navy")}>
                       <RadioGroupItem aria-label={value === "partner" ? "Partner" : "Friend"} className="sr-only" value={value} />
                       <span className="font-extrabold">{value === "partner" ? "Partner" : "Friend"}</span>
-                      <small className="text-xs text-closer-navy/70">{value === "partner" ? "For the two of you" : "For close friends"}</small>
+                      <small className="text-xs text-closer-navy/70 text-center">{value === "partner" ? "For the two of you" : "For close friends"}</small>
                     </FieldLabel>
                   </Field>
                 ))}
@@ -159,7 +159,7 @@ export default function CreatePairForm() {
         </FieldSet>
       </FieldGroup>
       {form.formState.errors.root?.server?.message ? <FormServerError>{form.formState.errors.root.server.message}</FormServerError> : null}
-      <AsyncButton className="mt-5 w-full" pending={form.formState.isSubmitting} pendingText="Creating your space…" size="lg" type="submit">Create our space</AsyncButton>
+      <AsyncButton className="mt-5 w-full" pending={form.formState.isSubmitting} pendingText={isFirstSpace ? "Creating your space…" : "Creating another space…"} size="lg" type="submit">{isFirstSpace ? "Create our space" : "Create space"}</AsyncButton>
     </OnboardingSurface>
   );
 }

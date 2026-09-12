@@ -1,7 +1,7 @@
 "use client";
 
 import { Check, Copy, Link as LinkIcon, RotateCcw, Share2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@Closer/ui/components/button";
 import { Field, FieldLabel } from "@Closer/ui/components/field";
@@ -26,6 +26,7 @@ export default function InviteControls({
   const [isWorking, setIsWorking] = useState(false);
   const [didCopy, setDidCopy] = useState(false);
   const [canShare, setCanShare] = useState(false);
+  const reuseRequestRef = useRef<Promise<void> | null>(null);
   const endpoint = `/api/pairs/${encodeURIComponent(pairId)}/${kind === "initial" ? "invite" : "rejoin"}`;
   const isRejoin = kind === "rejoin";
 
@@ -76,8 +77,36 @@ export default function InviteControls({
     }
   }
 
+  async function reuseOrGenerateInvite() {
+    if (reuseRequestRef.current) return reuseRequestRef.current;
+
+    const request = (async () => {
+      setIsWorking(true);
+      setMessage(null);
+      try {
+        const response = await fetch(endpoint, { cache: "no-store" });
+        const body: unknown = await response.json();
+        if (response.ok && body && typeof body === "object" && "token" in body && typeof body.token === "string") {
+          setInviteUrl(`${window.location.origin}/${isRejoin ? "rejoin" : "join"}/${body.token}`);
+          return;
+        }
+      } catch {
+        // A failed lookup falls through to the normal invite-generation path.
+      } finally {
+        setIsWorking(false);
+      }
+      await generateInvite();
+    })();
+    reuseRequestRef.current = request;
+    try {
+      await request;
+    } finally {
+      if (reuseRequestRef.current === request) reuseRequestRef.current = null;
+    }
+  }
+
   useEffect(() => {
-    if (autoGenerate) void generateInvite();
+    if (autoGenerate) void reuseOrGenerateInvite();
     // The endpoint is derived from stable route props; generating once is intentional.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoGenerate]);
