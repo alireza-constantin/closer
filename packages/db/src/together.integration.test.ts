@@ -19,7 +19,7 @@ const {
   setTogetherSessionLike,
   startTogetherSession,
 } = await import("./closer");
-const { pair, pairMembership, participant, togetherSession, togetherSessionQuestion, question, privateAnswer, privateRound } = await import("./schema/closer");
+const { pair, pairMembership, pairMembershipEra, participant, togetherSession, togetherSessionQuestion, question, privateAnswer, privateRound } = await import("./schema/closer");
 const { user } = await import("./schema/auth");
 const { and, eq, inArray } = await import("drizzle-orm");
 
@@ -74,6 +74,8 @@ async function captureError(promise: Promise<unknown>) {
 
 afterEach(async () => {
   if (createdPairIds.length > 0) {
+    await db.delete(togetherSession).where(inArray(togetherSession.pairId, createdPairIds));
+    await db.delete(pairMembershipEra).where(inArray(pairMembershipEra.pairId, createdPairIds));
     await db.delete(pairMembership).where(inArray(pairMembership.pairId, createdPairIds));
     await db.delete(pair).where(inArray(pair.id, createdPairIds));
   }

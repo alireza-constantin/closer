@@ -26,7 +26,7 @@ const {
   submitPrivateAnswer,
   startOrResumePrivateConversation,
 } = await import("./closer");
-const { initialInvite, pair, pairMembership, participant, privateAnswer, privateConversation, privateRound } = await import("./schema/closer");
+const { initialInvite, pair, pairMembership, pairMembershipEra, participant, privateAnswer, privateConversation, privateRound } = await import("./schema/closer");
 const { user } = await import("./schema/auth");
 
 const db = createDb();
@@ -96,6 +96,8 @@ async function makeReady(pairId: string, firstId: string, secondId: string, ques
 afterEach(async () => {
   if (pairIds.length) {
     await db.delete(initialInvite).where(inArray(initialInvite.pairId, pairIds));
+    await db.delete(privateConversation).where(inArray(privateConversation.pairId, pairIds));
+    await db.delete(pairMembershipEra).where(inArray(pairMembershipEra.pairId, pairIds));
     await db.delete(pairMembership).where(inArray(pairMembership.pairId, pairIds));
     await db.delete(pair).where(inArray(pair.id, pairIds));
   }

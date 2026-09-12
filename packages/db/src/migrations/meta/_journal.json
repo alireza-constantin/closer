@@ -57,6 +57,13 @@
       "when": 1789247882403,
       "tag": "0007_add_first_membership_era",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1789300000000,
+      "tag": "0008_strengthen_membership_era_replacement",
+      "breakpoints": true
     }
   ]
 }

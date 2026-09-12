@@ -70,6 +70,7 @@ afterEach(async () => {
   if (createdPairIds.length > 0) {
     await db.delete(initialInvite).where(inArray(initialInvite.pairId, createdPairIds));
     await db.delete(rejoinInvite).where(inArray(rejoinInvite.pairId, createdPairIds));
+    await db.delete(pairMembershipEra).where(inArray(pairMembershipEra.pairId, createdPairIds));
     await db.delete(pairMembership).where(inArray(pairMembership.pairId, createdPairIds));
     await db.delete(pair).where(inArray(pair.id, createdPairIds));
   }
@@ -565,24 +566,24 @@ describe("Closer Slice 01A", () => {
     const invitee = await createParticipant("Invitee");
     await redeemInitialInvite(db, { token: created.invite.token, participantId: invitee.id });
 
-    const replacement = await createParticipant("Replacement");
+    const replacementAuthUserId = await createAnonymousAuthUser("Replacement");
     const rejoin = await issueRejoinInvite(db, { participantId: created.creator.id, pairId: created.pair.id });
     expect(rejoin.targetSlot).toBe("second");
     expect((await getRejoinInviteLanding(db, rejoin.token))?.targetSlot).toBe("second");
 
-    await redeemRejoinInvite(db, { token: rejoin.token, participantId: replacement.id });
+    const redeemed = await redeemRejoinInvite(db, { token: rejoin.token, authUserId: replacementAuthUserId, displayName: "Replacement" });
     const activeMembers = await db
       .select()
       .from(pairMembership)
       .where(and(eq(pairMembership.pairId, created.pair.id), isNull(pairMembership.endedAt)));
     expect(activeMembers).toEqual(expect.arrayContaining([
       expect.objectContaining({ participantId: created.creator.id, slot: "first" }),
-      expect.objectContaining({ participantId: replacement.id, slot: "second" }),
+      expect.objectContaining({ participantId: redeemed.participantId, slot: "second" }),
     ]));
     expect(activeMembers).not.toEqual(expect.arrayContaining([expect.objectContaining({ participantId: invitee.id })]));
-    expect(await captureError(redeemRejoinInvite(db, { token: rejoin.token, participantId: invitee.id }))).toMatchObject({ code: "REJOIN_UNAVAILABLE" });
+    expect(await captureError(redeemRejoinInvite(db, { token: rejoin.token, authUserId: await createAnonymousAuthUser("Second replacement"), displayName: "Second replacement" }))).toMatchObject({ code: "REJOIN_UNAVAILABLE" });
 
-    const reverse = await issueRejoinInvite(db, { participantId: replacement.id, pairId: created.pair.id });
+    const reverse = await issueRejoinInvite(db, { participantId: redeemed.participantId, pairId: created.pair.id });
     expect(reverse.targetSlot).toBe("first");
   });
 

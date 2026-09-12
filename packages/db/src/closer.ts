@@ -556,7 +556,7 @@ export async function redeemInitialInvite(
     if (existingMembership[0]) throw new CloserDomainError("INVITE_UNAVAILABLE");
 
     const firstMembership = await tx
-      .select({ participantId: pairMembership.participantId })
+      .select({ id: pairMembership.id, participantId: pairMembership.participantId })
       .from(pairMembership)
       .where(
         and(
@@ -613,15 +613,20 @@ export async function redeemInitialInvite(
       .returning({ pairId: initialInvite.pairId });
     if (!redeemed[0]) throw new CloserDomainError("INVITE_UNAVAILABLE");
 
-    await tx.insert(pairMembership).values({
+    const secondMembership = await tx.insert(pairMembership).values({
       pairId: invite.pairId,
       participantId: input.participantId,
       slot: "second",
-    });
+    }).returning({ id: pairMembership.id });
+    if (!secondMembership[0]) throw new Error("Initial claim did not create a membership.");
 
     const era = await tx
       .insert(pairMembershipEra)
-      .values({ pairId: invite.pairId })
+      .values({
+        pairId: invite.pairId,
+        firstMembershipId: firstMembership[0].id,
+        secondMembershipId: secondMembership[0].id,
+      })
       .returning({ id: pairMembershipEra.id });
     if (!era[0]) throw new Error("Initial claim did not create a membership era.");
 
@@ -715,12 +720,15 @@ export async function revokeRejoinInvites(
   await database.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
     await tx.execute(sql`select id from "pair" where id = ${input.pairId} for update`);
+    const access = await requireActivePairAccess(tx, input.participantId, input.pairId);
+    const targetSlot: "first" | "second" = access.membership.slot === "first" ? "second" : "first";
     await tx
       .update(rejoinInvite)
       .set({ revokedAt: new Date() })
       .where(
         and(
           eq(rejoinInvite.pairId, input.pairId),
+          eq(rejoinInvite.targetSlot, targetSlot),
           isNull(rejoinInvite.revokedAt),
           isNull(rejoinInvite.redeemedAt),
         ),
@@ -746,7 +754,7 @@ export async function getRejoinInviteLanding(database: Database, token: string) 
 
 export async function redeemRejoinInvite(
   database: Database,
-  input: { token: string; participantId: string },
+  input: { token: string; authUserId: string; displayName: string },
 ) {
   return database.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
@@ -761,8 +769,9 @@ export async function redeemRejoinInvite(
     await tx.execute(sql`select id from "pair" where id = ${invite.pairId} for update`);
 
     const targetMembershipRows = await tx
-      .select({ membership: pairMembership })
+      .select({ membership: pairMembership, targetParticipant: participant })
       .from(pairMembership)
+      .innerJoin(participant, eq(pairMembership.participantId, participant.id))
       .where(
         and(
           eq(pairMembership.pairId, invite.pairId),
@@ -774,22 +783,36 @@ export async function redeemRejoinInvite(
       .limit(1);
     if (!targetMembershipRows[0]) throw new CloserDomainError("REJOIN_UNAVAILABLE");
 
-    const existingParticipantMembership = await tx
-      .select({ id: pairMembership.id })
-      .from(pairMembership)
-      .where(
-        and(
-          eq(pairMembership.pairId, invite.pairId),
-          eq(pairMembership.participantId, input.participantId),
-          isNull(pairMembership.endedAt),
-        ),
-      )
+    const existingReplacement = await tx
+      .select({ id: participant.id })
+      .from(participant)
+      .where(eq(participant.authUserId, input.authUserId))
       .limit(1);
-    if (existingParticipantMembership[0]) throw new CloserDomainError("REJOIN_UNAVAILABLE");
+    if (existingReplacement[0]) throw new CloserDomainError("REJOIN_UNAVAILABLE");
+
+    const currentEraRows = await tx
+      .select()
+      .from(pairMembershipEra)
+      .where(and(eq(pairMembershipEra.pairId, invite.pairId), isNull(pairMembershipEra.endedAt)))
+      .limit(1);
+    const currentEra = currentEraRows[0];
+    if (!currentEra || (currentEra.firstMembershipId !== targetMembershipRows[0].membership.id && currentEra.secondMembershipId !== targetMembershipRows[0].membership.id)) {
+      throw new CloserDomainError("REJOIN_UNAVAILABLE");
+    }
+    const continuingMembershipId = currentEra.firstMembershipId === targetMembershipRows[0].membership.id
+      ? currentEra.secondMembershipId
+      : currentEra.firstMembershipId;
+    const insertedReplacement = await tx
+      .insert(participant)
+      .values({ authUserId: input.authUserId, displayName: normalizeDisplayName(input.displayName) })
+      .onConflictDoNothing({ target: participant.authUserId })
+      .returning({ id: participant.id });
+    const replacementParticipant = insertedReplacement[0];
+    if (!replacementParticipant) throw new CloserDomainError("REJOIN_UNAVAILABLE");
 
     const redeemed = await tx
       .update(rejoinInvite)
-      .set({ redeemedAt: new Date(), redeemedByParticipantId: input.participantId })
+      .set({ redeemedAt: new Date(), redeemedByParticipantId: replacementParticipant.id })
       .where(
         and(
           eq(rejoinInvite.id, invite.id),
@@ -804,13 +827,32 @@ export async function redeemRejoinInvite(
     const endedAt = new Date();
     await tx
       .update(pairMembership)
-      .set({ endedAt })
+      .set({ endedAt, endedDisplayName: targetMembershipRows[0].targetParticipant.displayName })
       .where(eq(pairMembership.id, targetMembershipRows[0].membership.id));
-    await tx.insert(pairMembership).values({
+    await tx
+      .update(pairMembershipEra)
+      .set({ endedAt })
+      .where(and(eq(pairMembershipEra.id, currentEra.id), isNull(pairMembershipEra.endedAt)));
+    await tx
+      .update(togetherSession)
+      .set({ endedAt })
+      .where(and(eq(togetherSession.membershipEraId, currentEra.id), isNull(togetherSession.endedAt)));
+
+    const replacementMembership = await tx.insert(pairMembership).values({
       pairId: invite.pairId,
-      participantId: input.participantId,
+      participantId: replacementParticipant.id,
       slot: invite.targetSlot,
-    });
+    }).returning({ id: pairMembership.id });
+    if (!replacementMembership[0]) throw new Error("Rejoin replacement did not create a membership.");
+    const replacementEra = await tx
+      .insert(pairMembershipEra)
+      .values({
+        pairId: invite.pairId,
+        firstMembershipId: invite.targetSlot === "first" ? replacementMembership[0].id : continuingMembershipId,
+        secondMembershipId: invite.targetSlot === "second" ? replacementMembership[0].id : continuingMembershipId,
+      })
+      .returning({ id: pairMembershipEra.id });
+    if (!replacementEra[0]) throw new Error("Rejoin replacement did not create a membership era.");
     await tx
       .update(rejoinInvite)
       .set({ revokedAt: endedAt })
@@ -824,7 +866,7 @@ export async function redeemRejoinInvite(
         ),
       );
 
-    return { pairId: invite.pairId };
+    return { pairId: invite.pairId, membershipEraId: replacementEra[0].id, participantId: replacementParticipant.id };
   });
 }
 
@@ -887,7 +929,6 @@ async function getActiveMembershipEra(database: Database, pairId: string) {
 
 async function loadTogetherSessionContext(database: Database, participantId: string, pairId: string, sessionId: string) {
   const access = await requireActivePairAccess(database, participantId, pairId);
-  const activeEra = await getActiveMembershipEra(database, pairId);
   const rows = await database
     .select({ session: togetherSession })
     .from(togetherSession)
@@ -896,7 +937,11 @@ async function loadTogetherSessionContext(database: Database, participantId: str
         eq(togetherSession.id, sessionId),
         eq(togetherSession.pairId, pairId),
         or(
-          activeEra ? eq(togetherSession.membershipEraId, activeEra.id) : undefined,
+          sql`exists (
+            select 1 from pair_membership_era session_era
+            where session_era.id = ${togetherSession.membershipEraId}
+              and (${access.membership.id} = session_era.first_membership_id or ${access.membership.id} = session_era.second_membership_id)
+          )`,
           and(isNull(togetherSession.membershipEraId), eq(togetherSession.startedByParticipantId, participantId)),
         ),
       ),
@@ -905,6 +950,19 @@ async function loadTogetherSessionContext(database: Database, participantId: str
   const result = rows[0];
   if (!result) throw new CloserDomainError("TOGETHER_SESSION_NOT_FOUND");
   return { ...access, session: result.session };
+}
+
+async function requireMutableTogetherSessionInTransaction(
+  tx: Database,
+  input: { participantId: string; pairId: string; sessionId: string },
+) {
+  await tx.execute(sql`select id from "pair" where id = ${input.pairId} for update`);
+  const context = await loadTogetherSessionContext(tx, input.participantId, input.pairId, input.sessionId);
+  const activeEra = await getActiveMembershipEra(tx, input.pairId);
+  if (context.session.membershipEraId !== (activeEra?.id ?? null)) {
+    throw new CloserDomainError("TOGETHER_SESSION_ENDED");
+  }
+  return context;
 }
 
 async function eligibleTogetherQuestions(
@@ -975,6 +1033,7 @@ export async function startTogetherSession(
   return database.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
     await tx.execute(sql`select id from "pair" where id = ${input.pairId} for update`);
+    const currentAccess = await requireActivePairAccess(tx, input.participantId, input.pairId);
     const activeEra = await getActiveMembershipEra(tx, input.pairId);
 
     if (input.clientRequestId) {
@@ -997,7 +1056,7 @@ export async function startTogetherSession(
     }
 
     const nextQuestion = await nextTogetherQuestion(tx, {
-      relationshipType: access.pair.relationshipType,
+      relationshipType: currentAccess.pair.relationshipType,
       category,
     });
     if (!nextQuestion) throw new CloserDomainError("QUESTION_UNAVAILABLE");
@@ -1056,18 +1115,16 @@ export async function advanceTogetherSession(
   input: { participantId: string; pairId: string; sessionId: string; action: "next" | "skip"; clientRequestId?: string },
 ) {
   if (input.clientRequestId && !isUuid(input.clientRequestId)) throw new CloserDomainError("TOGETHER_ACTION_INVALID");
-  const access = await loadTogetherSessionContext(database, input.participantId, input.pairId, input.sessionId);
-
   return database.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
-    await tx.execute(sql`select id from "pair" where id = ${input.pairId} for update`);
+    const mutableContext = await requireMutableTogetherSessionInTransaction(tx, input);
     const sessionRows = await tx
       .select()
       .from(togetherSession)
       .where(eq(togetherSession.id, input.sessionId))
       .for("update");
     const session = sessionRows[0];
-    if (!session || session.pairId !== input.pairId || session.startedAt < access.membership.startedAt) {
+    if (!session || session.pairId !== input.pairId) {
       throw new CloserDomainError("TOGETHER_SESSION_NOT_FOUND");
     }
     if (session.endedAt) throw new CloserDomainError("TOGETHER_SESSION_ENDED");
@@ -1106,7 +1163,7 @@ export async function advanceTogetherSession(
 
     const nextQuestion = await nextTogetherQuestion(tx, {
       sessionId: input.sessionId,
-      relationshipType: access.pair.relationshipType,
+      relationshipType: mutableContext.pair.relationshipType,
       category: session.category,
     });
     if (!nextQuestion) return { kind: "EXHAUSTED" as const, sessionId: input.sessionId };
@@ -1127,7 +1184,7 @@ export async function setTogetherSessionLike(
   await loadTogetherSessionContext(database, input.participantId, input.pairId, input.sessionId);
   await database.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
-    await tx.execute(sql`select id from "pair" where id = ${input.pairId} for update`);
+    await requireMutableTogetherSessionInTransaction(tx, input);
     const sessionRows = await tx
       .select({ endedAt: togetherSession.endedAt })
       .from(togetherSession)
@@ -1153,7 +1210,7 @@ export async function endTogetherSession(
   await loadTogetherSessionContext(database, input.participantId, input.pairId, input.sessionId);
   await database.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
-    await tx.execute(sql`select id from "pair" where id = ${input.pairId} for update`);
+    await requireMutableTogetherSessionInTransaction(tx, input);
     const sessionRows = await tx
       .select({ endedAt: togetherSession.endedAt })
       .from(togetherSession)
@@ -1169,9 +1226,9 @@ export async function endTogetherSession(
 }
 
 async function loadPrivateRoundContext(database: Database, participantId: string, pairId: string, roundId: string) {
-  const access = await requireCompletePairAccess(database, participantId, pairId);
+  const access = await requireActivePairAccess(database, participantId, pairId);
   const rows = await database
-    .select({ round: privateRound, question, conversation: privateConversation })
+    .select({ round: privateRound, question, conversation: privateConversation, membershipEra: pairMembershipEra })
     .from(privateRound)
     .innerJoin(
       privateConversation,
@@ -1180,18 +1237,41 @@ async function loadPrivateRoundContext(database: Database, participantId: string
         eq(privateRound.pairId, privateConversation.pairId),
       ),
     )
+    .innerJoin(pairMembershipEra, eq(privateConversation.membershipEraId, pairMembershipEra.id))
     .innerJoin(question, eq(privateRound.questionId, question.id))
     .where(
       and(
         eq(privateRound.id, roundId),
         eq(privateRound.pairId, pairId),
-        gte(privateRound.createdAt, access.membership.startedAt),
+        or(
+          eq(pairMembershipEra.firstMembershipId, access.membership.id),
+          eq(pairMembershipEra.secondMembershipId, access.membership.id),
+        ),
       ),
     )
     .limit(1);
   const result = rows[0];
   if (!result) throw new CloserDomainError("ROUND_NOT_FOUND");
-  return { ...access, ...result };
+  const members = await database
+    .select({
+      id: pairMembership.id,
+      participantId: pairMembership.participantId,
+      displayName: sql<string>`coalesce(${pairMembership.endedDisplayName}, ${participant.displayName})`,
+    })
+    .from(pairMembership)
+    .innerJoin(participant, eq(pairMembership.participantId, participant.id))
+    .where(inArray(pairMembership.id, [result.membershipEra.firstMembershipId, result.membershipEra.secondMembershipId]));
+  return { ...access, ...result, members };
+}
+
+async function requireMutablePrivateRoundInTransaction(
+  tx: Database,
+  input: { participantId: string; pairId: string; roundId: string },
+) {
+  await tx.execute(sql`select id from "pair" where id = ${input.pairId} for update`);
+  const context = await loadPrivateRoundContext(tx, input.participantId, input.pairId, input.roundId);
+  if (context.membershipEra.endedAt) throw new CloserDomainError("ROUND_NOT_FOUND");
+  return context;
 }
 
 function viewerRoundState(
@@ -1321,7 +1401,7 @@ async function nextEligibleQuestionForConversation(
 
 async function lockPairAndFindConversation(
   database: Database,
-  input: { pairId: string; category: QuestionCategory; participantId: string },
+  input: { pairId: string; category: QuestionCategory; participantId: string; membershipEraId: string },
 ) {
   await database.execute(sql`select id from "pair" where id = ${input.pairId} for update`);
   const existing = await database
@@ -1331,7 +1411,7 @@ async function lockPairAndFindConversation(
       and(
         eq(privateConversation.pairId, input.pairId),
         eq(privateConversation.category, input.category),
-        isNull(privateConversation.endedAt),
+        eq(privateConversation.membershipEraId, input.membershipEraId),
       ),
     )
     .limit(1);
@@ -1343,6 +1423,7 @@ async function lockPairAndFindConversation(
       pairId: input.pairId,
       category: input.category,
       createdByParticipantId: input.participantId,
+      membershipEraId: input.membershipEraId,
     })
     .onConflictDoNothing()
     .returning();
@@ -1355,7 +1436,7 @@ async function lockPairAndFindConversation(
       and(
         eq(privateConversation.pairId, input.pairId),
         eq(privateConversation.category, input.category),
-        isNull(privateConversation.endedAt),
+        eq(privateConversation.membershipEraId, input.membershipEraId),
       ),
     )
     .limit(1);
@@ -1426,10 +1507,15 @@ export async function startOrResumePrivateConversation(
 
   return database.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
+    await tx.execute(sql`select id from "pair" where id = ${input.pairId} for update`);
+    await requireCompletePairAccess(tx, input.participantId, input.pairId);
+    const activeEra = await getActiveMembershipEra(tx, input.pairId);
+    if (!activeEra) throw new CloserDomainError("PAIR_NOT_READY");
     const conversation = await lockPairAndFindConversation(tx, {
       pairId: input.pairId,
       category,
       participantId: input.participantId,
+      membershipEraId: activeEra.id,
     });
     const currentRound = await latestRoundForConversation(tx, conversation.id);
     if (currentRound) return { conversationId: conversation.id, roundId: currentRound.id };
@@ -1461,6 +1547,7 @@ export async function createNextPrivateRound(
   return database.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
     await tx.execute(sql`select id from "pair" where id = ${input.pairId} for update`);
+    await requireCompletePairAccess(tx, input.participantId, input.pairId);
     const conversations = await tx
       .select()
       .from(privateConversation)
@@ -1468,7 +1555,11 @@ export async function createNextPrivateRound(
         and(
           eq(privateConversation.id, input.conversationId),
           eq(privateConversation.pairId, input.pairId),
-          isNull(privateConversation.endedAt),
+          sql`exists (
+            select 1 from pair_membership_era active_era
+            where active_era.id = ${privateConversation.membershipEraId}
+              and active_era.ended_at is null
+          )`,
         ),
       )
       .limit(1);
@@ -1637,8 +1728,13 @@ export async function listActivePrivateConversations(
     .where(
       and(
         eq(privateConversation.pairId, input.pairId),
-        isNull(privateConversation.endedAt),
-        gte(privateConversation.createdAt, access.membership.startedAt),
+        sql`exists (
+          select 1 from pair_membership_era active_era
+          where active_era.id = ${privateConversation.membershipEraId}
+            and active_era.ended_at is null
+            and (${privateConversation.membershipEraId} = active_era.id)
+            and (${access.membership.id} = active_era.first_membership_id or ${access.membership.id} = active_era.second_membership_id)
+        )`,
       ),
     )
     .orderBy(desc(privateConversation.createdAt));
@@ -1715,22 +1811,25 @@ export async function submitPrivateAnswer(
   input: { participantId: string; pairId: string; roundId: string; body: string },
 ) {
   const body = normalizePrivateText(input.body, 2000, "ANSWER_INVALID");
-  await loadPrivateRoundContext(database, input.participantId, input.pairId, input.roundId);
-  const inserted = await database
-    .insert(privateAnswer)
-    .values({ roundId: input.roundId, participantId: input.participantId, body })
-    .onConflictDoNothing()
-    .returning({ body: privateAnswer.body });
+  await database.transaction(async (transaction) => {
+    const tx = transaction as unknown as Database;
+    await requireMutablePrivateRoundInTransaction(tx, input);
+    const inserted = await tx
+      .insert(privateAnswer)
+      .values({ roundId: input.roundId, participantId: input.participantId, body })
+      .onConflictDoNothing()
+      .returning({ body: privateAnswer.body });
 
-  if (!inserted[0]) {
-    const existing = await database
-      .select({ body: privateAnswer.body })
-      .from(privateAnswer)
-      .where(and(eq(privateAnswer.roundId, input.roundId), eq(privateAnswer.participantId, input.participantId)))
-      .limit(1);
-    if (!existing[0]) throw new Error("Private answer submission did not resolve.");
-    if (existing[0].body !== body) throw new CloserDomainError("ANSWER_IMMUTABLE");
-  }
+    if (!inserted[0]) {
+      const existing = await tx
+        .select({ body: privateAnswer.body })
+        .from(privateAnswer)
+        .where(and(eq(privateAnswer.roundId, input.roundId), eq(privateAnswer.participantId, input.participantId)))
+        .limit(1);
+      if (!existing[0]) throw new Error("Private answer submission did not resolve.");
+      if (existing[0].body !== body) throw new CloserDomainError("ANSWER_IMMUTABLE");
+    }
+  });
   return getPrivateRoundForParticipant(database, input);
 }
 
@@ -1738,12 +1837,13 @@ export async function markPrivateRevealViewed(
   database: Database,
   input: { participantId: string; pairId: string; roundId: string },
 ) {
-  const view = await getPrivateRoundForParticipant(database, input);
-  if (!view.answers) throw new CloserDomainError("REVEAL_NOT_READY");
-  await database
-    .insert(privateRevealView)
-    .values({ roundId: input.roundId, participantId: input.participantId })
-    .onConflictDoNothing();
+  await database.transaction(async (transaction) => {
+    const tx = transaction as unknown as Database;
+    await requireMutablePrivateRoundInTransaction(tx, input);
+    const view = await getPrivateRoundForParticipant(tx, input);
+    if (!view.answers) throw new CloserDomainError("REVEAL_NOT_READY");
+    await tx.insert(privateRevealView).values({ roundId: input.roundId, participantId: input.participantId }).onConflictDoNothing();
+  });
   return getPrivateRoundForParticipant(database, input);
 }
 
@@ -1757,14 +1857,15 @@ export async function setPrivateReaction(
   input: { participantId: string; pairId: string; roundId: string; value: string },
 ) {
   assertReactionValue(input.value);
-  await requireRevealViewed(database, input);
-  await database
-    .insert(privateReaction)
-    .values({ roundId: input.roundId, participantId: input.participantId, value: input.value })
-    .onConflictDoUpdate({
-      target: [privateReaction.roundId, privateReaction.participantId],
-      set: { value: input.value, updatedAt: new Date() },
+  await database.transaction(async (transaction) => {
+    const tx = transaction as unknown as Database;
+    await requireMutablePrivateRoundInTransaction(tx, input);
+    await requireRevealViewed(tx, input);
+    const value = input.value as ReactionValue;
+    await tx.insert(privateReaction).values({ roundId: input.roundId, participantId: input.participantId, value }).onConflictDoUpdate({
+      target: [privateReaction.roundId, privateReaction.participantId], set: { value, updatedAt: new Date() },
     });
+  });
   return getPrivateRoundForParticipant(database, input);
 }
 
@@ -1772,10 +1873,12 @@ export async function removePrivateReaction(
   database: Database,
   input: { participantId: string; pairId: string; roundId: string },
 ) {
-  await requireRevealViewed(database, input);
-  await database
-    .delete(privateReaction)
-    .where(and(eq(privateReaction.roundId, input.roundId), eq(privateReaction.participantId, input.participantId)));
+  await database.transaction(async (transaction) => {
+    const tx = transaction as unknown as Database;
+    await requireMutablePrivateRoundInTransaction(tx, input);
+    await requireRevealViewed(tx, input);
+    await tx.delete(privateReaction).where(and(eq(privateReaction.roundId, input.roundId), eq(privateReaction.participantId, input.participantId)));
+  });
   return getPrivateRoundForParticipant(database, input);
 }
 
@@ -1784,14 +1887,14 @@ export async function setPrivateReply(
   input: { participantId: string; pairId: string; roundId: string; body: string },
 ) {
   const body = normalizePrivateText(input.body, 500, "REPLY_INVALID");
-  await requireRevealViewed(database, input);
-  await database
-    .insert(privateReply)
-    .values({ roundId: input.roundId, participantId: input.participantId, body })
-    .onConflictDoUpdate({
-      target: [privateReply.roundId, privateReply.participantId],
-      set: { body, updatedAt: new Date() },
+  await database.transaction(async (transaction) => {
+    const tx = transaction as unknown as Database;
+    await requireMutablePrivateRoundInTransaction(tx, input);
+    await requireRevealViewed(tx, input);
+    await tx.insert(privateReply).values({ roundId: input.roundId, participantId: input.participantId, body }).onConflictDoUpdate({
+      target: [privateReply.roundId, privateReply.participantId], set: { body, updatedAt: new Date() },
     });
+  });
   return getPrivateRoundForParticipant(database, input);
 }
 
@@ -1799,10 +1902,12 @@ export async function removePrivateReply(
   database: Database,
   input: { participantId: string; pairId: string; roundId: string },
 ) {
-  await requireRevealViewed(database, input);
-  await database
-    .delete(privateReply)
-    .where(and(eq(privateReply.roundId, input.roundId), eq(privateReply.participantId, input.participantId)));
+  await database.transaction(async (transaction) => {
+    const tx = transaction as unknown as Database;
+    await requireMutablePrivateRoundInTransaction(tx, input);
+    await requireRevealViewed(tx, input);
+    await tx.delete(privateReply).where(and(eq(privateReply.roundId, input.roundId), eq(privateReply.participantId, input.participantId)));
+  });
   return getPrivateRoundForParticipant(database, input);
 }
 

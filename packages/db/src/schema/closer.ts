@@ -73,6 +73,7 @@ export const pairMembership = pgTable(
     slot: pairSlot("slot").notNull(),
     startedAt: timestamp("started_at").defaultNow().notNull(),
     endedAt: timestamp("ended_at"),
+    endedDisplayName: text("ended_display_name"),
   },
   (table) => [
     uniqueIndex("pair_membership_one_active_slot_uidx")
@@ -98,6 +99,12 @@ export const pairMembershipEra = pgTable(
     pairId: uuid("pair_id")
       .notNull()
       .references(() => pair.id, { onDelete: "cascade" }),
+    firstMembershipId: uuid("first_membership_id")
+      .notNull()
+      .references(() => pairMembership.id, { onDelete: "restrict" }),
+    secondMembershipId: uuid("second_membership_id")
+      .notNull()
+      .references(() => pairMembership.id, { onDelete: "restrict" }),
     startedAt: timestamp("started_at").defaultNow().notNull(),
     endedAt: timestamp("ended_at"),
   },
@@ -166,13 +173,13 @@ export const privateConversation = pgTable(
     createdByParticipantId: uuid("created_by_participant_id")
       .notNull()
       .references(() => participant.id, { onDelete: "restrict" }),
+    membershipEraId: uuid("membership_era_id")
+      .notNull()
+      .references(() => pairMembershipEra.id, { onDelete: "restrict" }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
-    endedAt: timestamp("ended_at"),
   },
   (table) => [
-    uniqueIndex("private_conversation_one_active_category_uidx")
-      .on(table.pairId, table.category)
-      .where(sql`${table.endedAt} is null`),
+    uniqueIndex("private_conversation_one_era_category_uidx").on(table.pairId, table.membershipEraId, table.category),
     uniqueIndex("private_conversation_pair_id_id_uidx").on(table.pairId, table.id),
     index("private_conversation_pair_created_idx").on(table.pairId, table.createdAt),
   ],
@@ -383,6 +390,16 @@ export const pairRelations = relations(pair, ({ many }) => ({
 
 export const pairMembershipEraRelations = relations(pairMembershipEra, ({ one, many }) => ({
   pair: one(pair, { fields: [pairMembershipEra.pairId], references: [pair.id] }),
+  firstMembership: one(pairMembership, {
+    fields: [pairMembershipEra.firstMembershipId],
+    references: [pairMembership.id],
+    relationName: "eraFirstMembership",
+  }),
+  secondMembership: one(pairMembership, {
+    fields: [pairMembershipEra.secondMembershipId],
+    references: [pairMembership.id],
+    relationName: "eraSecondMembership",
+  }),
   togetherSessions: many(togetherSession),
 }));
 
@@ -412,6 +429,10 @@ export const togetherSessionQuestionRelations = relations(togetherSessionQuestio
 
 export const privateConversationRelations = relations(privateConversation, ({ one, many }) => ({
   pair: one(pair, { fields: [privateConversation.pairId], references: [pair.id] }),
+  membershipEra: one(pairMembershipEra, {
+    fields: [privateConversation.membershipEraId],
+    references: [pairMembershipEra.id],
+  }),
   createdByParticipant: one(participant, {
     fields: [privateConversation.createdByParticipantId],
     references: [participant.id],
@@ -426,12 +447,14 @@ export const privateRoundRelations = relations(privateRound, ({ one }) => ({
   }),
 }));
 
-export const pairMembershipRelations = relations(pairMembership, ({ one }) => ({
+export const pairMembershipRelations = relations(pairMembership, ({ one, many }) => ({
   pair: one(pair, { fields: [pairMembership.pairId], references: [pair.id] }),
   participant: one(participant, {
     fields: [pairMembership.participantId],
     references: [participant.id],
   }),
+  firstMembershipEras: many(pairMembershipEra, { relationName: "eraFirstMembership" }),
+  secondMembershipEras: many(pairMembershipEra, { relationName: "eraSecondMembership" }),
 }));
 
 export const initialInviteRelations = relations(initialInvite, ({ one }) => ({
