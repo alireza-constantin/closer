@@ -1,11 +1,12 @@
 import { createHash, randomBytes } from "node:crypto";
 
-import { and, asc, desc, eq, gt, gte, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNull, or, sql } from "drizzle-orm";
 
 import { createDb } from "./index";
 import {
   initialInvite,
   pair,
+  pairMembershipEra,
   pairMembership,
   participant,
   privateAnswer,
@@ -514,6 +515,20 @@ export async function redeemInitialInvite(
 
     await tx.execute(sql`select id from "pair" where id = ${invite.pairId} for update`);
 
+    const usableInvite = await tx
+      .select({ id: initialInvite.id })
+      .from(initialInvite)
+      .where(
+        and(
+          eq(initialInvite.id, invite.id),
+          isNull(initialInvite.redeemedAt),
+          isNull(initialInvite.revokedAt),
+          gt(initialInvite.expiresAt, new Date()),
+        ),
+      )
+      .limit(1);
+    if (!usableInvite[0]) throw new CloserDomainError("INVITE_UNAVAILABLE");
+
     const participantMembership = await tx
       .select({ id: pairMembership.id })
       .from(pairMembership)
@@ -540,6 +555,50 @@ export async function redeemInitialInvite(
       .limit(1);
     if (existingMembership[0]) throw new CloserDomainError("INVITE_UNAVAILABLE");
 
+    const firstMembership = await tx
+      .select({ participantId: pairMembership.participantId })
+      .from(pairMembership)
+      .where(
+        and(
+          eq(pairMembership.pairId, invite.pairId),
+          eq(pairMembership.slot, "first"),
+          isNull(pairMembership.endedAt),
+        ),
+      )
+      .limit(1);
+    const continuingParticipantId = firstMembership[0]?.participantId;
+    if (!continuingParticipantId || continuingParticipantId === input.participantId) {
+      throw new CloserDomainError("INVITE_UNAVAILABLE");
+    }
+
+    // Serialize every attempt for this unordered real-Participant pair. This
+    // prevents two different unclaimed Pairs being claimed concurrently.
+    const lockKey = [continuingParticipantId, input.participantId].sort().join(":");
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${lockKey}))`);
+
+    const duplicatePairs = await tx
+      .select({ pairId: pairMembership.pairId })
+      .from(pairMembership)
+      .innerJoin(
+        pairMembershipEra,
+        and(eq(pairMembershipEra.pairId, pairMembership.pairId), isNull(pairMembershipEra.endedAt)),
+      )
+      .where(
+        and(
+          eq(pairMembership.participantId, continuingParticipantId),
+          isNull(pairMembership.endedAt),
+          sql`${pairMembership.pairId} <> ${invite.pairId}`,
+          sql`exists (
+            select 1 from pair_membership duplicate_member
+            where duplicate_member.pair_id = ${pairMembership.pairId}
+              and duplicate_member.participant_id = ${input.participantId}
+              and duplicate_member.ended_at is null
+          )`,
+        ),
+      )
+      .limit(1);
+    if (duplicatePairs[0]) throw new CloserDomainError("INVITE_UNAVAILABLE");
+
     const redeemed = await tx
       .update(initialInvite)
       .set({ redeemedAt: new Date(), redeemedByParticipantId: input.participantId })
@@ -560,7 +619,19 @@ export async function redeemInitialInvite(
       slot: "second",
     });
 
-    return { pairId: invite.pairId };
+    const era = await tx
+      .insert(pairMembershipEra)
+      .values({ pairId: invite.pairId })
+      .returning({ id: pairMembershipEra.id });
+    if (!era[0]) throw new Error("Initial claim did not create a membership era.");
+
+    await tx.update(pair).set({ intendedPersonName: null }).where(eq(pair.id, invite.pairId));
+    await tx
+      .update(togetherSession)
+      .set({ endedAt: new Date() })
+      .where(and(eq(togetherSession.pairId, invite.pairId), isNull(togetherSession.endedAt)));
+
+    return { pairId: invite.pairId, membershipEraId: era[0].id };
   });
 }
 
@@ -805,8 +876,18 @@ async function requireCompletePairAccess(database: Database, participantId: stri
   return { ...access, members };
 }
 
+async function getActiveMembershipEra(database: Database, pairId: string) {
+  const rows = await database
+    .select({ id: pairMembershipEra.id })
+    .from(pairMembershipEra)
+    .where(and(eq(pairMembershipEra.pairId, pairId), isNull(pairMembershipEra.endedAt)))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
 async function loadTogetherSessionContext(database: Database, participantId: string, pairId: string, sessionId: string) {
   const access = await requireActivePairAccess(database, participantId, pairId);
+  const activeEra = await getActiveMembershipEra(database, pairId);
   const rows = await database
     .select({ session: togetherSession })
     .from(togetherSession)
@@ -814,7 +895,10 @@ async function loadTogetherSessionContext(database: Database, participantId: str
       and(
         eq(togetherSession.id, sessionId),
         eq(togetherSession.pairId, pairId),
-        gte(togetherSession.startedAt, access.membership.startedAt),
+        or(
+          activeEra ? eq(togetherSession.membershipEraId, activeEra.id) : undefined,
+          and(isNull(togetherSession.membershipEraId), eq(togetherSession.startedByParticipantId, participantId)),
+        ),
       ),
     )
     .limit(1);
@@ -891,6 +975,7 @@ export async function startTogetherSession(
   return database.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
     await tx.execute(sql`select id from "pair" where id = ${input.pairId} for update`);
+    const activeEra = await getActiveMembershipEra(tx, input.pairId);
 
     if (input.clientRequestId) {
       const existing = await tx
@@ -921,6 +1006,7 @@ export async function startTogetherSession(
       .insert(togetherSession)
       .values({
         pairId: input.pairId,
+        membershipEraId: activeEra?.id,
         category,
         startedByParticipantId: input.participantId,
         startRequestId: input.clientRequestId,
@@ -974,6 +1060,7 @@ export async function advanceTogetherSession(
 
   return database.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
+    await tx.execute(sql`select id from "pair" where id = ${input.pairId} for update`);
     const sessionRows = await tx
       .select()
       .from(togetherSession)
@@ -1040,6 +1127,7 @@ export async function setTogetherSessionLike(
   await loadTogetherSessionContext(database, input.participantId, input.pairId, input.sessionId);
   await database.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
+    await tx.execute(sql`select id from "pair" where id = ${input.pairId} for update`);
     const sessionRows = await tx
       .select({ endedAt: togetherSession.endedAt })
       .from(togetherSession)
@@ -1065,6 +1153,7 @@ export async function endTogetherSession(
   await loadTogetherSessionContext(database, input.participantId, input.pairId, input.sessionId);
   await database.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
+    await tx.execute(sql`select id from "pair" where id = ${input.pairId} for update`);
     const sessionRows = await tx
       .select({ endedAt: togetherSession.endedAt })
       .from(togetherSession)

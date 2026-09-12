@@ -25,7 +25,7 @@ const {
   replaceInitialInvite,
   updateIntendedPersonName,
 } = await import("./closer");
-const { initialInvite, pair, pairMembership, participant, rejoinInvite } = await import("./schema/closer");
+const { initialInvite, pair, pairMembership, pairMembershipEra, participant, rejoinInvite } = await import("./schema/closer");
 const { user } = await import("./schema/auth");
 const { and, eq, inArray, isNull } = await import("drizzle-orm");
 
@@ -394,6 +394,28 @@ describe("Closer Slice 01A", () => {
     const inviteeView = await getPairForParticipant(db, invitee.id, created.pair.id);
     expect(creatorView.members).toHaveLength(2);
     expect(inviteeView.members).toHaveLength(2);
+    expect((await db.select().from(pairMembershipEra).where(eq(pairMembershipEra.pairId, created.pair.id))).filter((era) => era.endedAt === null)).toHaveLength(1);
+    expect(creatorView.pair.intendedPersonName).toBeNull();
+  });
+
+  test("rejects a duplicate active Pair across relationship types without consuming the invitation", async () => {
+    const creator = await createParticipant("Ali");
+    const claimant = await createParticipant("Fafa");
+    const existing = await createPairForParticipant(db, { participantId: creator.id, intendedPersonName: "Fafa", relationshipType: "partner" });
+    const existingInvite = await issueOrReuseInitialInvite(db, { participantId: creator.id, pairId: existing.pair.id });
+    if (existingInvite.state !== "issued") throw new Error("Expected initial invitation.");
+    createdPairIds.push(existing.pair.id);
+    await redeemInitialInvite(db, { token: existingInvite.token, participantId: claimant.id });
+
+    const candidate = await createPairForParticipant(db, { participantId: creator.id, intendedPersonName: "Fafa", relationshipType: "friend" });
+    const candidateInvite = await issueOrReuseInitialInvite(db, { participantId: creator.id, pairId: candidate.pair.id });
+    if (candidateInvite.state !== "issued") throw new Error("Expected initial invitation.");
+    createdPairIds.push(candidate.pair.id);
+
+    expect(await captureError(redeemInitialInvite(db, { token: candidateInvite.token, participantId: claimant.id }))).toMatchObject({ code: "INVITE_UNAVAILABLE" });
+    const candidateState = await db.select().from(initialInvite).where(eq(initialInvite.pairId, candidate.pair.id));
+    expect(candidateState[0]?.redeemedAt).toBeNull();
+    expect((await db.select().from(pairMembership).where(and(eq(pairMembership.pairId, candidate.pair.id), isNull(pairMembership.endedAt))))).toHaveLength(1);
   });
 
   test("does not redeem an initial invitation twice", async () => {

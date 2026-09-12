@@ -87,6 +87,28 @@ export const pairMembership = pgTable(
   ],
 );
 
+/**
+ * An internal, stable authorization boundary for a Pair's two active
+ * memberships.  The pre-claim period intentionally has no era row.
+ */
+export const pairMembershipEra = pgTable(
+  "pair_membership_era",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    pairId: uuid("pair_id")
+      .notNull()
+      .references(() => pair.id, { onDelete: "cascade" }),
+    startedAt: timestamp("started_at").defaultNow().notNull(),
+    endedAt: timestamp("ended_at"),
+  },
+  (table) => [
+    uniqueIndex("pair_membership_era_one_active_uidx")
+      .on(table.pairId)
+      .where(sql`${table.endedAt} is null`),
+    index("pair_membership_era_pair_started_idx").on(table.pairId, table.startedAt),
+  ],
+);
+
 export const initialInvite = pgTable(
   "initial_invite",
   {
@@ -270,6 +292,7 @@ export const togetherSession = pgTable(
     pairId: uuid("pair_id")
       .notNull()
       .references(() => pair.id, { onDelete: "cascade" }),
+    membershipEraId: uuid("membership_era_id").references(() => pairMembershipEra.id, { onDelete: "restrict" }),
     category: questionCategory("category").notNull(),
     startedByParticipantId: uuid("started_by_participant_id")
       .notNull()
@@ -355,6 +378,12 @@ export const pairRelations = relations(pair, ({ many }) => ({
   rejoinInvites: many(rejoinInvite),
   privateConversations: many(privateConversation),
   togetherSessions: many(togetherSession),
+  membershipEras: many(pairMembershipEra),
+}));
+
+export const pairMembershipEraRelations = relations(pairMembershipEra, ({ one, many }) => ({
+  pair: one(pair, { fields: [pairMembershipEra.pairId], references: [pair.id] }),
+  togetherSessions: many(togetherSession),
 }));
 
 export const togetherSessionRelations = relations(togetherSession, ({ one, many }) => ({
@@ -362,6 +391,10 @@ export const togetherSessionRelations = relations(togetherSession, ({ one, many 
   startedByParticipant: one(participant, {
     fields: [togetherSession.startedByParticipantId],
     references: [participant.id],
+  }),
+  membershipEra: one(pairMembershipEra, {
+    fields: [togetherSession.membershipEraId],
+    references: [pairMembershipEra.id],
   }),
   questions: many(togetherSessionQuestion),
 }));

@@ -138,6 +138,38 @@ describe("Closer Slice 02 Together sessions", () => {
     expect(started.questionId).toBeTruthy();
   });
 
+  test("initial claim closes the pre-claim session, starts the first era, and does not grant its history to the claimant", async () => {
+    const pair = await createPair("partner", false);
+    const started = await startTogetherSession(db, {
+      pairId: pair.pair.id,
+      participantId: pair.creator.id,
+      category: "deep",
+      clientRequestId: randomUUID(),
+    });
+    const token = await issueFreshInitialInvite(pair.creator.id, pair.pair.id);
+    const claimant = await createParticipant("Claimant");
+
+    const claim = await redeemInitialInvite(db, { token, participantId: claimant.id });
+    expect(claim.membershipEraId).toBeTruthy();
+    expect((await getTogetherSessionForParticipant(db, {
+      pairId: pair.pair.id,
+      participantId: pair.creator.id,
+      sessionId: started.sessionId,
+    })).endedAt).not.toBeNull();
+    expect(await captureError(getTogetherSessionForParticipant(db, {
+      pairId: pair.pair.id,
+      participantId: claimant.id,
+      sessionId: started.sessionId,
+    }))).toMatchObject({ code: "TOGETHER_SESSION_NOT_FOUND" });
+    expect(await captureError(advanceTogetherSession(db, {
+      pairId: pair.pair.id,
+      participantId: pair.creator.id,
+      sessionId: started.sessionId,
+      action: "next",
+      clientRequestId: randomUUID(),
+    }))).toMatchObject({ code: "TOGETHER_SESSION_ENDED" });
+  });
+
   test("Private-only questions are never selected for Together", async () => {
     const pair = await createPair("partner");
     const eligible = await listEligibleTogetherQuestions(db, { pairId: pair.pair.id, participantId: pair.creator.id, category: "deep" });

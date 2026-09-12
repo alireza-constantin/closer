@@ -14,7 +14,7 @@ import { OnboardingIcon, OnboardingSurface } from "@/components/closer/onboardin
 import { CloserEyebrow } from "@/components/closer/typography";
 import { onboardingSchema, type OnboardingValues } from "@/lib/validation";
 
-export default function ParticipantOnboardingForm() {
+export default function ParticipantOnboardingForm({ returnTo }: { returnTo?: string }) {
   const router = useRouter();
   const form = useForm<OnboardingValues>({
     defaultValues: { displayName: "" },
@@ -40,7 +40,7 @@ export default function ParticipantOnboardingForm() {
         });
         return;
       }
-      router.replace("/");
+      router.replace((returnTo ?? "/") as never);
     } catch {
       form.setError("root.server", { message: "We could not save your name. Please try again." });
     }
