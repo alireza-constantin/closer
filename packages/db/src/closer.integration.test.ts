@@ -92,6 +92,24 @@ describe("Closer Slice 01A", () => {
     expect((await getParticipantByAuthUserId(db, authUserId))?.id).toBe(first.id);
   });
 
+  test("onboarding validates names, permits duplicates, and leaves the participant without a space", async () => {
+    const first = await createParticipant("  Sam  ");
+    const second = await createParticipant("Sam");
+
+    expect(first.displayName).toBe("Sam");
+    expect(second.displayName).toBe("Sam");
+    expect(second.id).not.toBe(first.id);
+    expect(await listActivePairsForParticipant(db, first.id)).toEqual([]);
+    expect(await captureError(resolveOrCreateParticipant(db, {
+      authUserId: first.authUserId,
+      displayName: "   ",
+    }))).toMatchObject({ code: "DISPLAY_NAME_INVALID" });
+    expect(await captureError(resolveOrCreateParticipant(db, {
+      authUserId: second.authUserId,
+      displayName: "x".repeat(41),
+    }))).toMatchObject({ code: "DISPLAY_NAME_INVALID" });
+  });
+
   test("creates partner and friend pairs with their creator in the first logical slot", async () => {
     const partnerPair = await createPair("Partner creator", "partner");
     const friendPair = await createPair("Friend creator", "friend");

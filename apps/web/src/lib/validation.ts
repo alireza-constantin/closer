@@ -6,8 +6,11 @@ export const displayNameSchema = z
   .min(1, "Enter a name so your person knows who joined.")
   .max(40, "Names can be up to 40 characters.");
 
-export const createPairSchema = z.object({
+export const onboardingSchema = z.object({
   displayName: displayNameSchema,
+});
+
+export const createPairSchema = z.object({
   relationshipType: z.enum(["partner", "friend"]),
 });
 
@@ -41,6 +44,7 @@ export const signUpSchema = z.object({
 });
 
 export type CreatePairValues = z.infer<typeof createPairSchema>;
+export type OnboardingValues = z.infer<typeof onboardingSchema>;
 export type JoinPairValues = z.infer<typeof joinPairSchema>;
 export type PrivateAnswerValues = z.infer<typeof privateAnswerSchema>;
 export type PrivateReplyValues = z.infer<typeof privateReplySchema>;

@@ -1,11 +1,11 @@
-import { createPairForParticipant, db, resolveOrCreateParticipant } from "@Closer/auth/closer";
+import { createPairForParticipant, db, getParticipantByAuthUserId } from "@Closer/auth/closer";
 
 import { getAuthUserIdFromRequest } from "@/lib/closer-server";
 import { setInitialInviteCookie } from "@/lib/initial-invite-cookie";
 
 function domainErrorResponse(error: unknown) {
   const message = error instanceof Error ? error.message : "Unable to create the pair.";
-  const status = message === "DISPLAY_NAME_INVALID" || message === "RELATIONSHIP_TYPE_INVALID" || message === "PAIR_CREATION_REQUEST_INVALID" ? 400 : 500;
+  const status = message === "RELATIONSHIP_TYPE_INVALID" || message === "PAIR_CREATION_REQUEST_INVALID" ? 400 : 500;
   return Response.json({ error: status === 400 ? message : "Unable to create the pair." }, { status });
 }
 
@@ -18,13 +18,14 @@ export async function POST(request: Request) {
     return Response.json({ error: "Invalid request." }, { status: 400 });
   }
 
-  const { displayName, relationshipType, clientRequestId } = body as Record<string, unknown>;
-  if (typeof displayName !== "string" || typeof relationshipType !== "string" || (clientRequestId !== undefined && typeof clientRequestId !== "string")) {
+  const { relationshipType, clientRequestId } = body as Record<string, unknown>;
+  if (typeof relationshipType !== "string" || (clientRequestId !== undefined && typeof clientRequestId !== "string")) {
     return Response.json({ error: "Invalid request." }, { status: 400 });
   }
 
   try {
-    const resolvedParticipant = await resolveOrCreateParticipant(db, { authUserId, displayName });
+    const resolvedParticipant = await getParticipantByAuthUserId(db, authUserId);
+    if (!resolvedParticipant) return Response.json({ error: "Complete onboarding first." }, { status: 409 });
     const result = await createPairForParticipant(db, {
       participantId: resolvedParticipant.id,
       relationshipType,

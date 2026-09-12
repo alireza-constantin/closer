@@ -1,9 +1,7 @@
 import { db, listActivePairsForParticipant } from "@Closer/auth/closer";
 import { redirect } from "next/navigation";
 
-import AnonymousSession from "@/components/anonymous-session";
-import { CloserPageShell, CloserTopbar } from "@/components/closer/page-shell";
-import CreatePairForm from "@/components/create-pair-form";
+import ZeroSpaceHome from "@/components/zero-space-home";
 import YourSpaces from "@/components/your-spaces";
 import { getCurrentParticipant } from "@/lib/closer-server";
 
@@ -14,18 +12,10 @@ export const revalidate = 0;
 
 export default async function Home() {
   const currentParticipant = await getCurrentParticipant();
-  if (currentParticipant) {
-    const spaces = await listActivePairsForParticipant(db, currentParticipant.id);
-    if (spaces.length === 1) redirect(`/pair/${spaces[0].pairId}`);
-    if (spaces.length > 1) return <YourSpaces spaces={spaces} />;
-  }
+  if (!currentParticipant) redirect("/onboarding" as never);
 
-  return (
-    <CloserPageShell className="flex flex-col">
-      <CloserTopbar />
-      <AnonymousSession>
-        <CreatePairForm isFirstSpace />
-      </AnonymousSession>
-    </CloserPageShell>
-  );
+  const spaces = await listActivePairsForParticipant(db, currentParticipant.id);
+  if (spaces.length === 1) redirect(("/pair/" + spaces[0].pairId) as never);
+  if (spaces.length > 1) return <YourSpaces spaces={spaces} />;
+  return <ZeroSpaceHome displayName={currentParticipant.displayName} />;
 }

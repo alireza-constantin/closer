@@ -19,7 +19,6 @@ import { RadioGroup, RadioGroupItem } from "@Closer/ui/components/radio-group";
 import { cn } from "@Closer/ui/lib/utils";
 
 import { AsyncButton } from "@/components/closer/async-button";
-import { DisplayNameField } from "@/components/closer/display-name-field";
 import { CloserModeCard } from "@/components/closer/navigation";
 import { OnboardingIcon, OnboardingSurface } from "@/components/closer/onboarding-surface";
 import { FormServerError } from "@/components/closer/feedback";
@@ -48,7 +47,7 @@ export default function CreatePairForm({ isFirstSpace = true }: { isFirstSpace?:
   const [joinedDisplayName, setJoinedDisplayName] = useState<string | null>(null);
   const creationRequestIdRef = useRef<string | null>(null);
   const form = useForm<CreatePairValues>({
-    defaultValues: { displayName: "", relationshipType: "partner" },
+    defaultValues: { relationshipType: "partner" },
     mode: "onChange",
     resolver: zodResolver(createPairSchema),
   });
@@ -116,7 +115,6 @@ export default function CreatePairForm({ isFirstSpace = true }: { isFirstSpace?:
     );
   }
 
-  const nameError = form.formState.errors.displayName;
   return (
     <OnboardingSurface as="form" onSubmit={form.handleSubmit(createPair)}>
       <OnboardingIcon tone="coral"><Sparkles aria-hidden="true" /></OnboardingIcon>
@@ -124,7 +122,6 @@ export default function CreatePairForm({ isFirstSpace = true }: { isFirstSpace?:
       <h1 className="mt-3 max-w-[12ch] text-balance text-4xl font-extrabold leading-[1.03] tracking-[-.055em]">{isFirstSpace ? "Let’s create your space" : "Create another space"}</h1>
       <p className="mt-3 max-w-[31ch] text-[.98rem] leading-relaxed text-closer-muted">{isFirstSpace ? "A gentle place for the conversations that matter." : "A separate little place for another person who matters."}</p>
       <FieldGroup className="mt-6 gap-4">
-        <DisplayNameField error={nameError} errorId="display-name-error" registration={form.register("displayName")} />
         <FieldSet data-invalid={!!form.formState.errors.relationshipType}>
           <FieldLegend variant="label">Who are you creating this with?</FieldLegend>
           <Controller
