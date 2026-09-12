@@ -16,6 +16,7 @@ export {
   getTogetherSessionForParticipant,
   issueInitialInvite,
   issueRejoinInvite,
+  updateIntendedPersonName,
   listActivePrivateConversations,
   listActivePairsForParticipant,
   listEligiblePrivateQuestions,

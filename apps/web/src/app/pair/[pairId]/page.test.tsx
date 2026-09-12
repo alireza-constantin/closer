@@ -3,7 +3,7 @@ import { describe, expect, mock, test } from "bun:test";
 mock.module("@Closer/auth/closer", () => ({
   db: {},
   getPairForParticipant: async () => ({
-    pair: { relationshipType: "friend" },
+    pair: { relationshipType: "friend", intendedPersonName: "Nima" },
     members: [{ slot: "first", displayName: "Ali" }],
   }),
   getParticipantByAuthUserId: async () => ({ id: "participant-1" }),
@@ -36,6 +36,7 @@ describe("Pair route entry", () => {
     expect(element.props).toMatchObject({
       isComplete: false,
       memberNames: ["Ali", null],
+      intendedPersonName: "Nima",
       pairId: "pair-1",
     });
   });

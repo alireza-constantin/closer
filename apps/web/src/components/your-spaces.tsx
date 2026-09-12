@@ -12,6 +12,7 @@ type SpaceSummary = {
   relationshipType: "partner" | "friend";
   state: "connected" | "waiting";
   otherParticipantDisplayName: string | null;
+  intendedPersonName: string | null;
 };
 
 function relationshipLabel(relationshipType: SpaceSummary["relationshipType"]) {
@@ -36,7 +37,7 @@ function SpaceCard({ space }: { space: SpaceSummary }) {
           {isWaiting ? "Not connected yet" : space.otherParticipantDisplayName}
         </strong>
         <span className="mt-1 block text-sm text-closer-muted">
-          {isWaiting ? `${relationship} space · invite when you’re ready` : relationship}
+          {isWaiting ? `${relationship} space · for ${space.intendedPersonName ?? "your person"}` : relationship}
         </span>
       </span>
       <ChevronRight aria-hidden="true" className="size-5 transition-transform duration-200 group-hover:translate-x-0.5" />

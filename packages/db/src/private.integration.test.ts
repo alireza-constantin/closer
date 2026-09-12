@@ -13,6 +13,7 @@ const {
   createPairForParticipant,
   getPrivateRoundForParticipant,
   getPrivateRoundStatusForParticipant,
+  issueInitialInvite,
   listActivePrivateConversations,
   listEligiblePrivateQuestions,
   markPrivateRevealViewed,
@@ -51,10 +52,11 @@ async function createParticipant(name: string) {
 
 async function createJoinedPair(relationshipType: "partner" | "friend" = "partner") {
   const first = await createParticipant("Ali");
-  const created = await createPairForParticipant(db, { participantId: first.id, relationshipType });
+  const created = await createPairForParticipant(db, { participantId: first.id, intendedPersonName: "Fafa", relationshipType });
   pairIds.push(created.pair.id);
   const second = await createParticipant("Fafa");
-  await redeemInitialInvite(db, { token: created.invite.token, participantId: second.id });
+  const invite = await issueInitialInvite(db, { participantId: first.id, pairId: created.pair.id });
+  await redeemInitialInvite(db, { token: invite.token, participantId: second.id });
   return { pairId: created.pair.id, first, second };
 }
 
@@ -104,7 +106,7 @@ afterAll(async () => { await db.$client.end(); });
 describe("Closer Slice 01B Private rounds", () => {
   test("Private requires both participant slots before a conversation can start", async () => {
     const first = await createParticipant("Solo participant");
-    const created = await createPairForParticipant(db, { participantId: first.id, relationshipType: "partner" });
+    const created = await createPairForParticipant(db, { participantId: first.id, intendedPersonName: "Fafa", relationshipType: "partner" });
     pairIds.push(created.pair.id);
 
     expect(await capture(startOrResumePrivateConversation(db, {
@@ -126,15 +128,17 @@ describe("Closer Slice 01B Private rounds", () => {
 
   test("Private conversations and relationship categories stay isolated across a participant's spaces", async () => {
     const first = await createParticipant("Ali");
-    const partnerSpace = await createPairForParticipant(db, { participantId: first.id, relationshipType: "partner" });
+    const partnerSpace = await createPairForParticipant(db, { participantId: first.id, intendedPersonName: "Fafa", relationshipType: "partner" });
     pairIds.push(partnerSpace.pair.id);
     const partner = await createParticipant("Fafa");
-    await redeemInitialInvite(db, { token: partnerSpace.invite.token, participantId: partner.id });
+    const partnerInvite = await issueInitialInvite(db, { participantId: first.id, pairId: partnerSpace.pair.id });
+    await redeemInitialInvite(db, { token: partnerInvite.token, participantId: partner.id });
 
-    const friendSpace = await createPairForParticipant(db, { participantId: first.id, relationshipType: "friend" });
+    const friendSpace = await createPairForParticipant(db, { participantId: first.id, intendedPersonName: "Nima", relationshipType: "friend" });
     pairIds.push(friendSpace.pair.id);
     const friend = await createParticipant("Nima");
-    await redeemInitialInvite(db, { token: friendSpace.invite.token, participantId: friend.id });
+    const friendInvite = await issueInitialInvite(db, { participantId: first.id, pairId: friendSpace.pair.id });
+    await redeemInitialInvite(db, { token: friendInvite.token, participantId: friend.id });
 
     const partnerRound = await createRound(partnerSpace.pair.id, first.id, questionIds.relationship);
     expect(await listActivePrivateConversations(db, { pairId: friendSpace.pair.id, participantId: first.id })).toEqual([]);

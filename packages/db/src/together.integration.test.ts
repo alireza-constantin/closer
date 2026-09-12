@@ -13,6 +13,7 @@ const {
   endTogetherSession,
   getTogetherSessionForParticipant,
   listEligibleTogetherQuestions,
+  issueInitialInvite,
   redeemInitialInvite,
   resolveOrCreateParticipant,
   setTogetherSessionLike,
@@ -48,12 +49,13 @@ async function createPair(
   joined = true,
 ) {
   const creator = await createParticipant("Creator");
-  const result = await createPairForParticipant(db, { participantId: creator.id, relationshipType });
+  const result = await createPairForParticipant(db, { participantId: creator.id, intendedPersonName: "Other person", relationshipType });
   createdPairIds.push(result.pair.id);
   if (!joined) return { ...result, creator, invitee: null };
 
+  const invite = await issueInitialInvite(db, { participantId: creator.id, pairId: result.pair.id });
   const invitee = await createParticipant("Other");
-  await redeemInitialInvite(db, { token: result.invite.token, participantId: invitee.id });
+  await redeemInitialInvite(db, { token: invite.token, participantId: invitee.id });
   return { ...result, creator, invitee };
 }
 

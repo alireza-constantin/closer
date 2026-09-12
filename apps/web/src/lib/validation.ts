@@ -10,7 +10,13 @@ export const onboardingSchema = z.object({
   displayName: displayNameSchema,
 });
 
+export const intendedPersonNameValueSchema = displayNameSchema;
+export const intendedPersonNameSchema = z.object({
+  intendedPersonName: intendedPersonNameValueSchema,
+});
+
 export const createPairSchema = z.object({
+  intendedPersonName: intendedPersonNameValueSchema,
   relationshipType: z.enum(["partner", "friend"]),
 });
 
@@ -44,6 +50,7 @@ export const signUpSchema = z.object({
 });
 
 export type CreatePairValues = z.infer<typeof createPairSchema>;
+export type IntendedPersonNameValues = z.infer<typeof intendedPersonNameSchema>;
 export type OnboardingValues = z.infer<typeof onboardingSchema>;
 export type JoinPairValues = z.infer<typeof joinPairSchema>;
 export type PrivateAnswerValues = z.infer<typeof privateAnswerSchema>;

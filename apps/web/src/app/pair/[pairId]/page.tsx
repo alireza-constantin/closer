@@ -29,6 +29,7 @@ export default async function PairPage({ params }: { params: Promise<{ pairId: s
       <PairHome
         activeConversations={activeConversations}
         hasMultipleSpaces={spaces.length > 1}
+        intendedPersonName={pairView.pair.intendedPersonName}
         isComplete={Boolean(secondMember)}
         memberNames={[firstMember.displayName, secondMember?.displayName ?? null]}
         pairId={pairId}

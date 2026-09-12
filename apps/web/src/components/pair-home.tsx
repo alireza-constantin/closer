@@ -1,16 +1,24 @@
 "use client";
 
-import { ChevronRight, LockKeyhole, MessageCircleMore, Sparkles } from "lucide-react";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { Check, ChevronRight, LockKeyhole, MessageCircleMore, Pencil, Sparkles, X } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
+import { useForm } from "react-hook-form";
 
+import { Button } from "@Closer/ui/components/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from "@Closer/ui/components/empty";
+import { Field, FieldError, FieldLabel } from "@Closer/ui/components/field";
+import { Input } from "@Closer/ui/components/input";
 import { cn } from "@Closer/ui/lib/utils";
 
+import { AsyncButton } from "@/components/closer/async-button";
 import { CloserCompanions, CloserPageShell, CloserTopbar } from "@/components/closer/page-shell";
+import { FormServerError } from "@/components/closer/feedback";
 import { CloserModeCard } from "@/components/closer/navigation";
 import { CloserPageTitle, CloserSubtitle } from "@/components/closer/typography";
 import { useVisiblePolling } from "@/hooks/use-visible-polling";
+import { intendedPersonNameSchema, type IntendedPersonNameValues } from "@/lib/validation";
 
 export const ACTIVE_CONVERSATIONS_POLL_INTERVAL_MS = 3_500;
 
@@ -83,15 +91,91 @@ function ConversationCard({ pairId, conversation }: { pairId: string; conversati
   );
 }
 
+function UnclaimedPersonName({ pairId, initialName }: { pairId: string; initialName: string | null }) {
+  const [name, setName] = useState(initialName ?? "your person");
+  const [editing, setEditing] = useState(false);
+  const form = useForm<IntendedPersonNameValues>({
+    defaultValues: { intendedPersonName: initialName ?? "" },
+    mode: "onChange",
+    resolver: zodResolver(intendedPersonNameSchema),
+  });
+
+  async function save(values: IntendedPersonNameValues) {
+    form.clearErrors("root.server");
+    try {
+      const response = await fetch(`/api/pairs/${encodeURIComponent(pairId)}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(values),
+      });
+      const body: unknown = await response.json();
+      if (!response.ok || !body || typeof body !== "object" || !("intendedPersonName" in body) || typeof body.intendedPersonName !== "string") {
+        const message = body && typeof body === "object" && "error" in body && typeof body.error === "string" ? body.error : "INTENDED_PERSON_NAME_INVALID";
+        form.setError("root.server", { message });
+        return;
+      }
+      setName(body.intendedPersonName);
+      setEditing(false);
+    } catch {
+      form.setError("root.server", { message: "We could not save that name. Please try again." });
+    }
+  }
+
+  if (!editing) {
+    return (
+      <section className="mt-5 rounded-[1.2rem] bg-white/60 px-4 py-3.5" aria-label="Unclaimed space details">
+        <div className="flex items-center justify-between gap-3">
+          <p className="min-w-0 text-sm leading-relaxed text-closer-muted">Waiting for <strong className="text-closer-navy">{name}</strong> to join.</p>
+          <Button className="shrink-0" onClick={() => setEditing(true)} size="sm" type="button" variant="ghost">
+            <Pencil aria-hidden="true" data-icon="inline-start" />
+            Edit name
+          </Button>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <form className="mt-5 rounded-[1.2rem] bg-white/60 p-4" onSubmit={form.handleSubmit(save)}>
+      <Field data-invalid={!!form.formState.errors.intendedPersonName}>
+        <FieldLabel htmlFor="pair-intended-person-name">Who is this space for?</FieldLabel>
+        <Input
+          {...form.register("intendedPersonName")}
+          aria-describedby={form.formState.errors.intendedPersonName ? "pair-intended-person-name-error" : undefined}
+          aria-invalid={!!form.formState.errors.intendedPersonName}
+          autoComplete="off"
+          id="pair-intended-person-name"
+          maxLength={40}
+        />
+        <FieldError errors={form.formState.errors.intendedPersonName ? [form.formState.errors.intendedPersonName] : undefined} id="pair-intended-person-name-error" />
+      </Field>
+      {form.formState.errors.root?.server?.message === "INTENDED_PERSON_NAME_INVALID" ? <FormServerError>Enter a name between 1 and 40 characters.</FormServerError> : null}
+      {form.formState.errors.root?.server?.message && form.formState.errors.root.server.message !== "INTENDED_PERSON_NAME_INVALID" ? <FormServerError>{form.formState.errors.root.server.message}</FormServerError> : null}
+      <div className="mt-3 flex gap-2">
+        <AsyncButton className="flex-1" pending={form.formState.isSubmitting} pendingText="Saving…" size="sm" type="submit">
+          <Check aria-hidden="true" data-icon="inline-start" />
+          Save name
+        </AsyncButton>
+        <Button onClick={() => { form.reset({ intendedPersonName: name === "your person" ? "" : name }); setEditing(false); }} size="sm" type="button" variant="ghost">
+          <X aria-hidden="true" data-icon="inline-start" />
+          Cancel
+        </Button>
+      </div>
+    </form>
+  );
+}
+
 export default function PairHome({
   pairId,
   memberNames,
+  intendedPersonName,
   isComplete,
   hasMultipleSpaces,
   activeConversations: initialActiveConversations,
 }: {
   pairId: string;
   memberNames: [string, string | null];
+  intendedPersonName: string | null;
   isComplete: boolean;
   hasMultipleSpaces: boolean;
   activeConversations: ActiveConversation[];
@@ -126,6 +210,7 @@ export default function PairHome({
         <CloserModeCard href={`/pair/${pairId}/together`} kind="together" icon={<MessageCircleMore aria-hidden="true" />} title="Talk Together" description="Use this phone and talk face-to-face" />
         <CloserModeCard href={`/pair/${pairId}/private`} kind="private" icon={<LockKeyhole aria-hidden="true" />} title="Answer Privately" description={isComplete ? "Answer separately, reveal together" : "Invite them to answer separately"} />
       </section>
+      {!isComplete ? <UnclaimedPersonName initialName={intendedPersonName} pairId={pairId} /> : null}
       {!isComplete ? <Link className="mx-auto mt-5 block w-fit text-xs text-closer-muted underline-offset-4 hover:text-closer-navy hover:underline" href={`/pair/${pairId}/invite` as never}>Invite them to Closer</Link> : null}
       {activeConversations.length > 0 ? (
         <section className="mt-8" aria-labelledby="private-conversations-heading">

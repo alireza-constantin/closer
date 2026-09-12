@@ -7,6 +7,7 @@ const redirect = mock((destination: string): never => {
 });
 
 mock.module("@Closer/auth/closer", () => ({
+  createPairForParticipant: async () => ({ pair: { id: "pair-1", intendedPersonName: "Nima" } }),
   db: {},
   getPairForParticipant: async () => ({
     pair: { relationshipType: "friend" },
@@ -52,5 +53,26 @@ describe("root entry", () => {
 
     expect(element.type).toBe("zero-space-home");
     expect(element.props).toEqual({ displayName: "Ari" });
+  });
+
+  test("fast-paths exactly one active Space to its Pair Home", async () => {
+    getCurrentParticipant.mockResolvedValueOnce({ id: "participant-1", displayName: "Ari" });
+    listActivePairsForParticipant.mockResolvedValueOnce([{ pairId: "pair-1" }]);
+
+    await expect(Home()).rejects.toThrow("REDIRECT:/pair/pair-1");
+  });
+
+  test("shows every active Space when a Participant has multiple Spaces", async () => {
+    const spaces = [
+      { pairId: "pair-1", relationshipType: "partner", state: "waiting", otherParticipantDisplayName: null, intendedPersonName: "Nima" },
+      { pairId: "pair-2", relationshipType: "friend", state: "connected", otherParticipantDisplayName: "Sara", intendedPersonName: null },
+    ];
+    getCurrentParticipant.mockResolvedValueOnce({ id: "participant-1", displayName: "Ari" });
+    listActivePairsForParticipant.mockResolvedValueOnce(spaces);
+
+    const element = await Home();
+
+    expect(element.type).toBe("your-spaces");
+    expect(element.props).toEqual({ spaces });
   });
 });

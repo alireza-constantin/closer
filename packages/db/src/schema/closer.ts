@@ -49,9 +49,16 @@ export const participant = pgTable(
 export const pair = pgTable("pair", {
   id: uuid("id").defaultRandom().primaryKey(),
   relationshipType: pairRelationshipType("relationship_type").notNull(),
+  intendedPersonName: text("intended_person_name"),
   creationRequestId: uuid("creation_request_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-}, (table) => [uniqueIndex("pair_creation_request_uidx").on(table.creationRequestId)]);
+}, (table) => [
+  uniqueIndex("pair_creation_request_uidx").on(table.creationRequestId),
+  check(
+    "pair_intended_person_name_valid",
+    sql`${table.intendedPersonName} is null or (char_length(${table.intendedPersonName}) between 1 and 40 and ${table.intendedPersonName} = btrim(${table.intendedPersonName}))`,
+  ),
+]);
 
 export const pairMembership = pgTable(
   "pair_membership",

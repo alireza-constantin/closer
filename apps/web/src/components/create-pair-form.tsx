@@ -5,7 +5,6 @@ import { LockKeyhole, MessageCircleMore, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useRef, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
-import { useRouter } from "next/navigation";
 
 import {
   Field,
@@ -23,56 +22,19 @@ import { CloserModeCard } from "@/components/closer/navigation";
 import { OnboardingIcon, OnboardingSurface } from "@/components/closer/onboarding-surface";
 import { FormServerError } from "@/components/closer/feedback";
 import { CloserEyebrow } from "@/components/closer/typography";
-import { useVisiblePolling } from "@/hooks/use-visible-polling";
 import { createPairSchema, type CreatePairValues } from "@/lib/validation";
 
-type PairCreation = { pairId: string; inviteToken: string; expiresAt: string };
+import { Input } from "@Closer/ui/components/input";
 
-const PAIR_STATUS_POLL_INTERVAL_MS = 4_000;
-
-function isConnectedPairStatus(value: unknown): value is { state: "connected"; otherParticipantDisplayName: string } {
-  return (
-    !!value &&
-    typeof value === "object" &&
-    "state" in value &&
-    value.state === "connected" &&
-    "otherParticipantDisplayName" in value &&
-    typeof value.otherParticipantDisplayName === "string"
-  );
-}
+type PairCreation = { pairId: string };
 
 export default function CreatePairForm({ isFirstSpace = true }: { isFirstSpace?: boolean }) {
-  const router = useRouter();
   const [result, setResult] = useState<PairCreation | null>(null);
-  const [joinedDisplayName, setJoinedDisplayName] = useState<string | null>(null);
   const creationRequestIdRef = useRef<string | null>(null);
   const form = useForm<CreatePairValues>({
-    defaultValues: { relationshipType: "partner" },
+    defaultValues: { intendedPersonName: "", relationshipType: "partner" },
     mode: "onChange",
     resolver: zodResolver(createPairSchema),
-  });
-
-  useVisiblePolling({
-    enabled: result !== null && joinedDisplayName === null,
-    forceOnForeground: true,
-    intervalMs: PAIR_STATUS_POLL_INTERVAL_MS,
-    onPoll: async (signal) => {
-      if (!result) return;
-      try {
-        const response = await fetch(`/api/pairs/${encodeURIComponent(result.pairId)}/status`, { cache: "no-store", signal });
-        if (!response.ok) return;
-        const status: unknown = await response.json();
-        if (!isConnectedPairStatus(status)) return;
-        setJoinedDisplayName(status.otherParticipantDisplayName);
-        try {
-          router.replace(`/pair/${result.pairId}` as never);
-        } catch {
-          window.location.assign(`/pair/${result.pairId}`);
-        }
-      } catch {
-        // Keep the invite state intact; the next foreground check can recover.
-      }
-    },
   });
 
   async function createPair(values: CreatePairValues) {
@@ -86,12 +48,12 @@ export default function CreatePairForm({ isFirstSpace = true }: { isFirstSpace?:
         body: JSON.stringify({ ...values, clientRequestId }),
       });
       const body: unknown = await response.json();
-      if (!response.ok || !body || typeof body !== "object" || !("pairId" in body)) {
+      if (!response.ok || !body || typeof body !== "object" || !("pairId" in body) || typeof body.pairId !== "string") {
         const message = body && typeof body === "object" && "error" in body ? body.error : null;
         form.setError("root.server", { message: typeof message === "string" ? message : "We could not create your space." });
         return;
       }
-      setResult(body as PairCreation);
+      setResult({ pairId: body.pairId as string });
     } catch {
       form.setError("root.server", { message: "We could not create your space." });
     }
@@ -109,7 +71,6 @@ export default function CreatePairForm({ isFirstSpace = true }: { isFirstSpace?:
           <CloserModeCard href={`/pair/${result.pairId}/private`} kind="private" icon={<LockKeyhole aria-hidden="true" />} title="Private" description="Answer separately on your own phones." />
         </div>
         <Link className="mt-5 text-sm font-bold text-closer-muted underline-offset-4 hover:text-closer-navy hover:underline" href={`/pair/${result.pairId}` as never}>I’ll choose later</Link>
-        {joinedDisplayName ? <p className="mt-4 inline-flex items-center gap-2 rounded-full bg-closer-mint px-3 py-2 text-sm text-closer-success-foreground" role="status"><strong>{joinedDisplayName}</strong> joined. Opening your shared space…</p> : null}
         {form.formState.errors.root?.server?.message ? <FormServerError>{form.formState.errors.root.server.message}</FormServerError> : null}
       </OnboardingSurface>
     );
@@ -122,6 +83,19 @@ export default function CreatePairForm({ isFirstSpace = true }: { isFirstSpace?:
       <h1 className="mt-3 max-w-[12ch] text-balance text-4xl font-extrabold leading-[1.03] tracking-[-.055em]">{isFirstSpace ? "Let’s create your space" : "Create another space"}</h1>
       <p className="mt-3 max-w-[31ch] text-[.98rem] leading-relaxed text-closer-muted">{isFirstSpace ? "A gentle place for the conversations that matter." : "A separate little place for another person who matters."}</p>
       <FieldGroup className="mt-6 gap-4">
+        <Field data-invalid={!!form.formState.errors.intendedPersonName}>
+          <FieldLabel htmlFor="intended-person-name">Who is this space for?</FieldLabel>
+          <Input
+            {...form.register("intendedPersonName")}
+            aria-describedby={form.formState.errors.intendedPersonName ? "intended-person-name-error" : undefined}
+            aria-invalid={!!form.formState.errors.intendedPersonName}
+            autoComplete="off"
+            id="intended-person-name"
+            maxLength={40}
+            placeholder="Their name"
+          />
+          <FieldError errors={form.formState.errors.intendedPersonName ? [form.formState.errors.intendedPersonName] : undefined} id="intended-person-name-error" />
+        </Field>
         <FieldSet data-invalid={!!form.formState.errors.relationshipType}>
           <FieldLegend variant="label">Who are you creating this with?</FieldLegend>
           <Controller

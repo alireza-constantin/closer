@@ -20,6 +20,7 @@ const {
   redeemInitialInvite,
   resolveOrCreateParticipant,
   revokeInitialInvites,
+  updateIntendedPersonName,
 } = await import("./closer");
 const { initialInvite, pair, pairMembership, participant, rejoinInvite } = await import("./schema/closer");
 const { user } = await import("./schema/auth");
@@ -48,9 +49,10 @@ async function createParticipant(displayName: string) {
 
 async function createPair(displayName = "Creator", relationshipType: "partner" | "friend" = "partner") {
   const creator = await createParticipant(displayName);
-  const result = await createPairForParticipant(db, { participantId: creator.id, relationshipType });
+  const result = await createPairForParticipant(db, { participantId: creator.id, intendedPersonName: "Their person", relationshipType });
   createdPairIds.push(result.pair.id);
-  return { creator, ...result };
+  const invite = await issueInitialInvite(db, { participantId: creator.id, pairId: result.pair.id });
+  return { creator, ...result, invite };
 }
 
 async function captureError(promise: Promise<unknown>) {
@@ -129,9 +131,9 @@ describe("Closer Slice 01A", () => {
   test("retries the same pair-creation request without creating a duplicate pair", async () => {
     const creator = await createParticipant("Retry creator");
     const clientRequestId = randomUUID();
-    const first = await createPairForParticipant(db, { participantId: creator.id, relationshipType: "partner", clientRequestId });
+    const first = await createPairForParticipant(db, { participantId: creator.id, intendedPersonName: "Retry person", relationshipType: "partner", clientRequestId });
     createdPairIds.push(first.pair.id);
-    const second = await createPairForParticipant(db, { participantId: creator.id, relationshipType: "partner", clientRequestId });
+    const second = await createPairForParticipant(db, { participantId: creator.id, intendedPersonName: "Retry person", relationshipType: "partner", clientRequestId });
 
     expect(second.pair.id).toBe(first.pair.id);
     expect(await db.select().from(pair).where(eq(pair.id, first.pair.id))).toHaveLength(1);
@@ -163,11 +165,59 @@ describe("Closer Slice 01A", () => {
     ]);
   });
 
+  test("requires and preserves a pair-local intended name without issuing an invitation", async () => {
+    const creator = await createParticipant("Creator");
+    const created = await createPairForParticipant(db, {
+      participantId: creator.id,
+      intendedPersonName: "  Nima  ",
+      relationshipType: "friend",
+    });
+    createdPairIds.push(created.pair.id);
+
+    expect(created.pair.intendedPersonName).toBe("Nima");
+    expect(await db.select().from(initialInvite).where(eq(initialInvite.pairId, created.pair.id))).toEqual([]);
+    expect(await listActivePairsForParticipant(db, creator.id)).toEqual([
+      expect.objectContaining({
+        pairId: created.pair.id,
+        intendedPersonName: "Nima",
+        relationshipType: "friend",
+        state: "waiting",
+      }),
+    ]);
+
+    const updated = await updateIntendedPersonName(db, {
+      participantId: creator.id,
+      pairId: created.pair.id,
+      intendedPersonName: "  Leila  ",
+    });
+    expect(updated.intendedPersonName).toBe("Leila");
+    expect(await listActivePairsForParticipant(db, creator.id)).toEqual([
+      expect.objectContaining({ intendedPersonName: "Leila", state: "waiting" }),
+    ]);
+    expect(await captureError(updateIntendedPersonName(db, {
+      participantId: creator.id,
+      pairId: created.pair.id,
+      intendedPersonName: "   ",
+    }))).toMatchObject({ code: "INTENDED_PERSON_NAME_INVALID" });
+  });
+
+  test("does not allow an intended name edit after the second slot is occupied", async () => {
+    const created = await createPair();
+    const invitee = await createParticipant("Invitee");
+    await redeemInitialInvite(db, { token: created.invite.token, participantId: invitee.id });
+
+    expect(await captureError(updateIntendedPersonName(db, {
+      participantId: created.creator.id,
+      pairId: created.pair.id,
+      intendedPersonName: "Changed label",
+    }))).toMatchObject({ code: "PAIR_ALREADY_CLAIMED" });
+  });
+
   test("one participant can keep Partner, Friend, and multiple Friend spaces active", async () => {
     const creator = await createParticipant("Ali");
-    const partner = await createPairForParticipant(db, { participantId: creator.id, relationshipType: "partner" });
-    const friend = await createPairForParticipant(db, { participantId: creator.id, relationshipType: "friend" });
-    const anotherFriend = await createPairForParticipant(db, { participantId: creator.id, relationshipType: "friend" });
+    const partner = await createPairForParticipant(db, { participantId: creator.id, intendedPersonName: "Partner person", relationshipType: "partner" });
+    const friend = await createPairForParticipant(db, { participantId: creator.id, intendedPersonName: "Friend person", relationshipType: "friend" });
+    const anotherFriend = await createPairForParticipant(db, { participantId: creator.id, intendedPersonName: "Another friend", relationshipType: "friend" });
     createdPairIds.push(partner.pair.id, friend.pair.id, anotherFriend.pair.id);
 
     const friendSpaces = await listActivePairsForParticipant(db, creator.id);
@@ -206,7 +256,7 @@ describe("Closer Slice 01A", () => {
     const participant = await createParticipant("Ali");
     await redeemInitialInvite(db, { token: completedSpace.invite.token, participantId: participant.id });
 
-    const pendingSpace = await createPairForParticipant(db, { participantId: participant.id, relationshipType: "friend" });
+    const pendingSpace = await createPairForParticipant(db, { participantId: participant.id, intendedPersonName: "Pending friend", relationshipType: "friend" });
     createdPairIds.push(pendingSpace.pair.id);
 
     expect(await listActivePairsForParticipant(db, participant.id)).toEqual(expect.arrayContaining([

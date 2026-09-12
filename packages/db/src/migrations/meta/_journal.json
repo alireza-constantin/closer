@@ -43,6 +43,13 @@
       "when": 1789130004863,
       "tag": "0005_young_klaw",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1789205073658,
+      "tag": "0006_add_intended_person_name",
+      "breakpoints": true
     }
   ]
 }

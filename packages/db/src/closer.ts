@@ -34,8 +34,11 @@ export class CloserDomainError extends Error {
   constructor(
     readonly code:
       | "DISPLAY_NAME_INVALID"
+      | "INTENDED_PERSON_NAME_INVALID"
       | "RELATIONSHIP_TYPE_INVALID"
       | "PAIR_CREATION_REQUEST_INVALID"
+      | "PARTICIPANT_NOT_FOUND"
+      | "PAIR_ALREADY_CLAIMED"
       | "UNAUTHENTICATED"
       | "PAIR_NOT_FOUND"
       | "INVITE_UNAVAILABLE"
@@ -64,6 +67,15 @@ function normalizeDisplayName(value: string) {
     throw new CloserDomainError("DISPLAY_NAME_INVALID");
   }
   return displayName;
+}
+
+function normalizeIntendedPersonName(value: unknown) {
+  if (typeof value !== "string") throw new CloserDomainError("INTENDED_PERSON_NAME_INVALID");
+  const intendedPersonName = value.trim();
+  if (intendedPersonName.length < 1 || intendedPersonName.length > 40) {
+    throw new CloserDomainError("INTENDED_PERSON_NAME_INVALID");
+  }
+  return intendedPersonName;
 }
 
 function assertRelationshipType(value: string): asserts value is RelationshipType {
@@ -157,6 +169,7 @@ export async function listActivePairsForParticipant(database: Database, particip
     .select({
       pairId: pairMembership.pairId,
       relationshipType: pair.relationshipType,
+      intendedPersonName: pair.intendedPersonName,
     })
     .from(pairMembership)
     .innerJoin(pair, eq(pairMembership.pairId, pair.id))
@@ -193,6 +206,7 @@ export async function listActivePairsForParticipant(database: Database, particip
       relationshipType: membership.relationshipType,
       state: otherMember ? ("connected" as const) : ("waiting" as const),
       otherParticipantDisplayName: otherMember?.displayName ?? null,
+      intendedPersonName: otherMember ? null : membership.intendedPersonName,
     };
   });
 }
@@ -258,16 +272,24 @@ async function issueInitialInviteInTransaction(
 
 export async function createPairForParticipant(
   database: Database,
-  input: { participantId: string; relationshipType: string; clientRequestId?: string },
+  input: { participantId: string; intendedPersonName: string; relationshipType: string; clientRequestId?: string },
 ) {
   const relationshipType = input.relationshipType;
   assertRelationshipType(relationshipType);
+  const intendedPersonName = normalizeIntendedPersonName(input.intendedPersonName);
   if (input.clientRequestId && !isUuid(input.clientRequestId)) throw new CloserDomainError("PAIR_CREATION_REQUEST_INVALID");
+
+  const existingParticipant = await database
+    .select({ id: participant.id })
+    .from(participant)
+    .where(eq(participant.id, input.participantId))
+    .limit(1);
+  if (!existingParticipant[0]) throw new CloserDomainError("PARTICIPANT_NOT_FOUND");
 
   return database.transaction(async (tx) => {
     const pairs = await tx
       .insert(pair)
-      .values({ relationshipType, creationRequestId: input.clientRequestId })
+      .values({ relationshipType, intendedPersonName, creationRequestId: input.clientRequestId })
       .onConflictDoNothing({ target: pair.creationRequestId })
       .returning();
     let createdPair = pairs[0];
@@ -279,10 +301,7 @@ export async function createPairForParticipant(
         .where(eq(pair.creationRequestId, input.clientRequestId))
         .limit(1);
       createdPair = existing[0]?.pair;
-      if (createdPair) {
-        const invite = await issueInitialInviteInTransaction(tx, createdPair.id);
-        return { pair: createdPair, invite };
-      }
+      if (createdPair) return { pair: createdPair };
     }
     if (!createdPair) throw new Error("Pair creation did not return a pair.");
 
@@ -292,8 +311,40 @@ export async function createPairForParticipant(
       slot: "first",
     });
 
-    const invite = await issueInitialInviteInTransaction(tx, createdPair.id);
-    return { pair: createdPair, invite };
+    return { pair: createdPair };
+  });
+}
+
+export async function updateIntendedPersonName(
+  database: Database,
+  input: { participantId: string; pairId: string; intendedPersonName: string },
+) {
+  const intendedPersonName = normalizeIntendedPersonName(input.intendedPersonName);
+  await requireActivePairAccess(database, input.participantId, input.pairId);
+
+  return database.transaction(async (transaction) => {
+    const tx = transaction as unknown as Database;
+    await tx.execute(sql`select id from "pair" where id = ${input.pairId} for update`);
+    const secondMember = await tx
+      .select({ id: pairMembership.id })
+      .from(pairMembership)
+      .where(
+        and(
+          eq(pairMembership.pairId, input.pairId),
+          eq(pairMembership.slot, "second"),
+          isNull(pairMembership.endedAt),
+        ),
+      )
+      .limit(1);
+    if (secondMember[0]) throw new CloserDomainError("PAIR_ALREADY_CLAIMED");
+
+    const updated = await tx
+      .update(pair)
+      .set({ intendedPersonName })
+      .where(eq(pair.id, input.pairId))
+      .returning();
+    if (!updated[0]) throw new CloserDomainError("PAIR_NOT_FOUND");
+    return updated[0];
   });
 }
 
