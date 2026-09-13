@@ -51,7 +51,6 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
   const router = useRouter();
   const [round, setRound] = useState(initialRound);
   const [isRevealing, setIsRevealing] = useState(false);
-  const [isStartingNext, setIsStartingNext] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const answerForm = useForm<PrivateAnswerValues>({
     defaultValues: { body: initialRound.yourAnswer ?? "" },
@@ -158,22 +157,6 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
       replyForm.reset({ body: "" });
     } catch {
       setError("We couldn’t remove that reply. Please try again.");
-    }
-  }
-
-  async function startNextQuestion() {
-    setError(null);
-    setIsStartingNext(true);
-    const clientRequestId = crypto.randomUUID();
-    try {
-      const response = await fetch(`/api/pairs/${encodeURIComponent(round.pairId)}/private-conversations/${encodeURIComponent(round.conversation.id)}/next`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ clientRequestId }) });
-      const next: unknown = await response.json();
-      if (!response.ok || !next || typeof next !== "object" || !("roundId" in next) || typeof next.roundId !== "string") throw new Error();
-      router.push(`/pair/${round.pairId}/private/round/${next.roundId}` as never);
-    } catch {
-      setError("We couldn’t start the next question. Please try again.");
-    } finally {
-      setIsStartingNext(false);
     }
   }
 
@@ -285,7 +268,7 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
           </div>
         </form>
         {round.replies?.filter((item) => !item.isOwner).map((item) => <p className="px-1.5 py-3 text-[.9rem] leading-relaxed text-closer-muted" key={item.participantId}><strong className="text-closer-navy">{item.displayName}</strong> {item.body}</p>)}
-        <AsyncButton className="mt-2.5 w-full" onClick={() => void startNextQuestion()} pending={isStartingNext} pendingText="Starting…" size="lg" type="button" variant="secondary">Next question</AsyncButton>
+        <Button className="mt-2.5 w-full" onClick={() => router.push(`/pair/${round.pairId}/private` as never)} size="lg" type="button" variant="secondary">Choose another topic</Button>
         <Button className="mx-auto mt-2 block" onClick={() => router.push(`/pair/${round.pairId}` as never)} size="sm" type="button" variant="ghost">Back to Closer</Button>
         {error ? <ActionError>{error}</ActionError> : null}
       </section>

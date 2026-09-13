@@ -221,6 +221,7 @@ export const privateQuestionCandidate = pgTable(
       .notNull()
       .references(() => questionRevision.id, { onDelete: "restrict" }),
     state: privateQuestionCandidateState("state").notNull().default("unresolved"),
+    liked: boolean("liked").notNull().default(false),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     resolvedAt: timestamp("resolved_at"),
   },
@@ -251,6 +252,7 @@ export const privateRound = pgTable(
     questionRevisionId: uuid("question_revision_id")
       .notNull()
       .references(() => questionRevision.id, { onDelete: "restrict" }),
+    questionNumber: integer("question_number").notNull(),
     initiatorParticipantId: uuid("initiator_participant_id")
       .notNull()
       .references(() => participant.id, { onDelete: "restrict" }),
@@ -270,6 +272,8 @@ export const privateRound = pgTable(
     }).onDelete("cascade"),
     index("private_round_pair_created_idx").on(table.pairId, table.createdAt),
     index("private_round_conversation_created_idx").on(table.conversationId, table.createdAt),
+    uniqueIndex("private_round_conversation_number_uidx").on(table.conversationId, table.questionNumber),
+    check("private_round_question_number_positive", sql`${table.questionNumber} > 0`),
     uniqueIndex("private_round_idempotency_uidx")
       .on(table.pairId, table.initiatorParticipantId, table.clientRequestId)
       .where(sql`${table.clientRequestId} is not null`),

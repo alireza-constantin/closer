@@ -1610,10 +1610,10 @@ async function eligiblePrivateQuestions(
 
 async function latestRoundForConversation(database: Database, conversationId: string) {
   const rows = await database
-    .select({ id: privateRound.id, questionId: privateRound.questionId, questionRevisionId: privateRound.questionRevisionId, createdAt: privateRound.createdAt })
+    .select({ id: privateRound.id, questionId: privateRound.questionId, questionRevisionId: privateRound.questionRevisionId, questionNumber: privateRound.questionNumber })
     .from(privateRound)
     .where(eq(privateRound.conversationId, conversationId))
-    .orderBy(desc(privateRound.createdAt), desc(privateRound.id))
+    .orderBy(desc(privateRound.questionNumber))
     .limit(1);
   return rows[0] ?? null;
 }
@@ -1635,39 +1635,43 @@ async function privateRoundIsUnresolved(database: Database, roundId: string) {
   return revealViews.length < 2;
 }
 
-async function nextEligibleQuestionForConversation(
-  database: Database,
-  input: { pairId: string; conversationId: string; relationshipType: RelationshipType; category: QuestionCategory; latestQuestionId?: string },
-) {
-  // Callers hold a row lock inside one PostgreSQL transaction. This client must
-  // execute those reads serially; parallel queries on it trigger driver warnings.
-  const eligible = await eligiblePrivateQuestions(database, { relationshipType: input.relationshipType, category: input.category });
-  const conversationUsage = await database
-    .select({ questionId: privateRound.questionId })
-    .from(privateRound)
-    .where(eq(privateRound.conversationId, input.conversationId));
-  const pairUsage = await database
-    .select({ questionId: privateRound.questionId })
-    .from(privateRound)
-    .where(eq(privateRound.pairId, input.pairId));
-  if (!eligible.length) throw new CloserDomainError("QUESTION_UNAVAILABLE");
-
-  const conversationQuestionIds = new Set(conversationUsage.map((row) => row.questionId));
-  const pairQuestionIds = new Set(pairUsage.map((row) => row.questionId));
-  return eligible.toSorted((left, right) => {
-    const conversationUsageDifference = Number(conversationQuestionIds.has(left.id)) - Number(conversationQuestionIds.has(right.id));
-    if (conversationUsageDifference) return conversationUsageDifference;
-    const pairUsageDifference = Number(pairQuestionIds.has(left.id)) - Number(pairQuestionIds.has(right.id));
-    if (pairUsageDifference) return pairUsageDifference;
-    // When the whole category has been used, cycle rather than immediately
-    // repeating the current question when another eligible prompt exists.
-    const currentQuestionDifference = Number(left.id === input.latestQuestionId) - Number(right.id === input.latestQuestionId);
-    return currentQuestionDifference || left.id.localeCompare(right.id);
-  })[0]!;
-}
-
 function deterministicPrivateQuestionRank(seed: string, questionId: string) {
   return createHash("sha256").update(`${seed}:${questionId}`).digest("hex");
+}
+
+async function consumedPrivateQuestionIds(database: Database, conversationId: string) {
+  const asked = await database
+    .select({ questionId: privateRound.questionId })
+    .from(privateRound)
+    .where(eq(privateRound.conversationId, conversationId));
+  const skipped = await database
+    .select({ questionId: privateQuestionCandidate.questionId })
+    .from(privateQuestionCandidate)
+    .where(and(eq(privateQuestionCandidate.conversationId, conversationId), eq(privateQuestionCandidate.state, "skipped")));
+  return new Set([...asked, ...skipped].map((item) => item.questionId));
+}
+
+async function mutuallyCompletedPrivateRoundCount(database: Database, conversationId: string) {
+  const rounds = await database
+    .select({ id: privateRound.id })
+    .from(privateRound)
+    .where(eq(privateRound.conversationId, conversationId));
+  let completed = 0;
+  for (const round of rounds) {
+    if (await answerCountForRound(database, round.id) !== 2) continue;
+    const revealViews = await database
+      .select({ id: privateRevealView.id })
+      .from(privateRevealView)
+      .where(eq(privateRevealView.roundId, round.id));
+    if (revealViews.length === 2) completed += 1;
+  }
+  return completed;
+}
+
+export function privateIntensityFallback(completedRoundCount: number): QuestionIntensity[] {
+  if (completedRoundCount >= 4) return ["deep", "medium", "light"];
+  if (completedRoundCount >= 2) return ["medium", "light", "deep"];
+  return ["light", "medium", "deep"];
 }
 
 async function selectPrivateQuestionCandidate(
@@ -1692,15 +1696,11 @@ async function selectPrivateQuestionCandidate(
   }
 
   const eligible = await eligiblePrivateQuestions(database, { relationshipType, category: conversation.category });
-  const usedRows = await database
-    .select({ questionId: privateRound.questionId })
-    .from(privateRound)
-    .where(eq(privateRound.conversationId, conversation.id));
-  const usedQuestionIds = new Set(usedRows.map((row) => row.questionId));
+  const usedQuestionIds = await consumedPrivateQuestionIds(database, conversation.id);
   const unused = eligible.filter((candidate) => !usedQuestionIds.has(candidate.id));
   if (!unused.length) return null;
 
-  const preferredIntensities: QuestionIntensity[] = ["light", "medium", "deep"];
+  const preferredIntensities = privateIntensityFallback(await mutuallyCompletedPrivateRoundCount(database, conversation.id));
   const preferred = preferredIntensities.find((intensity) => unused.some((candidate) => candidate.intensity === intensity));
   const selected = unused
     .filter((candidate) => candidate.intensity === preferred)
@@ -1815,7 +1815,7 @@ export async function getPrivateConversationForParticipant(
     .from(privateRound)
     .innerJoin(questionRevision, eq(privateRound.questionRevisionId, questionRevision.id))
     .where(eq(privateRound.conversationId, row.conversation.id))
-    .orderBy(desc(privateRound.createdAt), desc(privateRound.id))
+    .orderBy(desc(privateRound.questionNumber))
     .limit(1);
   if (currentRound[0] && await privateRoundIsUnresolved(database, currentRound[0].round.id)) {
     const [answers, revealViews] = await Promise.all([
@@ -1852,6 +1852,7 @@ export async function getPrivateConversationForParticipant(
       state: "CANDIDATE" as const,
       candidate: {
         id: unresolvedCandidate[0].candidate.id,
+        liked: unresolvedCandidate[0].candidate.liked,
         question: {
           id: unresolvedCandidate[0].candidate.questionId,
           questionRevisionId: unresolvedCandidate[0].candidate.questionRevisionId,
@@ -1864,8 +1865,7 @@ export async function getPrivateConversationForParticipant(
   }
   if (role === "creator") {
     const eligible = await eligiblePrivateQuestions(database, { relationshipType: access.pair.relationshipType, category: row.conversation.category });
-    const used = await database.select({ questionId: privateRound.questionId }).from(privateRound).where(eq(privateRound.conversationId, row.conversation.id));
-    const usedIds = new Set(used.map((item) => item.questionId));
+    const usedIds = await consumedPrivateQuestionIds(database, row.conversation.id);
     if (!eligible.some((candidate) => !usedIds.has(candidate.id))) return { ...base, state: "EXHAUSTED" as const, message: "You've reached the end for now." };
   }
   return { ...base, state: "WAITING_FOR_CREATOR" as const, message: `Waiting for ${creator.displayName} to choose a question.` };
@@ -1873,11 +1873,11 @@ export async function getPrivateConversationForParticipant(
 
 async function insertRoundForConversation(
   database: Database,
-  input: { pairId: string; conversationId: string; participantId: string; questionId: string; questionRevisionId: string; clientRequestId?: string },
+  input: { pairId: string; conversationId: string; participantId: string; questionId: string; questionRevisionId: string; questionNumber: number; clientRequestId?: string },
 ) {
   if (input.clientRequestId) {
     const existing = await database
-      .select({ id: privateRound.id, conversationId: privateRound.conversationId })
+      .select({ id: privateRound.id, conversationId: privateRound.conversationId, questionId: privateRound.questionId, questionRevisionId: privateRound.questionRevisionId })
       .from(privateRound)
       .where(
         and(
@@ -1888,7 +1888,11 @@ async function insertRoundForConversation(
       )
       .limit(1);
     if (existing[0]) {
-      if (existing[0].conversationId !== input.conversationId) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+      if (
+        existing[0].conversationId !== input.conversationId
+        || existing[0].questionId !== input.questionId
+        || existing[0].questionRevisionId !== input.questionRevisionId
+      ) throw new CloserDomainError("QUESTION_UNAVAILABLE");
       return { id: existing[0].id };
     }
   }
@@ -1900,6 +1904,7 @@ async function insertRoundForConversation(
       conversationId: input.conversationId,
       questionId: input.questionId,
       questionRevisionId: input.questionRevisionId,
+      questionNumber: input.questionNumber,
       initiatorParticipantId: input.participantId,
       clientRequestId: input.clientRequestId,
     })
@@ -1909,7 +1914,7 @@ async function insertRoundForConversation(
 
   if (!input.clientRequestId) throw new Error("Private round creation did not return a round.");
   const resolved = await database
-    .select({ id: privateRound.id, conversationId: privateRound.conversationId })
+    .select({ id: privateRound.id, conversationId: privateRound.conversationId, questionId: privateRound.questionId, questionRevisionId: privateRound.questionRevisionId })
     .from(privateRound)
     .where(
       and(
@@ -1920,7 +1925,11 @@ async function insertRoundForConversation(
     )
     .limit(1);
   if (!resolved[0]) throw new Error("Private round creation did not resolve.");
-  if (resolved[0].conversationId !== input.conversationId) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+  if (
+    resolved[0].conversationId !== input.conversationId
+    || resolved[0].questionId !== input.questionId
+    || resolved[0].questionRevisionId !== input.questionRevisionId
+  ) throw new CloserDomainError("QUESTION_UNAVAILABLE");
   return { id: resolved[0].id };
 }
 
@@ -1959,60 +1968,146 @@ export async function startOrResumePrivateConversation(
   }));
 }
 
-export async function createNextPrivateRound(
-  database: Database,
-  input: { participantId: string; pairId: string; conversationId: string; clientRequestId?: string },
+async function loadMutableCreatorCandidateInTransaction(
+  tx: Database,
+  input: { participantId: string; pairId: string; conversationId: string; candidateId: string },
 ) {
-  const access = await requireCompletePairAccess(database, input.participantId, input.pairId);
-  if (input.clientRequestId && !isUuid(input.clientRequestId)) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+  await tx.execute(sql`select id from "pair" where id = ${input.pairId} for update`);
+  const access = await requireCompletePairAccess(tx, input.participantId, input.pairId);
+  const activeEra = await getActiveMembershipEra(tx, input.pairId);
+  if (!activeEra) throw new CloserDomainError("PAIR_NOT_READY");
+  const conversations = await tx
+    .select()
+    .from(privateConversation)
+    .where(and(
+      eq(privateConversation.id, input.conversationId),
+      eq(privateConversation.pairId, input.pairId),
+      eq(privateConversation.membershipEraId, activeEra.id),
+      eq(privateConversation.createdByParticipantId, input.participantId),
+    ))
+    .limit(1);
+  const conversation = conversations[0];
+  if (!conversation) throw new CloserDomainError("CONVERSATION_NOT_FOUND");
+  await tx.execute(sql`select id from "private_conversation" where id = ${conversation.id} for update`);
+  await tx.execute(sql`select id from "private_question_candidate" where id = ${input.candidateId} for update`);
+  const candidates = await tx
+    .select({ candidate: privateQuestionCandidate, revision: questionRevision })
+    .from(privateQuestionCandidate)
+    .innerJoin(questionRevision, eq(privateQuestionCandidate.questionRevisionId, questionRevision.id))
+    .where(and(
+      eq(privateQuestionCandidate.id, input.candidateId),
+      eq(privateQuestionCandidate.conversationId, conversation.id),
+    ))
+    .limit(1);
+  const candidate = candidates[0];
+  if (!candidate) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+  return { access, conversation, candidate };
+}
 
+async function nextPrivateRoundNumber(database: Database, conversationId: string) {
+  const latest = await database
+    .select({ questionNumber: privateRound.questionNumber })
+    .from(privateRound)
+    .where(eq(privateRound.conversationId, conversationId))
+    .orderBy(desc(privateRound.questionNumber))
+    .limit(1);
+  return (latest[0]?.questionNumber ?? 0) + 1;
+}
+
+async function assertNoCurrentPrivateRound(database: Database, conversationId: string) {
+  const currentRound = await latestRoundForConversation(database, conversationId);
+  if (currentRound && await privateRoundIsUnresolved(database, currentRound.id)) {
+    throw new CloserDomainError("QUESTION_UNAVAILABLE");
+  }
+}
+
+export async function askPrivateQuestionCandidate(
+  database: Database,
+  input: { participantId: string; pairId: string; conversationId: string; candidateId: string; clientRequestId?: string },
+) {
+  if (input.clientRequestId && !isUuid(input.clientRequestId)) throw new CloserDomainError("QUESTION_UNAVAILABLE");
   return database.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
-    await tx.execute(sql`select id from "pair" where id = ${input.pairId} for update`);
-    await requireCompletePairAccess(tx, input.participantId, input.pairId);
-    const conversations = await tx
-      .select()
-      .from(privateConversation)
-      .where(
-        and(
-          eq(privateConversation.id, input.conversationId),
-          eq(privateConversation.pairId, input.pairId),
-          sql`exists (
-            select 1 from pair_membership_era active_era
-            where active_era.id = ${privateConversation.membershipEraId}
-              and active_era.ended_at is null
-          )`,
-        ),
-      )
-      .limit(1);
-    const conversation = conversations[0];
-    if (!conversation) throw new CloserDomainError("CONVERSATION_NOT_FOUND");
-    await tx.execute(sql`select id from "private_conversation" where id = ${conversation.id} for update`);
-
-    const currentRound = await latestRoundForConversation(tx, conversation.id);
-    if (!currentRound) throw new CloserDomainError("CONVERSATION_NOT_FOUND");
-    if (await answerCountForRound(tx, currentRound.id) < 2) {
-      // The first successful Next request may already have made this the new
-      // current round; returning it makes retries and double-clicks safe.
-      return { conversationId: conversation.id, roundId: currentRound.id, questionId: currentRound.questionId, questionRevisionId: currentRound.questionRevisionId };
+    const { conversation, candidate } = await loadMutableCreatorCandidateInTransaction(tx, input);
+    if (candidate.candidate.state === "asked") {
+      const rounds = await tx
+        .select({ id: privateRound.id })
+        .from(privateRound)
+        .where(and(
+          eq(privateRound.conversationId, conversation.id),
+          eq(privateRound.questionId, candidate.candidate.questionId),
+          eq(privateRound.questionRevisionId, candidate.candidate.questionRevisionId),
+        ))
+        .limit(1);
+      if (rounds[0]) return { conversationId: conversation.id, roundId: rounds[0].id };
+      throw new Error("Asked candidate did not resolve to a Round.");
+    }
+    if (candidate.candidate.state !== "unresolved") throw new CloserDomainError("QUESTION_UNAVAILABLE");
+    await assertNoCurrentPrivateRound(tx, conversation.id);
+    if (candidate.revision.withdrawnAt) {
+      await tx.update(privateQuestionCandidate).set({ state: "invalidated", resolvedAt: new Date() }).where(eq(privateQuestionCandidate.id, candidate.candidate.id));
+      throw new CloserDomainError("QUESTION_UNAVAILABLE");
     }
 
-    const nextQuestion = await nextEligibleQuestionForConversation(tx, {
-      pairId: input.pairId,
-      conversationId: conversation.id,
-      relationshipType: access.pair.relationshipType,
-      category: conversation.category,
-      latestQuestionId: currentRound.questionId,
-    });
-    const nextRound = await insertRoundForConversation(tx, {
+    const updated = await tx
+      .update(privateQuestionCandidate)
+      .set({ state: "asked", resolvedAt: new Date() })
+      .where(and(eq(privateQuestionCandidate.id, candidate.candidate.id), eq(privateQuestionCandidate.state, "unresolved")))
+      .returning({ id: privateQuestionCandidate.id });
+    if (!updated[0]) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+    const round = await insertRoundForConversation(tx, {
       pairId: input.pairId,
       conversationId: conversation.id,
       participantId: input.participantId,
-      questionId: nextQuestion.id,
-      questionRevisionId: nextQuestion.questionRevisionId,
+      questionId: candidate.candidate.questionId,
+      questionRevisionId: candidate.candidate.questionRevisionId,
+      questionNumber: await nextPrivateRoundNumber(tx, conversation.id),
       clientRequestId: input.clientRequestId,
     });
-    return { conversationId: conversation.id, roundId: nextRound.id, questionId: nextQuestion.id, questionRevisionId: nextQuestion.questionRevisionId };
+    return { conversationId: conversation.id, roundId: round.id };
+  });
+}
+
+export async function skipPrivateQuestionCandidate(
+  database: Database,
+  input: { participantId: string; pairId: string; conversationId: string; candidateId: string },
+) {
+  await database.transaction(async (transaction) => {
+    const tx = transaction as unknown as Database;
+    const { access, conversation, candidate } = await loadMutableCreatorCandidateInTransaction(tx, input);
+    if (candidate.candidate.state === "skipped") {
+      await selectPrivateQuestionCandidate(tx, conversation, access.pair.relationshipType);
+      return;
+    }
+    if (candidate.candidate.state !== "unresolved") throw new CloserDomainError("QUESTION_UNAVAILABLE");
+    await assertNoCurrentPrivateRound(tx, conversation.id);
+    const updated = await tx
+      .update(privateQuestionCandidate)
+      .set({ state: "skipped", resolvedAt: new Date() })
+      .where(and(eq(privateQuestionCandidate.id, candidate.candidate.id), eq(privateQuestionCandidate.state, "unresolved")))
+      .returning({ id: privateQuestionCandidate.id });
+    if (!updated[0]) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+    await selectPrivateQuestionCandidate(tx, conversation, access.pair.relationshipType);
+  });
+  return getPrivateConversationForParticipant(database, input);
+}
+
+export async function setPrivateQuestionCandidateLike(
+  database: Database,
+  input: { participantId: string; pairId: string; conversationId: string; candidateId: string; liked: boolean },
+) {
+  return database.transaction(async (transaction) => {
+    const tx = transaction as unknown as Database;
+    const { conversation, candidate } = await loadMutableCreatorCandidateInTransaction(tx, input);
+    if (candidate.candidate.state !== "unresolved") throw new CloserDomainError("QUESTION_UNAVAILABLE");
+    await assertNoCurrentPrivateRound(tx, conversation.id);
+    const updated = await tx
+      .update(privateQuestionCandidate)
+      .set({ liked: input.liked })
+      .where(and(eq(privateQuestionCandidate.id, candidate.candidate.id), eq(privateQuestionCandidate.state, "unresolved")))
+      .returning({ liked: privateQuestionCandidate.liked });
+    if (!updated[0]) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+    return updated[0];
   });
 }
 
@@ -2041,7 +2136,7 @@ export async function getPrivateRoundForParticipant(
     conversation: {
       id: context.conversation.id,
       category: context.conversation.category,
-      questionNumber: 0,
+      questionNumber: context.round.questionNumber,
     },
     question: {
       id: context.round.questionId,
@@ -2067,13 +2162,6 @@ export async function getPrivateRoundForParticipant(
     reactions?: Array<{ participantId: string; displayName: string; value: ReactionValue }>;
     replies?: Array<{ participantId: string; displayName: string; body: string; isOwner: boolean }>;
   };
-
-  const conversationRounds = await database
-    .select({ id: privateRound.id })
-    .from(privateRound)
-    .where(eq(privateRound.conversationId, context.conversation.id))
-    .orderBy(asc(privateRound.createdAt), asc(privateRound.id));
-  result.conversation.questionNumber = conversationRounds.findIndex((round) => round.id === input.roundId) + 1;
 
   // Deliberately do not put another participant's answer anywhere in this projection until this exact round is ready.
   if (!isRevealReady) return result;

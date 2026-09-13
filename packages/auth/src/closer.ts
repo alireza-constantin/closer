@@ -2,7 +2,7 @@ export { db } from "@Closer/db";
 export {
   CloserDomainError,
   advanceTogetherSession,
-  createNextPrivateRound,
+  askPrivateQuestionCandidate,
   createPairForParticipant,
   getPairForParticipant,
   getPairStatusForParticipant,
@@ -32,7 +32,9 @@ export {
   replaceInitialInvite,
   revokeRejoinInvites,
   setPrivateReaction,
+  setPrivateQuestionCandidateLike,
   setPrivateReply,
+  skipPrivateQuestionCandidate,
   setTogetherSessionLike,
   startOrResumePrivateConversation,
   startTogetherSession,

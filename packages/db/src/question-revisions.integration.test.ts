@@ -152,7 +152,7 @@ describe("Ticket 06 logical Questions and immutable revisions", () => {
     if (!era) throw new Error("Private test era was not created.");
     const [conversation] = await db.insert(privateConversation).values({ pairId, category: "fun", createdByParticipantId: first.id, membershipEraId: era.id }).returning();
     if (!conversation) throw new Error("Private test conversation was not created.");
-    const [round] = await db.insert(privateRound).values({ pairId, conversationId: conversation.id, questionId: logicalQuestion.id, questionRevisionId: revision.id, initiatorParticipantId: first.id }).returning();
+    const [round] = await db.insert(privateRound).values({ pairId, conversationId: conversation.id, questionId: logicalQuestion.id, questionRevisionId: revision.id, questionNumber: 1, initiatorParticipantId: first.id }).returning();
     if (!round) throw new Error("Private test round was not created.");
 
     await createQuestionRevision(db, { questionId: logicalQuestion.id, text: "Future private wording", category: "fun", relationshipFit: "both", modeFit: "private", intensity: "deep" });

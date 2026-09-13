@@ -73,6 +73,7 @@ async function createLegacyPrivateRound(pairId: string, participantId: string) {
     conversationId: started.id,
     questionId: started.candidate.question.id,
     questionRevisionId: started.candidate.question.questionRevisionId,
+    questionNumber: 1,
     initiatorParticipantId: participantId,
   }).returning({ id: privateRound.id });
   await db.update(privateQuestionCandidate).set({ state: "asked", resolvedAt: new Date() }).where(eq(privateQuestionCandidate.id, started.candidate.id));
