@@ -9,6 +9,8 @@ const { createDb } = await import("./index");
 const {
   CloserDomainError,
   advanceTogetherSession,
+  createQuestion,
+  createQuestionRevision,
   createPairForParticipant,
   endTogetherSession,
   getTogetherSessionForParticipant,
@@ -19,13 +21,14 @@ const {
   setTogetherSessionLike,
   startTogetherSession,
 } = await import("./closer");
-const { pair, pairMembership, pairMembershipEra, participant, togetherSession, togetherSessionQuestion, question, privateAnswer, privateRound } = await import("./schema/closer");
+const { pair, pairMembership, pairMembershipEra, participant, togetherSession, togetherSessionQuestion, question, questionRevision, privateAnswer, privateRound } = await import("./schema/closer");
 const { user } = await import("./schema/auth");
 const { and, eq, inArray } = await import("drizzle-orm");
 
 const db = createDb();
 const createdAuthUserIds: string[] = [];
 const createdPairIds: string[] = [];
+const createdQuestionIds: string[] = [];
 
 async function createAnonymousAuthUser(name = "Together test user") {
   const id = randomUUID();
@@ -65,6 +68,18 @@ async function createPair(
   return { ...result, creator, invitee };
 }
 
+async function createTogetherQuestion(input: { category: "fun" | "deep" | "memories" | "relationship" | "friendship"; intensity: "light" | "medium" | "deep" }) {
+  const created = await createQuestion(db, {
+    text: `Ticket 07 ${input.category} ${input.intensity} ${randomUUID()}`,
+    category: input.category,
+    relationshipFit: input.category === "relationship" ? "partner" : input.category === "friendship" ? "friend" : "both",
+    modeFit: "together",
+    intensity: input.intensity,
+  });
+  createdQuestionIds.push(created.question.id);
+  return created;
+}
+
 async function captureError(promise: Promise<unknown>) {
   return promise.then(
     () => null,
@@ -83,8 +98,14 @@ afterEach(async () => {
     await db.delete(participant).where(inArray(participant.authUserId, createdAuthUserIds));
     await db.delete(user).where(inArray(user.id, createdAuthUserIds));
   }
+  if (createdQuestionIds.length > 0) {
+    await db.update(question).set({ currentRevisionId: null }).where(inArray(question.id, createdQuestionIds));
+    await db.delete(questionRevision).where(inArray(questionRevision.questionId, createdQuestionIds));
+    await db.delete(question).where(inArray(question.id, createdQuestionIds));
+  }
   createdPairIds.length = 0;
   createdAuthUserIds.length = 0;
+  createdQuestionIds.length = 0;
 });
 
 afterAll(async () => {
@@ -178,7 +199,11 @@ describe("Closer Slice 02 Together sessions", () => {
     expect(eligible.length).toBeGreaterThan(2);
 
     const started = await startTogetherSession(db, { pairId: pair.pair.id, participantId: pair.creator.id, category: "deep", clientRequestId: randomUUID() });
-    const selected = await db.select({ modeFit: question.modeFit }).from(question).where(eq(question.id, started.questionId));
+    const selected = await db
+      .select({ modeFit: questionRevision.modeFit })
+      .from(question)
+      .innerJoin(questionRevision, eq(question.currentRevisionId, questionRevision.id))
+      .where(eq(question.id, started.questionId));
     expect(selected[0]?.modeFit).not.toBe("private");
   });
 
@@ -190,6 +215,123 @@ describe("Closer Slice 02 Together sessions", () => {
     expect(sessions[0]).toMatchObject({ pairId: pair.pair.id, category: "deep", startedByParticipantId: pair.creator.id, endedAt: null });
     expect(cards).toHaveLength(1);
     expect(cards[0]).toMatchObject({ questionId: started.questionId, position: 1, advancedAt: null, skippedAt: null });
+  });
+
+  test("a fresh session starts with a light preference and persists an injectable selection seed", async () => {
+    const pair = await createPair("partner");
+    const selectionSeed = "ticket-07-light-seed";
+    const started = await startTogetherSession(db, {
+      pairId: pair.pair.id,
+      participantId: pair.creator.id,
+      category: "fun",
+      clientRequestId: randomUUID(),
+      selectionSeed,
+    });
+
+    const session = (await db.select().from(togetherSession).where(eq(togetherSession.id, started.sessionId)))[0];
+    const view = await getTogetherSessionForParticipant(db, { pairId: pair.pair.id, participantId: pair.creator.id, sessionId: started.sessionId });
+    expect(session?.selectionSeed).toBe(selectionSeed);
+    expect(view.question?.intensity).toBe("light");
+  });
+
+  test("Next alone drives the two-light, two-medium, then deep-preferred ramp while Skip and Like do not", async () => {
+    const pair = await createPair("friend");
+    await Promise.all([
+      createTogetherQuestion({ category: "friendship", intensity: "light" }),
+      createTogetherQuestion({ category: "friendship", intensity: "light" }),
+      createTogetherQuestion({ category: "friendship", intensity: "light" }),
+      createTogetherQuestion({ category: "friendship", intensity: "medium" }),
+      createTogetherQuestion({ category: "friendship", intensity: "medium" }),
+      createTogetherQuestion({ category: "friendship", intensity: "deep" }),
+    ]);
+    const started = await startTogetherSession(db, { pairId: pair.pair.id, participantId: pair.creator.id, category: "friendship", clientRequestId: randomUUID(), selectionSeed: "ticket-07-ramp" });
+    const intensity = async () => (await getTogetherSessionForParticipant(db, { pairId: pair.pair.id, participantId: pair.creator.id, sessionId: started.sessionId })).question?.intensity;
+
+    expect(await intensity()).toBe("light");
+    await setTogetherSessionLike(db, { pairId: pair.pair.id, participantId: pair.creator.id, sessionId: started.sessionId, liked: true });
+    expect(await intensity()).toBe("light");
+    await advanceTogetherSession(db, { pairId: pair.pair.id, participantId: pair.creator.id, sessionId: started.sessionId, action: "skip", clientRequestId: randomUUID() });
+    expect(await intensity()).toBe("light");
+    await advanceTogetherSession(db, { pairId: pair.pair.id, participantId: pair.creator.id, sessionId: started.sessionId, action: "next", clientRequestId: randomUUID() });
+    expect(await intensity()).toBe("light");
+    await advanceTogetherSession(db, { pairId: pair.pair.id, participantId: pair.creator.id, sessionId: started.sessionId, action: "next", clientRequestId: randomUUID() });
+    expect(await intensity()).toBe("medium");
+    await advanceTogetherSession(db, { pairId: pair.pair.id, participantId: pair.creator.id, sessionId: started.sessionId, action: "next", clientRequestId: randomUUID() });
+    expect(await intensity()).toBe("medium");
+    await advanceTogetherSession(db, { pairId: pair.pair.id, participantId: pair.creator.id, sessionId: started.sessionId, action: "next", clientRequestId: randomUUID() });
+    expect(await intensity()).toBe("deep");
+    await advanceTogetherSession(db, { pairId: pair.pair.id, participantId: pair.creator.id, sessionId: started.sessionId, action: "next", clientRequestId: randomUUID() });
+    expect(await intensity()).toBe("deep");
+  });
+
+  test("each intensity target uses its documented fallback order", async () => {
+    const partner = await createPair("partner");
+    const friend = await createPair("friend");
+    await Promise.all([
+      createTogetherQuestion({ category: "relationship", intensity: "light" }),
+      createTogetherQuestion({ category: "memories", intensity: "light" }),
+      createTogetherQuestion({ category: "memories", intensity: "light" }),
+      createTogetherQuestion({ category: "memories", intensity: "light" }),
+      createTogetherQuestion({ category: "memories", intensity: "medium" }),
+      createTogetherQuestion({ category: "memories", intensity: "medium" }),
+    ]);
+
+    const lightFallback = await startTogetherSession(db, { pairId: partner.pair.id, participantId: partner.creator.id, category: "relationship", clientRequestId: randomUUID(), selectionSeed: "ticket-07-light-fallback" });
+    expect((await getTogetherSessionForParticipant(db, { pairId: partner.pair.id, participantId: partner.creator.id, sessionId: lightFallback.sessionId })).question?.intensity).toBe("light");
+    await advanceTogetherSession(db, { pairId: partner.pair.id, participantId: partner.creator.id, sessionId: lightFallback.sessionId, action: "skip", clientRequestId: randomUUID() });
+    expect((await getTogetherSessionForParticipant(db, { pairId: partner.pair.id, participantId: partner.creator.id, sessionId: lightFallback.sessionId })).question?.intensity).toBe("medium");
+    await advanceTogetherSession(db, { pairId: partner.pair.id, participantId: partner.creator.id, sessionId: lightFallback.sessionId, action: "skip", clientRequestId: randomUUID() });
+    await advanceTogetherSession(db, { pairId: partner.pair.id, participantId: partner.creator.id, sessionId: lightFallback.sessionId, action: "skip", clientRequestId: randomUUID() });
+    expect((await getTogetherSessionForParticipant(db, { pairId: partner.pair.id, participantId: partner.creator.id, sessionId: lightFallback.sessionId })).question?.intensity).toBe("deep");
+
+    const mediumFallback = await startTogetherSession(db, { pairId: friend.pair.id, participantId: friend.creator.id, category: "friendship", clientRequestId: randomUUID(), selectionSeed: "ticket-07-medium-fallback" });
+    await advanceTogetherSession(db, { pairId: friend.pair.id, participantId: friend.creator.id, sessionId: mediumFallback.sessionId, action: "next", clientRequestId: randomUUID() });
+    await advanceTogetherSession(db, { pairId: friend.pair.id, participantId: friend.creator.id, sessionId: mediumFallback.sessionId, action: "next", clientRequestId: randomUUID() });
+    expect((await getTogetherSessionForParticipant(db, { pairId: friend.pair.id, participantId: friend.creator.id, sessionId: mediumFallback.sessionId })).question?.intensity).toBe("deep");
+
+    const deepFallback = await startTogetherSession(db, { pairId: partner.pair.id, participantId: partner.creator.id, category: "memories", clientRequestId: randomUUID(), selectionSeed: "ticket-07-deep-fallback" });
+    for (let index = 0; index < 4; index += 1) {
+      await advanceTogetherSession(db, { pairId: partner.pair.id, participantId: partner.creator.id, sessionId: deepFallback.sessionId, action: "next", clientRequestId: randomUUID() });
+    }
+    expect((await getTogetherSessionForParticipant(db, { pairId: partner.pair.id, participantId: partner.creator.id, sessionId: deepFallback.sessionId })).question?.intensity).toBe("medium");
+  });
+
+  test("a seed produces reproducible Session-local ordering and a new session resets the consumed set", async () => {
+    const pair = await createPair("friend");
+    const first = await startTogetherSession(db, { pairId: pair.pair.id, participantId: pair.creator.id, category: "friendship", clientRequestId: randomUUID(), selectionSeed: "ticket-07-repeatable" });
+    const second = await startTogetherSession(db, { pairId: pair.pair.id, participantId: pair.creator.id, category: "friendship", clientRequestId: randomUUID(), selectionSeed: "ticket-07-repeatable" });
+    expect(first.questionId).toBe(second.questionId);
+    await advanceTogetherSession(db, { pairId: pair.pair.id, participantId: pair.creator.id, sessionId: first.sessionId, action: "next", clientRequestId: randomUUID() });
+    await advanceTogetherSession(db, { pairId: pair.pair.id, participantId: pair.creator.id, sessionId: second.sessionId, action: "next", clientRequestId: randomUUID() });
+    expect((await getTogetherSessionForParticipant(db, { pairId: pair.pair.id, participantId: pair.creator.id, sessionId: first.sessionId })).question?.id).toBe((await getTogetherSessionForParticipant(db, { pairId: pair.pair.id, participantId: pair.creator.id, sessionId: second.sessionId })).question?.id);
+  });
+
+  test("a later revision cannot repeat a consumed logical Question and never rewrites its shown card", async () => {
+    const pair = await createPair("partner");
+    const started = await startTogetherSession(db, { pairId: pair.pair.id, participantId: pair.creator.id, category: "fun", clientRequestId: randomUUID(), selectionSeed: "ticket-07-revision" });
+    const original = await getTogetherSessionForParticipant(db, { pairId: pair.pair.id, participantId: pair.creator.id, sessionId: started.sessionId });
+    if (!original.question) throw new Error("A Together session should show its first Question.");
+    const replacement = await createQuestionRevision(db, {
+      questionId: original.question.id,
+      text: "Ticket 07 later wording",
+      category: "fun",
+      relationshipFit: "both",
+      modeFit: "together",
+      intensity: "light",
+    });
+
+    try {
+      expect((await getTogetherSessionForParticipant(db, { pairId: pair.pair.id, participantId: pair.creator.id, sessionId: started.sessionId })).question).toMatchObject({
+        id: original.question.id,
+        questionRevisionId: original.question.questionRevisionId,
+        text: original.question.text,
+      });
+      await advanceTogetherSession(db, { pairId: pair.pair.id, participantId: pair.creator.id, sessionId: started.sessionId, action: "next", clientRequestId: randomUUID() });
+      expect((await getTogetherSessionForParticipant(db, { pairId: pair.pair.id, participantId: pair.creator.id, sessionId: started.sessionId })).question?.id).not.toBe(original.question.id);
+    } finally {
+      await db.update(question).set({ currentRevisionId: original.question.questionRevisionId }).where(eq(question.id, original.question.id));
+      await db.delete(questionRevision).where(eq(questionRevision.id, replacement.revision.id));
+    }
   });
 
   test("Next stays in the same session and category", async () => {
@@ -293,6 +435,18 @@ describe("Closer Slice 02 Together sessions", () => {
       advanceTogetherSession(db, { pairId: pair.pair.id, participantId: pair.creator.id, sessionId: started.sessionId, action: "next", clientRequestId }),
     ]);
     expect(first).toEqual(retry);
+    expect(await db.select().from(togetherSessionQuestion).where(eq(togetherSessionQuestion.sessionId, started.sessionId))).toHaveLength(2);
+  });
+
+  test("concurrent Next and Skip for one shown card commit only one transition", async () => {
+    const pair = await createPair("partner");
+    const started = await startTogetherSession(db, { pairId: pair.pair.id, participantId: pair.creator.id, category: "deep", clientRequestId: randomUUID() });
+    const results = await Promise.allSettled([
+      advanceTogetherSession(db, { pairId: pair.pair.id, participantId: pair.creator.id, sessionId: started.sessionId, action: "next", currentQuestionId: started.questionId, clientRequestId: randomUUID() }),
+      advanceTogetherSession(db, { pairId: pair.pair.id, participantId: pair.creator.id, sessionId: started.sessionId, action: "skip", currentQuestionId: started.questionId, clientRequestId: randomUUID() }),
+    ]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.find((result) => result.status === "rejected")).toMatchObject({ reason: { code: "TOGETHER_ACTION_INVALID" } });
     expect(await db.select().from(togetherSessionQuestion).where(eq(togetherSessionQuestion.sessionId, started.sessionId))).toHaveLength(2);
   });
 

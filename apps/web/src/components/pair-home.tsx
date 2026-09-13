@@ -26,7 +26,7 @@ type ActiveConversation = {
   id: string;
   category: string;
   questionCount: number;
-  currentRound: { id: string; question: { text: string; category: string; depth: string } };
+  currentRound: { id: string; question: { id: string; questionRevisionId: string; text: string; category: string; intensity: string } };
   otherParticipantDisplayName: string;
   state: "YOUR_TURN" | "WAITING" | "REVEAL_READY" | "READY_FOR_NEXT";
 };

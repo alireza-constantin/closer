@@ -64,6 +64,20 @@
       "when": 1789300000000,
       "tag": "0008_strengthen_membership_era_replacement",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1789300056902,
+      "tag": "0009_tan_unicorn",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1789301613307,
+      "tag": "0010_lovely_marten_broadcloak",
+      "breakpoints": true
     }
   ]
 }

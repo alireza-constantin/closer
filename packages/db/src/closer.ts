@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 
-import { and, asc, desc, eq, gt, gte, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
 
 import { createDb } from "./index";
 import {
@@ -16,6 +16,7 @@ import {
   privateRevealView,
   privateRound,
   question,
+  questionRevision,
   rejoinInvite,
   togetherSession,
   togetherSessionQuestion,
@@ -26,7 +27,17 @@ type Database = ReturnType<typeof createDb>;
 type RelationshipType = "partner" | "friend";
 type QuestionCategory = "fun" | "deep" | "memories" | "relationship" | "friendship";
 type QuestionModeFit = "both" | "together" | "private";
+export type QuestionIntensity = "light" | "medium" | "deep";
+type QuestionRelationshipFit = "both" | RelationshipType;
 type ReactionValue = "heart" | "laugh" | "tender" | "surprised";
+
+export type QuestionRevisionInput = {
+  text: string;
+  category: QuestionCategory;
+  relationshipFit: QuestionRelationshipFit;
+  modeFit: QuestionModeFit;
+  intensity: QuestionIntensity;
+};
 
 const INITIAL_INVITE_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
 const REJOIN_INVITE_LIFETIME_MS = 24 * 60 * 60 * 1000;
@@ -89,6 +100,46 @@ function assertQuestionCategory(value: string): asserts value is QuestionCategor
   if (!["fun", "deep", "memories", "relationship", "friendship"].includes(value)) {
     throw new CloserDomainError("QUESTION_UNAVAILABLE");
   }
+}
+
+function assertQuestionIntensity(value: string): asserts value is QuestionIntensity {
+  if (!(["light", "medium", "deep"] as const).includes(value as QuestionIntensity)) {
+    throw new CloserDomainError("QUESTION_UNAVAILABLE");
+  }
+}
+
+function assertQuestionModeFit(value: string): asserts value is QuestionModeFit {
+  if (!(["both", "together", "private"] as const).includes(value as QuestionModeFit)) {
+    throw new CloserDomainError("QUESTION_UNAVAILABLE");
+  }
+}
+
+function assertQuestionRelationshipFit(value: string): asserts value is QuestionRelationshipFit {
+  if (!(["both", "partner", "friend"] as const).includes(value as QuestionRelationshipFit)) {
+    throw new CloserDomainError("QUESTION_UNAVAILABLE");
+  }
+}
+
+function normalizeTogetherSelectionSeed(value: string | undefined) {
+  const seed = value ?? randomBytes(32).toString("hex");
+  if (!seed.trim() || seed.length > 128) throw new CloserDomainError("TOGETHER_ACTION_INVALID");
+  return seed;
+}
+
+function normalizeQuestionRevision(input: QuestionRevisionInput): QuestionRevisionInput {
+  const text = input.text.trim();
+  if (!text) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+  assertQuestionCategory(input.category);
+  assertQuestionRelationshipFit(input.relationshipFit);
+  assertQuestionModeFit(input.modeFit);
+  assertQuestionIntensity(input.intensity);
+  if (
+    (input.category === "relationship" && input.relationshipFit !== "partner")
+    || (input.category === "friendship" && input.relationshipFit !== "friend")
+  ) {
+    throw new CloserDomainError("QUESTION_UNAVAILABLE");
+  }
+  return { ...input, text };
 }
 
 function assertReactionValue(value: string): asserts value is ReactionValue {
@@ -155,6 +206,104 @@ export async function getParticipantByAuthUserId(database: Database, authUserId:
     .where(eq(participant.authUserId, authUserId))
     .limit(1);
   return rows[0] ?? null;
+}
+
+/** Create one stable logical Question and its first immutable revision. */
+export async function createQuestion(database: Database, input: QuestionRevisionInput) {
+  const revisionInput = normalizeQuestionRevision(input);
+  return database.transaction(async (transaction) => {
+    const tx = transaction as unknown as Database;
+    const insertedQuestion = await tx.insert(question).values({ isActive: true }).returning();
+    const logicalQuestion = insertedQuestion[0];
+    if (!logicalQuestion) throw new Error("Question creation did not return a question.");
+
+    const insertedRevision = await tx
+      .insert(questionRevision)
+      .values({ questionId: logicalQuestion.id, ...revisionInput })
+      .returning();
+    const revision = insertedRevision[0];
+    if (!revision) throw new Error("Question creation did not return a revision.");
+
+    const updatedQuestion = await tx
+      .update(question)
+      .set({ currentRevisionId: revision.id })
+      .where(eq(question.id, logicalQuestion.id))
+      .returning();
+    if (!updatedQuestion[0]) throw new Error("Question creation did not set a current revision.");
+    return { question: updatedQuestion[0], revision };
+  });
+}
+
+/** Create a new immutable revision and make it current for future selection. */
+export async function createQuestionRevision(
+  database: Database,
+  input: QuestionRevisionInput & { questionId: string },
+) {
+  const revisionInput = normalizeQuestionRevision(input);
+  return database.transaction(async (transaction) => {
+    const tx = transaction as unknown as Database;
+    const logicalQuestion = await tx
+      .select()
+      .from(question)
+      .where(eq(question.id, input.questionId))
+      .for("update")
+      .limit(1);
+    if (!logicalQuestion[0]) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+
+    const insertedRevision = await tx
+      .insert(questionRevision)
+      .values({ questionId: input.questionId, ...revisionInput })
+      .returning();
+    const revision = insertedRevision[0];
+    if (!revision) throw new Error("Question revision creation did not return a revision.");
+
+    const updatedQuestion = await tx
+      .update(question)
+      .set({ currentRevisionId: revision.id })
+      .where(eq(question.id, input.questionId))
+      .returning();
+    if (!updatedQuestion[0]) throw new Error("Question revision creation did not set a current revision.");
+    return { question: updatedQuestion[0], revision };
+  });
+}
+
+export async function reviseQuestion(
+  database: Database,
+  input: QuestionRevisionInput & { questionId: string },
+) {
+  return createQuestionRevision(database, input);
+}
+
+export async function getQuestionWithCurrentRevision(database: Database, questionId: string) {
+  const rows = await database
+    .select({ question, revision: questionRevision })
+    .from(question)
+    .innerJoin(questionRevision, eq(question.currentRevisionId, questionRevision.id))
+    .where(eq(question.id, questionId))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+/** Deactivation only affects future selection; pinned occurrences remain readable. */
+export async function deactivateQuestion(database: Database, questionId: string) {
+  const rows = await database
+    .update(question)
+    .set({ isActive: false })
+    .where(eq(question.id, questionId))
+    .returning();
+  if (!rows[0]) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+  return rows[0];
+}
+
+/** Withdraw one revision for future safety enforcement without rewriting history. */
+export async function withdrawQuestionRevision(database: Database, questionRevisionId: string) {
+  const rows = await database
+    .update(questionRevision)
+    .set({ withdrawnAt: new Date() })
+    .where(eq(questionRevision.id, questionRevisionId))
+    .returning();
+  if (!rows[0]) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+  return rows[0];
 }
 
 /**
@@ -567,7 +716,8 @@ export async function redeemInitialInvite(
       )
       .limit(1);
     const continuingParticipantId = firstMembership[0]?.participantId;
-    if (!continuingParticipantId || continuingParticipantId === input.participantId) {
+    const firstMembershipId = firstMembership[0]?.id;
+    if (!continuingParticipantId || !firstMembershipId || continuingParticipantId === input.participantId) {
       throw new CloserDomainError("INVITE_UNAVAILABLE");
     }
 
@@ -624,7 +774,7 @@ export async function redeemInitialInvite(
       .insert(pairMembershipEra)
       .values({
         pairId: invite.pairId,
-        firstMembershipId: firstMembership[0].id,
+        firstMembershipId,
         secondMembershipId: secondMembership[0].id,
       })
       .returning({ id: pairMembershipEra.id });
@@ -970,14 +1120,24 @@ async function eligibleTogetherQuestions(
   input: { relationshipType: RelationshipType; category: QuestionCategory },
 ) {
   return database
-    .select({ id: question.id, text: question.text, category: question.category, depth: question.depth })
+    .select({
+      id: question.id,
+      questionRevisionId: questionRevision.id,
+      text: questionRevision.text,
+      category: questionRevision.category,
+      relationshipFit: questionRevision.relationshipFit,
+      modeFit: questionRevision.modeFit,
+      intensity: questionRevision.intensity,
+    })
     .from(question)
+    .innerJoin(questionRevision, eq(question.currentRevisionId, questionRevision.id))
     .where(
       and(
         eq(question.isActive, true),
-        eq(question.category, input.category),
-        inArray(question.relationshipFit, ["both", input.relationshipType]),
-        inArray(question.modeFit, ["both", "together"]),
+        eq(questionRevision.category, input.category),
+        inArray(questionRevision.relationshipFit, ["both", input.relationshipType]),
+        inArray(questionRevision.modeFit, ["both", "together"]),
+        isNull(questionRevision.withdrawnAt),
       ),
     );
 }
@@ -996,7 +1156,7 @@ export async function listEligibleTogetherQuestions(
 
 async function nextTogetherQuestion(
   database: Database,
-  input: { sessionId?: string; relationshipType: RelationshipType; category: QuestionCategory },
+  input: { sessionId?: string; selectionSeed: string; relationshipType: RelationshipType; category: QuestionCategory; completedNextTransitions?: number },
 ) {
   const eligible = await eligibleTogetherQuestions(database, input);
   const shownIds = new Set<string>();
@@ -1007,14 +1167,34 @@ async function nextTogetherQuestion(
       .where(eq(togetherSessionQuestion.sessionId, input.sessionId));
     for (const row of shown) shownIds.add(row.questionId);
   }
-  return eligible.filter((candidate) => !shownIds.has(candidate.id)).toSorted((left, right) => left.id.localeCompare(right.id))[0] ?? null;
+  const available = eligible.filter((candidate) => !shownIds.has(candidate.id));
+  const preferredIntensity: QuestionIntensity = (input.completedNextTransitions ?? 0) >= 4
+    ? "deep"
+    : (input.completedNextTransitions ?? 0) >= 2
+      ? "medium"
+      : "light";
+  const intensityFallback: Record<QuestionIntensity, QuestionIntensity[]> = {
+    light: ["light", "medium", "deep"],
+    medium: ["medium", "light", "deep"],
+    deep: ["deep", "medium", "light"],
+  };
+  const candidates = intensityFallback[preferredIntensity]
+    .map((intensity) => available.filter((candidate) => candidate.intensity === intensity))
+    .find((band) => band.length > 0);
+  if (!candidates) return null;
+
+  return candidates.toSorted((left, right) => {
+    const leftOrder = createHash("sha256").update(`closer:together:${input.selectionSeed}:${left.id}`).digest("hex");
+    const rightOrder = createHash("sha256").update(`closer:together:${input.selectionSeed}:${right.id}`).digest("hex");
+    return leftOrder.localeCompare(rightOrder) || left.id.localeCompare(right.id);
+  })[0] ?? null;
 }
 
 async function currentTogetherQuestion(database: Database, sessionId: string) {
   const rows = await database
-    .select({ card: togetherSessionQuestion, question })
+    .select({ card: togetherSessionQuestion, revision: questionRevision })
     .from(togetherSessionQuestion)
-    .innerJoin(question, eq(togetherSessionQuestion.questionId, question.id))
+    .innerJoin(questionRevision, eq(togetherSessionQuestion.questionRevisionId, questionRevision.id))
     .where(and(eq(togetherSessionQuestion.sessionId, sessionId), isNull(togetherSessionQuestion.advancedAt)))
     .orderBy(asc(togetherSessionQuestion.position))
     .limit(1);
@@ -1023,12 +1203,13 @@ async function currentTogetherQuestion(database: Database, sessionId: string) {
 
 export async function startTogetherSession(
   database: Database,
-  input: { participantId: string; pairId: string; category: string; clientRequestId?: string },
+  input: { participantId: string; pairId: string; category: string; clientRequestId?: string; selectionSeed?: string },
 ) {
   const access = await requireActivePairAccess(database, input.participantId, input.pairId);
   if (input.clientRequestId && !isUuid(input.clientRequestId)) throw new CloserDomainError("TOGETHER_ACTION_INVALID");
   assertCategoryForPair(access, input.category);
   const category = input.category as QuestionCategory;
+  const selectionSeed = normalizeTogetherSelectionSeed(input.selectionSeed);
 
   return database.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
@@ -1051,13 +1232,14 @@ export async function startTogetherSession(
       if (existing[0]) {
         const current = await currentTogetherQuestion(tx, existing[0].id);
         if (!current) throw new CloserDomainError("TOGETHER_SESSION_EXHAUSTED");
-        return { sessionId: existing[0].id, questionId: current.question.id };
+        return { sessionId: existing[0].id, questionId: current.card.questionId, questionRevisionId: current.card.questionRevisionId };
       }
     }
 
     const nextQuestion = await nextTogetherQuestion(tx, {
       relationshipType: currentAccess.pair.relationshipType,
       category,
+      selectionSeed,
     });
     if (!nextQuestion) throw new CloserDomainError("QUESTION_UNAVAILABLE");
 
@@ -1069,6 +1251,7 @@ export async function startTogetherSession(
         category,
         startedByParticipantId: input.participantId,
         startRequestId: input.clientRequestId,
+        selectionSeed,
       })
       .returning({ id: togetherSession.id });
     const session = inserted[0];
@@ -1077,9 +1260,10 @@ export async function startTogetherSession(
     await tx.insert(togetherSessionQuestion).values({
       sessionId: session.id,
       questionId: nextQuestion.id,
+      questionRevisionId: nextQuestion.questionRevisionId,
       position: 1,
     });
-    return { sessionId: session.id, questionId: nextQuestion.id };
+    return { sessionId: session.id, questionId: nextQuestion.id, questionRevisionId: nextQuestion.questionRevisionId };
   });
 }
 
@@ -1099,10 +1283,11 @@ export async function getTogetherSessionForParticipant(
     exhausted: current === null,
     question: current
       ? {
-          id: current.question.id,
-          text: current.question.text,
-          category: current.question.category,
-          depth: current.question.depth,
+          id: current.card.questionId,
+          questionRevisionId: current.card.questionRevisionId,
+          text: current.revision.text,
+          category: current.revision.category,
+          intensity: current.revision.intensity,
           position: current.card.position,
           liked: current.card.likedAt !== null,
         }
@@ -1112,7 +1297,7 @@ export async function getTogetherSessionForParticipant(
 
 export async function advanceTogetherSession(
   database: Database,
-  input: { participantId: string; pairId: string; sessionId: string; action: "next" | "skip"; clientRequestId?: string },
+  input: { participantId: string; pairId: string; sessionId: string; action: "next" | "skip"; clientRequestId?: string; currentQuestionId?: string },
 ) {
   if (input.clientRequestId && !isUuid(input.clientRequestId)) throw new CloserDomainError("TOGETHER_ACTION_INVALID");
   return database.transaction(async (transaction) => {
@@ -1143,13 +1328,16 @@ export async function advanceTogetherSession(
       if (previous[0]) {
         const current = await currentTogetherQuestion(tx, input.sessionId);
         return current
-          ? { kind: "QUESTION" as const, sessionId: input.sessionId, questionId: current.question.id }
+          ? { kind: "QUESTION" as const, sessionId: input.sessionId, questionId: current.card.questionId, questionRevisionId: current.card.questionRevisionId }
           : { kind: "EXHAUSTED" as const, sessionId: input.sessionId };
       }
     }
 
     const current = await currentTogetherQuestion(tx, input.sessionId);
     if (!current) return { kind: "EXHAUSTED" as const, sessionId: input.sessionId };
+    if (input.currentQuestionId && current.card.questionId !== input.currentQuestionId) {
+      throw new CloserDomainError("TOGETHER_ACTION_INVALID");
+    }
 
     const now = new Date();
     await tx
@@ -1163,23 +1351,37 @@ export async function advanceTogetherSession(
 
     const nextQuestion = await nextTogetherQuestion(tx, {
       sessionId: input.sessionId,
+      selectionSeed: session.selectionSeed,
       relationshipType: mutableContext.pair.relationshipType,
       category: session.category,
+      completedNextTransitions: (
+        await tx
+          .select({ id: togetherSessionQuestion.id })
+          .from(togetherSessionQuestion)
+          .where(
+            and(
+              eq(togetherSessionQuestion.sessionId, input.sessionId),
+              isNull(togetherSessionQuestion.skippedAt),
+              sql`${togetherSessionQuestion.advancedAt} is not null`,
+            ),
+          )
+      ).length,
     });
     if (!nextQuestion) return { kind: "EXHAUSTED" as const, sessionId: input.sessionId };
 
     await tx.insert(togetherSessionQuestion).values({
       sessionId: input.sessionId,
       questionId: nextQuestion.id,
+      questionRevisionId: nextQuestion.questionRevisionId,
       position: current.card.position + 1,
     });
-    return { kind: "QUESTION" as const, sessionId: input.sessionId, questionId: nextQuestion.id };
+    return { kind: "QUESTION" as const, sessionId: input.sessionId, questionId: nextQuestion.id, questionRevisionId: nextQuestion.questionRevisionId };
   });
 }
 
 export async function setTogetherSessionLike(
   database: Database,
-  input: { participantId: string; pairId: string; sessionId: string; liked: boolean },
+  input: { participantId: string; pairId: string; sessionId: string; liked: boolean; currentQuestionId?: string },
 ) {
   await loadTogetherSessionContext(database, input.participantId, input.pairId, input.sessionId);
   await database.transaction(async (transaction) => {
@@ -1195,6 +1397,9 @@ export async function setTogetherSessionLike(
     if (session.endedAt) throw new CloserDomainError("TOGETHER_SESSION_ENDED");
     const current = await currentTogetherQuestion(tx, input.sessionId);
     if (!current) throw new CloserDomainError("TOGETHER_SESSION_EXHAUSTED");
+    if (input.currentQuestionId && current.card.questionId !== input.currentQuestionId) {
+      throw new CloserDomainError("TOGETHER_ACTION_INVALID");
+    }
     await tx
       .update(togetherSessionQuestion)
       .set({ likedAt: input.liked ? new Date() : null })
@@ -1228,7 +1433,7 @@ export async function endTogetherSession(
 async function loadPrivateRoundContext(database: Database, participantId: string, pairId: string, roundId: string) {
   const access = await requireActivePairAccess(database, participantId, pairId);
   const rows = await database
-    .select({ round: privateRound, question, conversation: privateConversation, membershipEra: pairMembershipEra })
+    .select({ round: privateRound, revision: questionRevision, conversation: privateConversation, membershipEra: pairMembershipEra })
     .from(privateRound)
     .innerJoin(
       privateConversation,
@@ -1238,7 +1443,7 @@ async function loadPrivateRoundContext(database: Database, participantId: string
       ),
     )
     .innerJoin(pairMembershipEra, eq(privateConversation.membershipEraId, pairMembershipEra.id))
-    .innerJoin(question, eq(privateRound.questionId, question.id))
+    .innerJoin(questionRevision, eq(privateRound.questionRevisionId, questionRevision.id))
     .where(
       and(
         eq(privateRound.id, roundId),
@@ -1297,17 +1502,22 @@ export async function listEligiblePrivateQuestions(
   const eligibleQuestions = await database
     .select({
       id: question.id,
-      text: question.text,
-      category: question.category,
-      depth: question.depth,
+      questionRevisionId: questionRevision.id,
+      text: questionRevision.text,
+      category: questionRevision.category,
+      relationshipFit: questionRevision.relationshipFit,
+      modeFit: questionRevision.modeFit,
+      intensity: questionRevision.intensity,
     })
     .from(question)
+    .innerJoin(questionRevision, eq(question.currentRevisionId, questionRevision.id))
     .where(
       and(
         eq(question.isActive, true),
-        eq(question.category, input.category),
-        inArray(question.relationshipFit, ["both", access.pair.relationshipType]),
-        inArray(question.modeFit, ["both", "private"]),
+        eq(questionRevision.category, input.category),
+        inArray(questionRevision.relationshipFit, ["both", access.pair.relationshipType]),
+        inArray(questionRevision.modeFit, ["both", "private"]),
+        isNull(questionRevision.withdrawnAt),
       ),
     );
 
@@ -1338,21 +1548,31 @@ async function eligiblePrivateQuestions(
   input: { relationshipType: RelationshipType; category: QuestionCategory },
 ) {
   return database
-    .select({ id: question.id, text: question.text, category: question.category, depth: question.depth })
+    .select({
+      id: question.id,
+      questionRevisionId: questionRevision.id,
+      text: questionRevision.text,
+      category: questionRevision.category,
+      relationshipFit: questionRevision.relationshipFit,
+      modeFit: questionRevision.modeFit,
+      intensity: questionRevision.intensity,
+    })
     .from(question)
+    .innerJoin(questionRevision, eq(question.currentRevisionId, questionRevision.id))
     .where(
       and(
         eq(question.isActive, true),
-        eq(question.category, input.category),
-        inArray(question.relationshipFit, ["both", input.relationshipType]),
-        inArray(question.modeFit, ["both", "private"]),
+        eq(questionRevision.category, input.category),
+        inArray(questionRevision.relationshipFit, ["both", input.relationshipType]),
+        inArray(questionRevision.modeFit, ["both", "private"]),
+        isNull(questionRevision.withdrawnAt),
       ),
     );
 }
 
 async function latestRoundForConversation(database: Database, conversationId: string) {
   const rows = await database
-    .select({ id: privateRound.id, questionId: privateRound.questionId, createdAt: privateRound.createdAt })
+    .select({ id: privateRound.id, questionId: privateRound.questionId, questionRevisionId: privateRound.questionRevisionId, createdAt: privateRound.createdAt })
     .from(privateRound)
     .where(eq(privateRound.conversationId, conversationId))
     .orderBy(desc(privateRound.createdAt), desc(privateRound.id))
@@ -1446,7 +1666,7 @@ async function lockPairAndFindConversation(
 
 async function insertRoundForConversation(
   database: Database,
-  input: { pairId: string; conversationId: string; participantId: string; questionId: string; clientRequestId?: string },
+  input: { pairId: string; conversationId: string; participantId: string; questionId: string; questionRevisionId: string; clientRequestId?: string },
 ) {
   if (input.clientRequestId) {
     const existing = await database
@@ -1472,6 +1692,7 @@ async function insertRoundForConversation(
       pairId: input.pairId,
       conversationId: input.conversationId,
       questionId: input.questionId,
+      questionRevisionId: input.questionRevisionId,
       initiatorParticipantId: input.participantId,
       clientRequestId: input.clientRequestId,
     })
@@ -1518,7 +1739,7 @@ export async function startOrResumePrivateConversation(
       membershipEraId: activeEra.id,
     });
     const currentRound = await latestRoundForConversation(tx, conversation.id);
-    if (currentRound) return { conversationId: conversation.id, roundId: currentRound.id };
+    if (currentRound) return { conversationId: conversation.id, roundId: currentRound.id, questionId: currentRound.questionId, questionRevisionId: currentRound.questionRevisionId };
 
     const nextQuestion = await nextEligibleQuestionForConversation(tx, {
       pairId: input.pairId,
@@ -1531,9 +1752,10 @@ export async function startOrResumePrivateConversation(
       conversationId: conversation.id,
       participantId: input.participantId,
       questionId: nextQuestion.id,
+      questionRevisionId: nextQuestion.questionRevisionId,
       clientRequestId: input.clientRequestId,
     });
-    return { conversationId: conversation.id, roundId: round.id };
+    return { conversationId: conversation.id, roundId: round.id, questionId: nextQuestion.id, questionRevisionId: nextQuestion.questionRevisionId };
   });
 }
 
@@ -1572,7 +1794,7 @@ export async function createNextPrivateRound(
     if (await answerCountForRound(tx, currentRound.id) < 2) {
       // The first successful Next request may already have made this the new
       // current round; returning it makes retries and double-clicks safe.
-      return { conversationId: conversation.id, roundId: currentRound.id };
+      return { conversationId: conversation.id, roundId: currentRound.id, questionId: currentRound.questionId, questionRevisionId: currentRound.questionRevisionId };
     }
 
     const nextQuestion = await nextEligibleQuestionForConversation(tx, {
@@ -1587,9 +1809,10 @@ export async function createNextPrivateRound(
       conversationId: conversation.id,
       participantId: input.participantId,
       questionId: nextQuestion.id,
+      questionRevisionId: nextQuestion.questionRevisionId,
       clientRequestId: input.clientRequestId,
     });
-    return { conversationId: conversation.id, roundId: nextRound.id };
+    return { conversationId: conversation.id, roundId: nextRound.id, questionId: nextQuestion.id, questionRevisionId: nextQuestion.questionRevisionId };
   });
 }
 
@@ -1599,8 +1822,9 @@ export async function createPrivateRound(
   input: { participantId: string; pairId: string; questionId: string; clientRequestId?: string },
 ) {
   const selectedQuestion = await database
-    .select({ category: question.category })
+    .select({ category: questionRevision.category })
     .from(question)
+    .innerJoin(questionRevision, eq(question.currentRevisionId, questionRevision.id))
     .where(eq(question.id, input.questionId))
     .limit(1);
   if (!selectedQuestion[0]) throw new CloserDomainError("QUESTION_UNAVAILABLE");
@@ -1641,10 +1865,11 @@ export async function getPrivateRoundForParticipant(
       questionNumber: 0,
     },
     question: {
-      id: context.question.id,
-      text: context.question.text,
-      category: context.question.category,
-      depth: context.question.depth,
+      id: context.round.questionId,
+      questionRevisionId: context.round.questionRevisionId,
+      text: context.revision.text,
+      category: context.revision.category,
+      intensity: context.revision.intensity,
     },
     otherParticipant: { id: otherMember.participantId, displayName: otherMember.displayName },
     yourAnswer: viewerAnswer?.body ?? null,
@@ -1654,7 +1879,7 @@ export async function getPrivateRoundForParticipant(
     id: string;
     pairId: string;
     conversation: { id: string; category: QuestionCategory; questionNumber: number };
-    question: { id: string; text: string; category: QuestionCategory; depth: "light" | "medium" | "deep" };
+    question: { id: string; questionRevisionId: string; text: string; category: QuestionCategory; intensity: QuestionIntensity };
     otherParticipant: { id: string; displayName: string };
     yourAnswer: string | null;
     state: "YOUR_TURN" | "WAITING" | "REVEAL_READY" | "REVEAL_VIEWED";
@@ -1713,7 +1938,7 @@ export async function listActivePrivateConversations(
   id: string;
   category: QuestionCategory;
   questionCount: number;
-  currentRound: { id: string; question: { id: string; text: string; category: QuestionCategory; depth: "light" | "medium" | "deep" } };
+  currentRound: { id: string; question: { id: string; questionRevisionId: string; text: string; category: QuestionCategory; intensity: QuestionIntensity } };
   otherParticipantDisplayName: string;
   state: "YOUR_TURN" | "WAITING" | "REVEAL_READY" | "READY_FOR_NEXT";
 }>> {
@@ -1747,11 +1972,11 @@ export async function listActivePrivateConversations(
     .select({
       id: privateRound.id,
       conversationId: privateRound.conversationId,
-      question: { id: question.id, text: question.text, category: question.category, depth: question.depth },
+      question: { id: privateRound.questionId, questionRevisionId: questionRevision.id, text: questionRevision.text, category: questionRevision.category, intensity: questionRevision.intensity },
       createdAt: privateRound.createdAt,
     })
     .from(privateRound)
-    .innerJoin(question, eq(privateRound.questionId, question.id))
+    .innerJoin(questionRevision, eq(privateRound.questionRevisionId, questionRevision.id))
     .where(inArray(privateRound.conversationId, conversationIds))
     .orderBy(desc(privateRound.createdAt), desc(privateRound.id));
   if (!rounds.length) return [];

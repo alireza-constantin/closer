@@ -21,7 +21,7 @@ type TogetherView = {
   startedAt: string;
   endedAt: string | null;
   exhausted: boolean;
-  question: { id: string; text: string; category: string; depth: string; position: number; liked: boolean } | null;
+  question: { id: string; questionRevisionId: string; text: string; category: string; intensity: string; position: number; liked: boolean } | null;
 };
 type Action = "like" | "skip" | "next" | "end";
 
@@ -70,7 +70,7 @@ export default function TogetherSessionScreen({ initialSession }: { initialSessi
     setPending(action);
     setMotion(action);
     try {
-      const response = await fetch(`${baseUrl}/advance`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action, clientRequestId: crypto.randomUUID() }) });
+      const response = await fetch(`${baseUrl}/advance`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action, currentQuestionId: session.question.id, clientRequestId: crypto.randomUUID() }) });
       const next = parseView(await response.json());
       if (!response.ok || !next) throw new Error();
       setSession(next);
@@ -87,7 +87,7 @@ export default function TogetherSessionScreen({ initialSession }: { initialSessi
     setError(null);
     setPending("like");
     try {
-      const response = await fetch(`${baseUrl}/like`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ liked: !session.question.liked }) });
+      const response = await fetch(`${baseUrl}/like`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ liked: !session.question.liked, currentQuestionId: session.question.id }) });
       const next = parseView(await response.json());
       if (!response.ok || !next) throw new Error();
       setSession(next);
@@ -122,7 +122,7 @@ export default function TogetherSessionScreen({ initialSession }: { initialSessi
       {session.exhausted ? (
         <section aria-live="polite" className="flex min-h-[calc(100svh-120px)] flex-col items-center justify-center px-2 pb-12 text-center">
           <span aria-hidden="true" className="mb-6 grid size-[58px] place-items-center rounded-[1.25rem] bg-closer-peach text-[1.8rem] text-closer-navy">✦</span>
-          <h1 className="max-w-[13ch] text-[2.2rem] font-extrabold leading-tight tracking-[-.05em]">You’ve reached the end of these questions.</h1>
+          <h1 className="max-w-[13ch] text-[2.2rem] font-extrabold leading-tight tracking-[-.05em]">You’ve reached the end for now.</h1>
           <p className="mt-3 mb-6 text-closer-muted">That was a good little corner of the deck.</p>
           <Button disabled={pending !== null} onClick={() => setIsEndSheetOpen(true)} size="lg" type="button">End session</Button>
         </section>

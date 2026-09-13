@@ -15,13 +15,14 @@ export async function POST(request: Request, context: { params: Promise<{ pairId
   }
   const action = "action" in body ? body.action : null;
   const clientRequestId = "clientRequestId" in body ? body.clientRequestId : undefined;
-  if ((action !== "next" && action !== "skip") || (clientRequestId !== undefined && typeof clientRequestId !== "string")) {
+  const currentQuestionId = "currentQuestionId" in body ? body.currentQuestionId : undefined;
+  if ((action !== "next" && action !== "skip") || (clientRequestId !== undefined && typeof clientRequestId !== "string") || (currentQuestionId !== undefined && typeof currentQuestionId !== "string")) {
     return Response.json({ error: "Invalid request." }, { status: 400, headers: togetherNoStoreHeaders });
   }
 
   const { pairId, sessionId } = await context.params;
   try {
-    await advanceTogetherSession(db, { participantId: participant.id, pairId, sessionId, action, clientRequestId });
+    await advanceTogetherSession(db, { participantId: participant.id, pairId, sessionId, action, clientRequestId, currentQuestionId });
     return Response.json(
       await getTogetherSessionForParticipant(db, { participantId: participant.id, pairId, sessionId }),
       { headers: togetherNoStoreHeaders },

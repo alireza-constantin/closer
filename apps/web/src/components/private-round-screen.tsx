@@ -25,7 +25,7 @@ type RoundView = {
   id: string;
   pairId: string;
   conversation: { id: string; category: string; questionNumber: number };
-  question: { id: string; text: string; category: string; depth: string };
+  question: { id: string; questionRevisionId: string; text: string; category: string; intensity: string };
   otherParticipant: { id: string; displayName: string };
   yourAnswer: string | null;
   state: "YOUR_TURN" | "WAITING" | "REVEAL_READY" | "REVEAL_VIEWED";

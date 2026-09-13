@@ -9,9 +9,11 @@ import {
   pgTable,
   text,
   timestamp,
+  unique,
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+import type { AnyPgColumn } from "drizzle-orm/pg-core";
 
 import { user } from "./auth";
 
@@ -20,7 +22,7 @@ export const pairSlot = pgEnum("pair_slot", ["first", "second"]);
 export const questionCategory = pgEnum("question_category", ["fun", "deep", "memories", "relationship", "friendship"]);
 export const questionRelationshipFit = pgEnum("question_relationship_fit", ["both", "partner", "friend"]);
 export const questionModeFit = pgEnum("question_mode_fit", ["both", "together", "private"]);
-export const questionDepth = pgEnum("question_depth", ["light", "medium", "deep"]);
+export const questionIntensity = pgEnum("question_intensity", ["light", "medium", "deep"]);
 export const privateReactionValue = pgEnum("private_reaction_value", ["heart", "laugh", "tender", "surprised"]);
 
 export const participant = pgTable(
@@ -144,19 +146,37 @@ export const question = pgTable(
   "question",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    text: text("text").notNull(),
-    category: questionCategory("category").notNull(),
-    relationshipFit: questionRelationshipFit("relationship_fit").notNull(),
-    modeFit: questionModeFit("mode_fit").notNull(),
-    depth: questionDepth("depth").notNull(),
+    currentRevisionId: uuid("current_revision_id").references((): AnyPgColumn => questionRevision.id, { onDelete: "restrict" }),
     isActive: boolean("is_active").default(true).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
-    index("question_private_selection_idx").on(table.isActive, table.category, table.modeFit, table.relationshipFit),
-    check("question_text_not_blank", sql`char_length(btrim(${table.text})) > 0`),
+    index("question_selection_idx").on(table.isActive, table.currentRevisionId),
+  ],
+);
+
+export const questionRevision = pgTable(
+  "question_revision",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    questionId: uuid("question_id")
+      .notNull()
+      .references((): AnyPgColumn => question.id, { onDelete: "restrict" }),
+    text: text("text").notNull(),
+    category: questionCategory("category").notNull(),
+    relationshipFit: questionRelationshipFit("relationship_fit").notNull(),
+    modeFit: questionModeFit("mode_fit").notNull(),
+    intensity: questionIntensity("intensity").notNull(),
+    withdrawnAt: timestamp("withdrawn_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    unique("question_revision_question_id_id_key").on(table.questionId, table.id),
+    index("question_revision_selection_idx").on(table.category, table.modeFit, table.relationshipFit, table.intensity),
+    index("question_revision_question_created_idx").on(table.questionId, table.createdAt),
+    check("question_revision_text_not_blank", sql`char_length(btrim(${table.text})) > 0`),
     check(
-      "question_category_relationship_fit_valid",
+      "question_revision_category_relationship_fit_valid",
       sql`(${table.category} not in ('relationship', 'friendship')) or (${table.category} = 'relationship' and ${table.relationshipFit} = 'partner') or (${table.category} = 'friendship' and ${table.relationshipFit} = 'friend')`,
     ),
   ],
@@ -180,7 +200,7 @@ export const privateConversation = pgTable(
   },
   (table) => [
     uniqueIndex("private_conversation_one_era_category_uidx").on(table.pairId, table.membershipEraId, table.category),
-    uniqueIndex("private_conversation_pair_id_id_uidx").on(table.pairId, table.id),
+    unique("private_conversation_pair_id_id_key").on(table.pairId, table.id),
     index("private_conversation_pair_created_idx").on(table.pairId, table.createdAt),
   ],
 );
@@ -196,6 +216,9 @@ export const privateRound = pgTable(
     questionId: uuid("question_id")
       .notNull()
       .references(() => question.id, { onDelete: "restrict" }),
+    questionRevisionId: uuid("question_revision_id")
+      .notNull()
+      .references(() => questionRevision.id, { onDelete: "restrict" }),
     initiatorParticipantId: uuid("initiator_participant_id")
       .notNull()
       .references(() => participant.id, { onDelete: "restrict" }),
@@ -203,6 +226,11 @@ export const privateRound = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
+    foreignKey({
+      columns: [table.questionId, table.questionRevisionId],
+      foreignColumns: [questionRevision.questionId, questionRevision.id],
+      name: "private_round_question_revision_belongs_to_question_fk",
+    }).onDelete("restrict"),
     foreignKey({
       columns: [table.pairId, table.conversationId],
       foreignColumns: [privateConversation.pairId, privateConversation.id],
@@ -307,6 +335,7 @@ export const togetherSession = pgTable(
     startedAt: timestamp("started_at").defaultNow().notNull(),
     endedAt: timestamp("ended_at"),
     startRequestId: uuid("start_request_id"),
+    selectionSeed: text("selection_seed").notNull().default(sql`gen_random_uuid()::text`),
   },
   (table) => [
     uniqueIndex("together_session_start_request_uidx")
@@ -354,6 +383,9 @@ export const togetherSessionQuestion = pgTable(
     questionId: uuid("question_id")
       .notNull()
       .references(() => question.id, { onDelete: "restrict" }),
+    questionRevisionId: uuid("question_revision_id")
+      .notNull()
+      .references(() => questionRevision.id, { onDelete: "restrict" }),
     position: integer("position").notNull(),
     shownAt: timestamp("shown_at").defaultNow().notNull(),
     likedAt: timestamp("liked_at"),
@@ -362,6 +394,11 @@ export const togetherSessionQuestion = pgTable(
     advanceRequestId: uuid("advance_request_id"),
   },
   (table) => [
+    foreignKey({
+      columns: [table.questionId, table.questionRevisionId],
+      foreignColumns: [questionRevision.questionId, questionRevision.id],
+      name: "together_session_question_revision_belongs_to_question_fk",
+    }).onDelete("restrict"),
     uniqueIndex("together_session_question_once_uidx").on(table.sessionId, table.questionId),
     uniqueIndex("together_session_question_position_uidx").on(table.sessionId, table.position),
     uniqueIndex("together_session_question_advance_request_uidx")
@@ -425,6 +462,10 @@ export const togetherSessionQuestionRelations = relations(togetherSessionQuestio
     fields: [togetherSessionQuestion.questionId],
     references: [question.id],
   }),
+  revision: one(questionRevision, {
+    fields: [togetherSessionQuestion.questionRevisionId],
+    references: [questionRevision.id],
+  }),
 }));
 
 export const privateConversationRelations = relations(privateConversation, ({ one, many }) => ({
@@ -444,6 +485,14 @@ export const privateRoundRelations = relations(privateRound, ({ one }) => ({
   conversation: one(privateConversation, {
     fields: [privateRound.conversationId],
     references: [privateConversation.id],
+  }),
+  question: one(question, {
+    fields: [privateRound.questionId],
+    references: [question.id],
+  }),
+  revision: one(questionRevision, {
+    fields: [privateRound.questionRevisionId],
+    references: [questionRevision.id],
   }),
 }));
 

@@ -1,0 +1,1 @@
+ALTER TABLE "together_session" ADD COLUMN "selection_seed" text DEFAULT gen_random_uuid()::text NOT NULL;
