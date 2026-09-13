@@ -10,6 +10,7 @@ const { createDb } = await import("./index");
 const {
   CloserDomainError,
   askPrivateQuestionCandidate,
+  declinePrivateRound,
   createQuestion,
   createPairForParticipant,
   getPrivateRoundForParticipant,
@@ -35,7 +36,7 @@ const {
   reviseQuestion,
   withdrawQuestionRevision,
 } = await import("./closer");
-const { initialInvite, pair, pairMembership, pairMembershipEra, participant, privateAnswer, privateConversation, privateQuestionCandidate, privateRound, question, questionRevision } = await import("./schema/closer");
+const { initialInvite, pair, pairMembership, pairMembershipEra, participant, privateAnswer, privateConversation, privateQuestionCandidate, privateRevealView, privateRound, question, questionRevision } = await import("./schema/closer");
 const { user } = await import("./schema/auth");
 
 const db = createDb();
@@ -238,7 +239,7 @@ describe("Closer Slice 01B Private rounds", () => {
     expect(await getPrivateRoundStatusForParticipant(db, { pairId, participantId: second.id, roundId: round.id })).toEqual({ state: "YOUR_TURN" });
   });
 
-  test("only the second committed answer makes that round reveal-ready and reveals both answers", async () => {
+  test("only the second committed answer makes that round reveal-ready without serializing either answer", async () => {
     const { pairId, first, second } = await createJoinedPair();
     const roundA = await createRound(pairId, first.id);
     const roundB = await createRound(pairId, first.id, questionIds.relationship);
@@ -247,8 +248,11 @@ describe("Closer Slice 01B Private rounds", () => {
     const visibleToFirst = await getPrivateRoundForParticipant(db, { pairId, participantId: first.id, roundId: roundA.id });
     const visibleToSecond = await getPrivateRoundForParticipant(db, { pairId, participantId: second.id, roundId: roundA.id });
     expect(visibleToFirst.state).toBe("REVEAL_READY");
-    expect(visibleToSecond.answers).toHaveLength(2);
-    expect(visibleToFirst.answers?.map((answer) => answer.body)).toEqual(expect.arrayContaining(["A one", "A two"]));
+    expect(visibleToSecond.answers).toBeUndefined();
+    expect(visibleToFirst.answers).toBeUndefined();
+    expect(JSON.stringify(visibleToSecond)).not.toContain("A one");
+    await markPrivateRevealViewed(db, { pairId, participantId: first.id, roundId: roundA.id });
+    expect((await getPrivateRoundForParticipant(db, { pairId, participantId: first.id, roundId: roundA.id })).answers?.map((answer) => answer.body)).toEqual(expect.arrayContaining(["A one", "A two"]));
     expect((await getPrivateRoundForParticipant(db, { pairId, participantId: first.id, roundId: roundB.id })).answers).toBeUndefined();
   });
 
@@ -322,6 +326,7 @@ describe("Closer Slice 01B Private rounds", () => {
     const round = await makeReady(joined.pairId, joined.first.id, joined.second.id);
     await markPrivateRevealViewed(db, { pairId: joined.pairId, participantId: joined.first.id, roundId: round.id });
     await setPrivateReply(db, { pairId: joined.pairId, participantId: joined.first.id, roundId: round.id, body: "I’m glad you said that." });
+    await markPrivateRevealViewed(db, { pairId: joined.pairId, participantId: joined.second.id, roundId: round.id });
     const secondView = await getPrivateRoundForParticipant(db, { pairId: joined.pairId, participantId: joined.second.id, roundId: round.id });
     expect(secondView.replies).toEqual([expect.objectContaining({ participantId: joined.first.id, body: "I’m glad you said that.", isOwner: false })]);
     expect(await capture(setPrivateReaction(db, { pairId: joined.pairId, participantId: unrelated.id, roundId: round.id, value: "heart" }))).toMatchObject({ code: "PAIR_NOT_FOUND" });
@@ -352,8 +357,13 @@ describe("Closer Slice 01B Private rounds", () => {
     await markPrivateRevealViewed(db, { pairId, participantId: first.id, roundId: round.id });
     firstSummary = (await listActivePrivateConversations(db, { pairId, participantId: first.id }))[0];
     secondSummary = (await listActivePrivateConversations(db, { pairId, participantId: second.id }))[0];
-    expect(firstSummary?.state).toBe("READY_FOR_NEXT");
+    expect(firstSummary?.state).toBe("WAITING_FOR_REVEAL");
     expect(secondSummary?.state).toBe("REVEAL_READY");
+    await markPrivateRevealViewed(db, { pairId, participantId: second.id, roundId: round.id });
+    firstSummary = (await listActivePrivateConversations(db, { pairId, participantId: first.id }))[0];
+    secondSummary = (await listActivePrivateConversations(db, { pairId, participantId: second.id }))[0];
+    expect(firstSummary?.state).toBe("READY_FOR_NEXT");
+    expect(secondSummary?.state).toBe("WAITING_FOR_CREATOR");
   });
 
   test("a participant outside the pair cannot read or operate on its round", async () => {
@@ -579,5 +589,70 @@ describe("Closer Slice 01B Private rounds", () => {
     const nextEra = await startOrResumePrivateConversation(db, { pairId: joined.pairId, participantId: joined.first.id, category: "deep", clientRequestId: randomUUID() });
     expect(nextEra.id).not.toBe(old.id);
     expect(nextEra.state).toBe("CANDIDATE");
+  });
+
+  test("either unanswered participant can pass, the Round stays numbered, and a lone answer remains author-only", async () => {
+    const { pairId, first, second } = await createJoinedPair();
+    const round = await createRound(pairId, first.id);
+    await submitPrivateAnswer(db, { pairId, participantId: first.id, roundId: round.id, body: "Only Ali may retain this." });
+    const passed = await declinePrivateRound(db, { pairId, participantId: second.id, roundId: round.id });
+    expect(passed).toMatchObject({ state: "DECLINED", yourAnswer: null, conversation: { questionNumber: 1 } });
+    expect(JSON.stringify(passed)).not.toContain("Only Ali may retain this.");
+    const authorView = await getPrivateRoundForParticipant(db, { pairId, participantId: first.id, roundId: round.id });
+    expect(authorView).toMatchObject({ state: "DECLINED", yourAnswer: "Only Ali may retain this." });
+    expect(authorView.answers).toBeUndefined();
+    const [stored] = await db.select().from(privateRound).where(eq(privateRound.id, round.id));
+    expect(stored).toMatchObject({ status: "declined", declinedByParticipantId: second.id });
+    expect(await db.select().from(privateRevealView).where(eq(privateRevealView.roundId, round.id))).toHaveLength(0);
+    const creator = await getPrivateConversationForParticipant(db, { pairId, participantId: first.id, conversationId: round.conversationId });
+    const nonCreator = await getPrivateConversationForParticipant(db, { pairId, participantId: second.id, conversationId: round.conversationId });
+    expect(["CANDIDATE", "EXHAUSTED"]).toContain(creator.state);
+    expect(["WAITING_FOR_CREATOR", "EXHAUSTED"]).toContain(nonCreator.state);
+  });
+
+  test("passing is unavailable to an answerer or once two answers exist, while the unanswered participant may pass", async () => {
+    const { pairId, first, second } = await createJoinedPair();
+    const oneAnswer = await createRound(pairId, first.id);
+    await submitPrivateAnswer(db, { pairId, participantId: first.id, roundId: oneAnswer.id, body: "I answered." });
+    expect(await capture(declinePrivateRound(db, { pairId, participantId: first.id, roundId: oneAnswer.id }))).toMatchObject({ code: "QUESTION_UNAVAILABLE" });
+    await declinePrivateRound(db, { pairId, participantId: second.id, roundId: oneAnswer.id });
+
+    const ready = await createRound(pairId, first.id, questionIds.relationship);
+    await submitPrivateAnswer(db, { pairId, participantId: first.id, roundId: ready.id, body: "First answer." });
+    await submitPrivateAnswer(db, { pairId, participantId: second.id, roundId: ready.id, body: "Second answer." });
+    expect(await capture(declinePrivateRound(db, { pairId, participantId: first.id, roundId: ready.id }))).toMatchObject({ code: "QUESTION_UNAVAILABLE" });
+  });
+
+  test("pass and answer serialize, repeated pass is idempotent, and declined Rounds reject reveal, reaction, and reply", async () => {
+    const { pairId, first, second } = await createJoinedPair();
+    const round = await createRound(pairId, first.id);
+    const [passed, answered] = await Promise.all([
+      capture(declinePrivateRound(db, { pairId, participantId: second.id, roundId: round.id })),
+      capture(submitPrivateAnswer(db, { pairId, participantId: second.id, roundId: round.id, body: "Racing answer." })),
+    ]);
+    expect([passed, answered].filter((result) => !(result instanceof Error))).toHaveLength(1);
+    const [stored] = await db.select().from(privateRound).where(eq(privateRound.id, round.id));
+    if (stored?.status === "declined") {
+      await expect(declinePrivateRound(db, { pairId, participantId: second.id, roundId: round.id })).resolves.toMatchObject({ state: "DECLINED" });
+      expect(await capture(markPrivateRevealViewed(db, { pairId, participantId: second.id, roundId: round.id }))).toMatchObject({ code: "REVEAL_NOT_READY" });
+      expect(await capture(setPrivateReaction(db, { pairId, participantId: second.id, roundId: round.id, value: "heart" }))).toMatchObject({ code: "REVEAL_NOT_READY" });
+      expect(await capture(setPrivateReply(db, { pairId, participantId: second.id, roundId: round.id, body: "No reply." }))).toMatchObject({ code: "REVEAL_NOT_READY" });
+    }
+  });
+
+  test("Reveal Views are independent and only both views permit creator candidate progression", async () => {
+    const { pairId, first, second } = await createJoinedPair();
+    const started = await startOrResumePrivateConversation(db, { pairId, participantId: first.id, category: "deep", clientRequestId: randomUUID() });
+    if (started.state !== "CANDIDATE") throw new Error("Expected candidate.");
+    const asked = await askPrivateQuestionCandidate(db, { pairId, participantId: first.id, conversationId: started.id, candidateId: started.candidate.id, clientRequestId: randomUUID() });
+    await submitPrivateAnswer(db, { pairId, participantId: first.id, roundId: asked.roundId, body: "Creator answer." });
+    await submitPrivateAnswer(db, { pairId, participantId: second.id, roundId: asked.roundId, body: "Other answer." });
+    await markPrivateRevealViewed(db, { pairId, participantId: first.id, roundId: asked.roundId });
+    expect(await db.select().from(privateRevealView).where(eq(privateRevealView.roundId, asked.roundId))).toHaveLength(1);
+    expect((await startOrResumePrivateConversation(db, { pairId, participantId: first.id, category: "deep", clientRequestId: randomUUID() })).state).toBe("CURRENT_ROUND");
+    expect((await startOrResumePrivateConversation(db, { pairId, participantId: second.id, category: "deep", clientRequestId: randomUUID() })).state).toBe("CURRENT_ROUND");
+    await markPrivateRevealViewed(db, { pairId, participantId: second.id, roundId: asked.roundId });
+    expect((await startOrResumePrivateConversation(db, { pairId, participantId: first.id, category: "deep", clientRequestId: randomUUID() })).state).toMatch(/CANDIDATE|EXHAUSTED/);
+    expect((await startOrResumePrivateConversation(db, { pairId, participantId: second.id, category: "deep", clientRequestId: randomUUID() })).state).toBe("WAITING_FOR_CREATOR");
   });
 });

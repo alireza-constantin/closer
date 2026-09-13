@@ -4,6 +4,8 @@ import { useRouter } from "next/navigation";
 import { Heart } from "lucide-react";
 import { useEffect, useState } from "react";
 
+import { Button } from "@Closer/ui/components/button";
+
 import { AsyncButton } from "@/components/closer/async-button";
 import { ActionError } from "@/components/closer/feedback";
 import { CloserBackButton } from "@/components/closer/navigation";
@@ -16,7 +18,7 @@ type ConversationProjection = {
   category: string;
   creator: { displayName: string };
   role: "creator" | "non-creator";
-  state: "CANDIDATE" | "WAITING_FOR_CREATOR" | "EXHAUSTED";
+  state: "CANDIDATE" | "READY_FOR_NEXT" | "WAITING_FOR_CREATOR" | "EXHAUSTED";
   message?: string;
   candidate?: { id: string; liked: boolean; question: { text: string } };
 };
@@ -98,6 +100,12 @@ export default function PrivateConversationScreen({ view }: { view: Conversation
               </div>
             </div>
             {error ? <ActionError>{error}</ActionError> : null}
+          </>
+        ) : view.state === "READY_FOR_NEXT" ? (
+          <>
+            <h1 className="mt-4 max-w-[18ch] text-balance text-[2.25rem] font-extrabold leading-tight tracking-[-.048em]">Choose the next question</h1>
+            <p className="mt-4 max-w-[32ch] leading-relaxed text-closer-muted">You can continue once you&apos;re ready.</p>
+            <Button className="mt-8" onClick={() => router.push(`/pair/${view.pairId}/private` as never)} size="lg" type="button">Choose next question</Button>
           </>
         ) : view.state === "EXHAUSTED" ? (
           <h1 className="mt-4 max-w-[18ch] text-balance text-[2.25rem] font-extrabold leading-tight tracking-[-.048em]">You&apos;ve reached the end for now.</h1>

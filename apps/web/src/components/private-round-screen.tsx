@@ -24,12 +24,13 @@ type ReactionValue = "heart" | "laugh" | "tender" | "surprised";
 type RoundView = {
   id: string;
   pairId: string;
-  conversation: { id: string; category: string; questionNumber: number };
+  conversation: { id: string; category: string; questionNumber: number; isCreator: boolean };
   question: { id: string; questionRevisionId: string; text: string; category: string; intensity: string };
   otherParticipant: { id: string; displayName: string };
   yourAnswer: string | null;
-  state: "YOUR_TURN" | "WAITING" | "REVEAL_READY" | "REVEAL_VIEWED";
+  state: "YOUR_TURN" | "WAITING" | "REVEAL_READY" | "REVEAL_VIEWED" | "DECLINED";
   revealViewedAt: string | null;
+  otherRevealViewed: boolean;
   answers?: Array<{ participantId: string; displayName: string; body: string }>;
   reactions?: Array<{ participantId: string; displayName: string; value: ReactionValue }>;
   replies?: Array<{ participantId: string; displayName: string; body: string; isOwner: boolean }>;
@@ -50,6 +51,7 @@ function parseRound(value: unknown): RoundView | null {
 export default function PrivateRoundScreen({ initialRound }: { initialRound: RoundView }) {
   const router = useRouter();
   const [round, setRound] = useState(initialRound);
+  const [isPassing, setIsPassing] = useState(false);
   const [isRevealing, setIsRevealing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const answerForm = useForm<PrivateAnswerValues>({
@@ -79,7 +81,7 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
   });
 
   useVisiblePolling({
-    enabled: round.state === "REVEAL_VIEWED",
+    enabled: round.state === "REVEAL_VIEWED" && !round.otherRevealViewed,
     intervalMs: 4_000,
     onPoll: async (signal) => {
       try {
@@ -117,6 +119,21 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
       setError("Your answers are still getting ready. Please try again.");
     } finally {
       setIsRevealing(false);
+    }
+  }
+
+  async function passQuestion() {
+    setError(null);
+    setIsPassing(true);
+    try {
+      const response = await fetch(`${baseUrl}/decline`, { method: "POST" });
+      const next = parseRound(await response.json());
+      if (!response.ok || !next) throw new Error();
+      setRound(next);
+    } catch {
+      setError("We couldn’t pass this question. Please try again.");
+    } finally {
+      setIsPassing(false);
     }
   }
 
@@ -187,7 +204,9 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
             </FieldGroup>
             {answerForm.formState.errors.root?.server?.message ? <ActionError>{answerForm.formState.errors.root.server.message}</ActionError> : null}
             <AsyncButton className="mt-[18px] w-full" disabled={!answerForm.formState.isValid} pending={answerForm.formState.isSubmitting} pendingText="Saving…" size="lg" type="submit">Save my answer</AsyncButton>
+            <AsyncButton className="mt-3 w-full" onClick={() => void passQuestion()} pending={isPassing} pendingText="Passing…" size="lg" type="button" variant="ghost">Pass this question</AsyncButton>
           </form>
+          {error ? <ActionError>{error}</ActionError> : null}
           <p className="mt-4 flex items-center justify-center gap-2 text-center text-[.85rem] text-closer-muted" id="private-answer-help"><LockKeyhole aria-hidden="true" className="size-4" />{round.otherParticipant.displayName} won’t see your answer yet.</p>
         </section>
       </CloserPageShell>
@@ -228,6 +247,25 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
     );
   }
 
+  if (round.state === "DECLINED") {
+    return (
+      <CloserPageShell className="pt-5">
+        {header}
+        <section className="flex min-h-[calc(100svh-110px)] flex-col items-center justify-center pb-9 text-center">
+          <CloserCompanions className="mb-7" />
+          <h1 className="text-[2.25rem] font-extrabold leading-tight tracking-[-.048em]">Question passed</h1>
+          <p className="mx-auto my-6 max-w-[27ch] leading-relaxed text-closer-muted">This question is complete without a reveal.</p>
+          {round.conversation.isCreator ? (
+            <Button onClick={() => router.push(`/pair/${round.pairId}/private` as never)} size="lg" type="button">Choose next question</Button>
+          ) : (
+            <p className="text-sm leading-relaxed text-closer-muted">Waiting for {round.otherParticipant.displayName} to choose a question.</p>
+          )}
+          <Button className="mt-3" onClick={() => router.push(`/pair/${round.pairId}` as never)} size="sm" type="button" variant="ghost">Back to Closer</Button>
+        </section>
+      </CloserPageShell>
+    );
+  }
+
   const selectedReaction = round.reactions?.find((item) => item.participantId !== round.otherParticipant.id)?.value;
   const ownReply = round.replies?.find((item) => item.isOwner);
   return (
@@ -237,6 +275,8 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
         <p className="text-center text-xs font-bold capitalize tracking-[.01em] text-closer-muted">{round.question.category} · Question {round.conversation.questionNumber}</p>
         <h1 className="mt-3 text-center text-[2.25rem] font-extrabold leading-tight tracking-[-.048em]">Your answers</h1>
         <p className="mt-2 text-center text-closer-muted">Two perspectives. A closer us.</p>
+        {round.conversation.isCreator && !round.otherRevealViewed ? <p className="mt-3 text-center text-sm leading-relaxed text-closer-muted">Waiting for {round.otherParticipant.displayName} to view the reveal.</p> : null}
+        {!round.conversation.isCreator ? <p className="mt-3 text-center text-sm leading-relaxed text-closer-muted">Waiting for {round.otherParticipant.displayName} to choose a question.</p> : null}
         <div className="mt-7 grid gap-3">
           {round.answers?.map((item, index) => {
             const partnerReaction = round.reactions?.find((reaction) => reaction.participantId !== item.participantId);
@@ -268,7 +308,7 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
           </div>
         </form>
         {round.replies?.filter((item) => !item.isOwner).map((item) => <p className="px-1.5 py-3 text-[.9rem] leading-relaxed text-closer-muted" key={item.participantId}><strong className="text-closer-navy">{item.displayName}</strong> {item.body}</p>)}
-        <Button className="mt-2.5 w-full" onClick={() => router.push(`/pair/${round.pairId}/private` as never)} size="lg" type="button" variant="secondary">Choose another topic</Button>
+        {round.conversation.isCreator && round.otherRevealViewed ? <Button className="mt-2.5 w-full" onClick={() => router.push(`/pair/${round.pairId}/private` as never)} size="lg" type="button" variant="secondary">Choose next question</Button> : null}
         <Button className="mx-auto mt-2 block" onClick={() => router.push(`/pair/${round.pairId}` as never)} size="sm" type="button" variant="ghost">Back to Closer</Button>
         {error ? <ActionError>{error}</ActionError> : null}
       </section>

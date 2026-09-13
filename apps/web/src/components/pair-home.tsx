@@ -28,10 +28,10 @@ type ActiveConversation = {
   questionCount: number;
   role: "creator" | "non-creator";
   creator: { participantId: string; displayName: string };
-  currentRound?: { id: string; question: { id: string; questionRevisionId: string; text: string; category: string; intensity: string } };
+  currentRound?: { id: string; otherRevealViewed?: boolean; question: { id: string; questionRevisionId: string; text: string; category: string; intensity: string } };
   candidate?: { id: string; question: { id: string; questionRevisionId: string; text: string; category: string; intensity: string } };
   otherParticipantDisplayName: string;
-  state: "YOUR_TURN" | "WAITING" | "REVEAL_READY" | "READY_FOR_NEXT" | "CANDIDATE" | "WAITING_FOR_CREATOR" | "EXHAUSTED";
+  state: "YOUR_TURN" | "WAITING" | "REVEAL_READY" | "DECLINED" | "WAITING_FOR_REVEAL" | "READY_FOR_NEXT" | "CANDIDATE" | "WAITING_FOR_CREATOR" | "EXHAUSTED";
 };
 
 function parseActiveConversations(value: unknown): ActiveConversation[] | null {
@@ -41,7 +41,7 @@ function parseActiveConversations(value: unknown): ActiveConversation[] | null {
     && "id" in conversation && typeof conversation.id === "string"
     && "category" in conversation && typeof conversation.category === "string"
     && "questionCount" in conversation && typeof conversation.questionCount === "number"
-    && "state" in conversation && ["YOUR_TURN", "WAITING", "REVEAL_READY", "READY_FOR_NEXT", "CANDIDATE", "WAITING_FOR_CREATOR", "EXHAUSTED"].includes(String(conversation.state))
+    && "state" in conversation && ["YOUR_TURN", "WAITING", "REVEAL_READY", "DECLINED", "WAITING_FOR_REVEAL", "READY_FOR_NEXT", "CANDIDATE", "WAITING_FOR_CREATOR", "EXHAUSTED"].includes(String(conversation.state))
     && "role" in conversation && (conversation.role === "creator" || conversation.role === "non-creator")
     && "creator" in conversation && conversation.creator && typeof conversation.creator === "object"
     && "displayName" in conversation.creator && typeof conversation.creator.displayName === "string"
@@ -67,6 +67,8 @@ function statusCopy(conversation: ActiveConversation) {
   if (conversation.state === "YOUR_TURN") return "Your turn";
   if (conversation.state === "WAITING") return `Waiting for ${conversation.otherParticipantDisplayName}`;
   if (conversation.state === "REVEAL_READY") return "Ready to reveal";
+  if (conversation.state === "DECLINED") return "Question passed";
+  if (conversation.state === "WAITING_FOR_REVEAL") return `Waiting for ${conversation.otherParticipantDisplayName} to view the reveal`;
   if (conversation.state === "READY_FOR_NEXT") return "Ready for next question";
   if (conversation.state === "CANDIDATE") return "Choose a question";
   if (conversation.state === "EXHAUSTED") return "You've reached the end for now.";
@@ -81,6 +83,8 @@ const stateDotClasses: Record<ActiveConversation["state"], string> = {
   YOUR_TURN: "bg-closer-coral",
   WAITING: "bg-closer-warning",
   REVEAL_READY: "bg-closer-lavender",
+  DECLINED: "bg-closer-muted",
+  WAITING_FOR_REVEAL: "bg-closer-warning",
   READY_FOR_NEXT: "bg-closer-success",
   CANDIDATE: "bg-closer-coral",
   WAITING_FOR_CREATOR: "bg-closer-warning",
@@ -195,8 +199,10 @@ export default function PairHome({
   activeConversations: ActiveConversation[];
 }) {
   const [activeConversations, setActiveConversations] = useState(initialActiveConversations);
+  const hasWaitingConversation = activeConversations.some((conversation) => ["WAITING", "WAITING_FOR_REVEAL", "WAITING_FOR_CREATOR"].includes(conversation.state));
 
   useVisiblePolling({
+    enabled: hasWaitingConversation,
     intervalMs: ACTIVE_CONVERSATIONS_POLL_INTERVAL_MS,
     onPoll: async (signal) => {
       try {

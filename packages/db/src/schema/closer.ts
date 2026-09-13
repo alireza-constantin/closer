@@ -25,6 +25,7 @@ export const questionModeFit = pgEnum("question_mode_fit", ["both", "together", 
 export const questionIntensity = pgEnum("question_intensity", ["light", "medium", "deep"]);
 export const privateReactionValue = pgEnum("private_reaction_value", ["heart", "laugh", "tender", "surprised"]);
 export const privateQuestionCandidateState = pgEnum("private_question_candidate_state", ["unresolved", "asked", "skipped", "invalidated"]);
+export const privateRoundStatus = pgEnum("private_round_status", ["open", "declined"]);
 
 export const participant = pgTable(
   "participant",
@@ -257,6 +258,9 @@ export const privateRound = pgTable(
       .notNull()
       .references(() => participant.id, { onDelete: "restrict" }),
     clientRequestId: uuid("client_request_id"),
+    status: privateRoundStatus("status").default("open").notNull(),
+    declinedByParticipantId: uuid("declined_by_participant_id").references(() => participant.id, { onDelete: "restrict" }),
+    declinedAt: timestamp("declined_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
@@ -274,6 +278,10 @@ export const privateRound = pgTable(
     index("private_round_conversation_created_idx").on(table.conversationId, table.createdAt),
     uniqueIndex("private_round_conversation_number_uidx").on(table.conversationId, table.questionNumber),
     check("private_round_question_number_positive", sql`${table.questionNumber} > 0`),
+    check(
+      "private_round_decline_audit_consistent",
+      sql`(${table.status} = 'open' and ${table.declinedByParticipantId} is null and ${table.declinedAt} is null) or (${table.status} = 'declined' and ${table.declinedByParticipantId} is not null and ${table.declinedAt} is not null)`,
+    ),
     uniqueIndex("private_round_idempotency_uidx")
       .on(table.pairId, table.initiatorParticipantId, table.clientRequestId)
       .where(sql`${table.clientRequestId} is not null`),

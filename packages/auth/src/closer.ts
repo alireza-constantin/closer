@@ -1,6 +1,7 @@
 export { db } from "@Closer/db";
 export {
   CloserDomainError,
+  declinePrivateRound,
   advanceTogetherSession,
   askPrivateQuestionCandidate,
   createPairForParticipant,
