@@ -28,9 +28,12 @@ export default function PrivatePicker({ pairId, relationshipType }: { pairId: st
         body: JSON.stringify({ category, clientRequestId }),
       });
       const body: unknown = await response.json();
-      if (!response.ok || !body || typeof body !== "object" || !("roundId" in body) || typeof body.roundId !== "string") throw new Error();
+      if (!response.ok || !body || typeof body !== "object" || !("conversationId" in body) || typeof body.conversationId !== "string") throw new Error();
       requestIds.current.delete(category);
-      router.push(`/pair/${pairId}/private/round/${body.roundId}` as never);
+      const destination = "roundId" in body && typeof body.roundId === "string"
+        ? `/pair/${pairId}/private/round/${body.roundId}`
+        : `/pair/${pairId}/private/conversation/${body.conversationId}`;
+      router.push(destination as never);
     } catch {
       setError("We couldn’t open that conversation right now. Please try again.");
     } finally {

@@ -26,9 +26,12 @@ type ActiveConversation = {
   id: string;
   category: string;
   questionCount: number;
-  currentRound: { id: string; question: { id: string; questionRevisionId: string; text: string; category: string; intensity: string } };
+  role: "creator" | "non-creator";
+  creator: { participantId: string; displayName: string };
+  currentRound?: { id: string; question: { id: string; questionRevisionId: string; text: string; category: string; intensity: string } };
+  candidate?: { id: string; question: { id: string; questionRevisionId: string; text: string; category: string; intensity: string } };
   otherParticipantDisplayName: string;
-  state: "YOUR_TURN" | "WAITING" | "REVEAL_READY" | "READY_FOR_NEXT";
+  state: "YOUR_TURN" | "WAITING" | "REVEAL_READY" | "READY_FOR_NEXT" | "CANDIDATE" | "WAITING_FOR_CREATOR" | "EXHAUSTED";
 };
 
 function parseActiveConversations(value: unknown): ActiveConversation[] | null {
@@ -38,11 +41,10 @@ function parseActiveConversations(value: unknown): ActiveConversation[] | null {
     && "id" in conversation && typeof conversation.id === "string"
     && "category" in conversation && typeof conversation.category === "string"
     && "questionCount" in conversation && typeof conversation.questionCount === "number"
-    && "state" in conversation && ["YOUR_TURN", "WAITING", "REVEAL_READY", "READY_FOR_NEXT"].includes(String(conversation.state))
-    && "currentRound" in conversation && conversation.currentRound && typeof conversation.currentRound === "object"
-    && "id" in conversation.currentRound && typeof conversation.currentRound.id === "string"
-    && "question" in conversation.currentRound && conversation.currentRound.question && typeof conversation.currentRound.question === "object"
-    && "text" in conversation.currentRound.question && typeof conversation.currentRound.question.text === "string"
+    && "state" in conversation && ["YOUR_TURN", "WAITING", "REVEAL_READY", "READY_FOR_NEXT", "CANDIDATE", "WAITING_FOR_CREATOR", "EXHAUSTED"].includes(String(conversation.state))
+    && "role" in conversation && (conversation.role === "creator" || conversation.role === "non-creator")
+    && "creator" in conversation && conversation.creator && typeof conversation.creator === "object"
+    && "displayName" in conversation.creator && typeof conversation.creator.displayName === "string"
     && "otherParticipantDisplayName" in conversation && typeof conversation.otherParticipantDisplayName === "string"
   )) ? value as ActiveConversation[] : null;
 }
@@ -54,8 +56,10 @@ function sameConversations(current: ActiveConversation[], next: ActiveConversati
       && conversation.id === candidate.id
       && conversation.state === candidate.state
       && conversation.questionCount === candidate.questionCount
-      && conversation.currentRound.id === candidate.currentRound.id
-      && conversation.currentRound.question.text === candidate.currentRound.question.text;
+      && conversation.currentRound?.id === candidate.currentRound?.id
+      && conversation.candidate?.id === candidate.candidate?.id
+      && conversation.currentRound?.question.text === candidate.currentRound?.question.text
+      && conversation.candidate?.question.text === candidate.candidate?.question.text;
   });
 }
 
@@ -63,7 +67,10 @@ function statusCopy(conversation: ActiveConversation) {
   if (conversation.state === "YOUR_TURN") return "Your turn";
   if (conversation.state === "WAITING") return `Waiting for ${conversation.otherParticipantDisplayName}`;
   if (conversation.state === "REVEAL_READY") return "Ready to reveal";
-  return "Ready for next question";
+  if (conversation.state === "READY_FOR_NEXT") return "Ready for next question";
+  if (conversation.state === "CANDIDATE") return "Choose a question";
+  if (conversation.state === "EXHAUSTED") return "You've reached the end for now.";
+  return `Waiting for ${conversation.creator.displayName} to choose a question.`;
 }
 
 function categoryTitle(category: string) {
@@ -75,16 +82,23 @@ const stateDotClasses: Record<ActiveConversation["state"], string> = {
   WAITING: "bg-closer-warning",
   REVEAL_READY: "bg-closer-lavender",
   READY_FOR_NEXT: "bg-closer-success",
+  CANDIDATE: "bg-closer-coral",
+  WAITING_FOR_CREATOR: "bg-closer-warning",
+  EXHAUSTED: "bg-closer-muted",
 };
 
 function ConversationCard({ pairId, conversation }: { pairId: string; conversation: ActiveConversation }) {
+  const question = conversation.currentRound?.question ?? conversation.candidate?.question;
+  const href = conversation.currentRound
+    ? `/pair/${pairId}/private/round/${conversation.currentRound.id}`
+    : `/pair/${pairId}/private/conversation/${conversation.id}`;
   return (
-    <Link className="group grid grid-cols-[12px_1fr_auto] items-center gap-2.5 rounded-[1.05rem] bg-white/85 px-3 py-3 text-closer-navy no-underline shadow-closer-soft transition-transform duration-200 hover:translate-x-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-closer-navy focus-visible:ring-offset-2 focus-visible:ring-offset-closer-cream" href={`/pair/${pairId}/private/round/${conversation.currentRound.id}` as never}>
+    <Link className="group grid grid-cols-[12px_1fr_auto] items-center gap-2.5 rounded-[1.05rem] bg-white/85 px-3 py-3 text-closer-navy no-underline shadow-closer-soft transition-transform duration-200 hover:translate-x-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-closer-navy focus-visible:ring-offset-2 focus-visible:ring-offset-closer-cream" href={href as never}>
       <span aria-hidden="true" className={cn("size-2.5 rounded-full", stateDotClasses[conversation.state])} />
       <span className="min-w-0">
         <strong className="block text-sm font-extrabold">{categoryTitle(conversation.category)}</strong>
         <small className="mt-0.5 block text-xs leading-relaxed text-closer-muted">{statusCopy(conversation)} · {conversation.questionCount} {conversation.questionCount === 1 ? "question" : "questions"}</small>
-        <small className="mt-0.5 block truncate text-xs leading-relaxed text-closer-muted">“{conversation.currentRound.question.text}”</small>
+        {question ? <small className="mt-0.5 block truncate text-xs leading-relaxed text-closer-muted">“{question.text}”</small> : null}
       </span>
       <ChevronRight aria-hidden="true" className="size-5 transition-transform duration-200 group-hover:translate-x-0.5" />
     </Link>

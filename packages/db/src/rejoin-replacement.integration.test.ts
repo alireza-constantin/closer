@@ -24,7 +24,7 @@ const {
   startTogetherSession,
   submitPrivateAnswer,
 } = await import("./closer");
-const { pair, pairMembership, pairMembershipEra, privateAnswer, privateConversation, togetherSession, participant } = await import("./schema/closer");
+const { pair, pairMembership, pairMembershipEra, privateAnswer, privateConversation, privateQuestionCandidate, privateRound, togetherSession, participant } = await import("./schema/closer");
 const { user } = await import("./schema/auth");
 
 const db = createDb();
@@ -62,6 +62,24 @@ async function capture(promise: Promise<unknown>) {
   return promise.then(() => null, (error: unknown) => error);
 }
 
+async function createLegacyPrivateRound(pairId: string, participantId: string) {
+  const started = await startOrResumePrivateConversation(db, { pairId, participantId, category: "deep", clientRequestId: randomUUID() });
+  if (started.state !== "CANDIDATE") {
+    if (started.state === "CURRENT_ROUND") return { roundId: started.roundId, conversationId: started.id };
+    throw new Error("Expected a candidate for the legacy Round fixture.");
+  }
+  const inserted = await db.insert(privateRound).values({
+    pairId,
+    conversationId: started.id,
+    questionId: started.candidate.question.id,
+    questionRevisionId: started.candidate.question.questionRevisionId,
+    initiatorParticipantId: participantId,
+  }).returning({ id: privateRound.id });
+  await db.update(privateQuestionCandidate).set({ state: "asked", resolvedAt: new Date() }).where(eq(privateQuestionCandidate.id, started.candidate.id));
+  if (!inserted[0]) throw new Error("Legacy Round fixture did not create a Round.");
+  return { roundId: inserted[0].id, conversationId: started.id };
+}
+
 afterEach(async () => {
   if (pairIds.length) {
     await db.delete(privateConversation).where(inArray(privateConversation.pairId, pairIds));
@@ -83,12 +101,7 @@ afterAll(async () => { await db.$client.end(); });
 test("guest replacement atomically closes the old exact era and isolates its activity", async () => {
   const { pairId, continuing, former } = await createJoinedPair();
   const oldTogether = await startTogetherSession(db, { pairId, participantId: continuing.id, category: "deep" });
-  const oldPrivate = await startOrResumePrivateConversation(db, {
-    pairId,
-    participantId: continuing.id,
-    category: "deep",
-    clientRequestId: randomUUID(),
-  });
+  const oldPrivate = await createLegacyPrivateRound(pairId, continuing.id);
   await submitPrivateAnswer(db, { pairId, participantId: continuing.id, roundId: oldPrivate.roundId, body: "Only the continuing member answered." });
   const credential = await issueRejoinInvite(db, { pairId, participantId: continuing.id });
   const existingParticipant = await createGuest("Existing identity");
@@ -167,7 +180,7 @@ test("replacement serializes concurrent redemption and Pair-scoped Together and 
   expect(["fulfilled", "rejected"]).toContain(advance.status);
 
   const privatePair = await createJoinedPair();
-  const privateRound = await startOrResumePrivateConversation(db, { pairId: privatePair.pairId, participantId: privatePair.continuing.id, category: "deep", clientRequestId: randomUUID() });
+  const privateRound = await createLegacyPrivateRound(privatePair.pairId, privatePair.continuing.id);
   const privateCredential = await issueRejoinInvite(db, { pairId: privatePair.pairId, participantId: privatePair.continuing.id });
   const privateReplacementAuthUserId = await createGuestAuthUser("Private replacement");
   const [answer, privateReplacement] = await Promise.allSettled([

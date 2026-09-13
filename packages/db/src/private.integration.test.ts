@@ -13,11 +13,14 @@ const {
   createPairForParticipant,
   getPrivateRoundForParticipant,
   getPrivateRoundStatusForParticipant,
+  getPrivateConversationForParticipant,
   issueOrReuseInitialInvite,
+  issueRejoinInvite,
   listActivePrivateConversations,
   listEligiblePrivateQuestions,
   markPrivateRevealViewed,
   redeemInitialInvite,
+  redeemRejoinInvite,
   removePrivateReaction,
   removePrivateReply,
   resolveOrCreateParticipant,
@@ -25,8 +28,10 @@ const {
   setPrivateReply,
   submitPrivateAnswer,
   startOrResumePrivateConversation,
+  reviseQuestion,
+  withdrawQuestionRevision,
 } = await import("./closer");
-const { initialInvite, pair, pairMembership, pairMembershipEra, participant, privateAnswer, privateConversation, privateRound } = await import("./schema/closer");
+const { initialInvite, pair, pairMembership, pairMembershipEra, participant, privateAnswer, privateConversation, privateQuestionCandidate, privateRound, question, questionRevision } = await import("./schema/closer");
 const { user } = await import("./schema/auth");
 
 const db = createDb();
@@ -77,13 +82,31 @@ async function createRound(pairId: string, participantId: string, questionId = q
     [questionIds.relationship]: "relationship",
     [questionIds.friendship]: "friendship",
   } as const;
-  const created = await startOrResumePrivateConversation(db, {
+  const era = (await db.select({ id: pairMembershipEra.id }).from(pairMembershipEra).where(and(eq(pairMembershipEra.pairId, pairId), isNull(pairMembershipEra.endedAt))).limit(1))[0];
+  if (!era) throw new Error("Legacy round fixture did not find an active era.");
+  const existing = (await db.select().from(privateConversation).where(and(
+    eq(privateConversation.pairId, pairId),
+    eq(privateConversation.membershipEraId, era.id),
+    eq(privateConversation.category, categoryByQuestion[questionId]),
+  )).limit(1))[0];
+  const conversation = existing ?? (await db.insert(privateConversation).values({
     pairId,
-    participantId,
+    membershipEraId: era.id,
     category: categoryByQuestion[questionId],
-    clientRequestId,
-  });
-  return { id: created.roundId, conversationId: created.conversationId };
+    createdByParticipantId: participantId,
+  }).returning())[0];
+  if (!conversation) throw new Error("Legacy round fixture did not create a conversation.");
+  const selected = (await db.select({ id: question.id, questionRevisionId: questionRevision.id }).from(question).innerJoin(questionRevision, eq(question.currentRevisionId, questionRevision.id)).where(eq(question.id, questionId)).limit(1))[0];
+  if (!selected) throw new Error("Legacy round fixture did not find a question.");
+  const inserted = await db.insert(privateRound).values({
+    pairId,
+    conversationId: conversation.id,
+    questionId: selected.id,
+    questionRevisionId: selected.questionRevisionId,
+    initiatorParticipantId: participantId,
+  }).returning({ id: privateRound.id });
+  if (!inserted[0]) throw new Error("Legacy round fixture did not create a round.");
+  return { id: inserted[0].id, conversationId: conversation.id };
 }
 
 async function makeReady(pairId: string, firstId: string, secondId: string, questionId = questionIds.deep) {
@@ -376,5 +399,68 @@ describe("Closer Slice 01B Private rounds", () => {
     const rounds = await db.select().from(privateRound).where(eq(privateRound.conversationId, current.conversationId));
     expect(firstResult.roundId).toBe(retryResult.roundId);
     expect(rounds).toHaveLength(2);
+  });
+
+  test("category start persists one creator-owned candidate and concurrent starters converge", async () => {
+    const { pairId, first, second } = await createJoinedPair();
+    const [firstStart, secondStart] = await Promise.all([
+      startOrResumePrivateConversation(db, { pairId, participantId: first.id, category: "deep", clientRequestId: randomUUID() }),
+      startOrResumePrivateConversation(db, { pairId, participantId: second.id, category: "deep", clientRequestId: randomUUID() }),
+    ]);
+    expect(firstStart.id).toBe(secondStart.id);
+    const creator = firstStart.role === "creator" ? firstStart : secondStart;
+    const nonCreator = firstStart.role === "non-creator" ? firstStart : secondStart;
+    expect(creator.state).toBe("CANDIDATE");
+    expect(nonCreator.state).toBe("WAITING_FOR_CREATOR");
+    expect(JSON.stringify(nonCreator)).not.toContain("candidate");
+    if (creator.state !== "CANDIDATE") throw new Error("Expected candidate projection.");
+    const retry = await startOrResumePrivateConversation(db, { pairId, participantId: creator.creator.participantId, category: "deep", clientRequestId: randomUUID() });
+    expect(retry).toMatchObject({ id: creator.id, state: "CANDIDATE", candidate: { id: creator.candidate.id, question: { text: creator.candidate.question.text } } });
+    expect(await db.select().from(privateConversation).where(eq(privateConversation.pairId, pairId))).toHaveLength(1);
+    expect(await db.select().from(privateQuestionCandidate).where(and(eq(privateQuestionCandidate.conversationId, creator.id), eq(privateQuestionCandidate.state, "unresolved")))).toHaveLength(1);
+  });
+
+  test("candidate pins its revision and withdrawal invalidates it without consuming the question", async () => {
+    const { pairId, first } = await createJoinedPair();
+    const started = await startOrResumePrivateConversation(db, { pairId, participantId: first.id, category: "deep", clientRequestId: randomUUID() });
+    if (started.state !== "CANDIDATE") throw new Error("Expected candidate projection.");
+    const originalText = started.candidate.question.text;
+    const revision = await reviseQuestion(db, {
+      questionId: started.candidate.question.id,
+      text: "A later wording that must not rewrite the candidate",
+      category: "deep",
+      relationshipFit: "both",
+      modeFit: "private",
+      intensity: "light",
+    });
+    const afterRevision = await getPrivateConversationForParticipant(db, { pairId, participantId: first.id, conversationId: started.id });
+    expect(afterRevision).toMatchObject({ state: "CANDIDATE", candidate: { question: { questionRevisionId: started.candidate.question.questionRevisionId, text: originalText } } });
+    await withdrawQuestionRevision(db, started.candidate.question.questionRevisionId);
+    const candidates = await db.select().from(privateQuestionCandidate).where(eq(privateQuestionCandidate.conversationId, started.id));
+    expect(candidates.filter((candidate) => candidate.state === "invalidated")).toHaveLength(1);
+    expect(candidates.filter((candidate) => candidate.state === "unresolved")).toHaveLength(1);
+    expect(candidates.find((candidate) => candidate.state === "unresolved")?.questionRevisionId).toBe(revision.revision.id);
+    expect((await getPrivateConversationForParticipant(db, { pairId, participantId: first.id, conversationId: started.id })).state).toBe("CANDIDATE");
+  });
+
+  test("an unresolved legacy Round takes precedence and does not get a candidate", async () => {
+    const { pairId, first } = await createJoinedPair();
+    const round = await createRound(pairId, first.id);
+    const started = await startOrResumePrivateConversation(db, { pairId, participantId: first.id, category: "deep", clientRequestId: randomUUID() });
+    expect(started).toMatchObject({ id: round.conversationId, state: "CURRENT_ROUND", roundId: round.id });
+    expect(await db.select().from(privateQuestionCandidate).where(eq(privateQuestionCandidate.conversationId, round.conversationId))).toHaveLength(0);
+  });
+
+  test("replacement starts a distinct era Conversation and cannot read the old candidate", async () => {
+    const joined = await createJoinedPair();
+    const old = await startOrResumePrivateConversation(db, { pairId: joined.pairId, participantId: joined.first.id, category: "deep", clientRequestId: randomUUID() });
+    if (old.state !== "CANDIDATE") throw new Error("Expected old candidate projection.");
+    const invite = await issueRejoinInvite(db, { pairId: joined.pairId, participantId: joined.first.id });
+    const replacement = await redeemRejoinInvite(db, { token: invite.token, authUserId: await createAuthUser("Replacement"), displayName: "Replacement" });
+    expect(await capture(getPrivateConversationForParticipant(db, { pairId: joined.pairId, participantId: replacement.participantId, conversationId: old.id }))).toMatchObject({ code: "CONVERSATION_NOT_FOUND" });
+    expect((await db.select().from(privateQuestionCandidate).where(eq(privateQuestionCandidate.conversationId, old.id))).every((candidate) => candidate.state !== "unresolved")).toBe(true);
+    const nextEra = await startOrResumePrivateConversation(db, { pairId: joined.pairId, participantId: joined.first.id, category: "deep", clientRequestId: randomUUID() });
+    expect(nextEra.id).not.toBe(old.id);
+    expect(nextEra.state).toBe("CANDIDATE");
   });
 });

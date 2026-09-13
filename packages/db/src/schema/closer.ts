@@ -24,6 +24,7 @@ export const questionRelationshipFit = pgEnum("question_relationship_fit", ["bot
 export const questionModeFit = pgEnum("question_mode_fit", ["both", "together", "private"]);
 export const questionIntensity = pgEnum("question_intensity", ["light", "medium", "deep"]);
 export const privateReactionValue = pgEnum("private_reaction_value", ["heart", "laugh", "tender", "surprised"]);
+export const privateQuestionCandidateState = pgEnum("private_question_candidate_state", ["unresolved", "asked", "skipped", "invalidated"]);
 
 export const participant = pgTable(
   "participant",
@@ -197,11 +198,42 @@ export const privateConversation = pgTable(
       .notNull()
       .references(() => pairMembershipEra.id, { onDelete: "restrict" }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
+    selectionSeed: text("selection_seed").notNull().default(sql`gen_random_uuid()::text`),
   },
   (table) => [
     uniqueIndex("private_conversation_one_era_category_uidx").on(table.pairId, table.membershipEraId, table.category),
     unique("private_conversation_pair_id_id_key").on(table.pairId, table.id),
     index("private_conversation_pair_created_idx").on(table.pairId, table.createdAt),
+  ],
+);
+
+export const privateQuestionCandidate = pgTable(
+  "private_question_candidate",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    conversationId: uuid("conversation_id")
+      .notNull()
+      .references(() => privateConversation.id, { onDelete: "cascade" }),
+    questionId: uuid("question_id")
+      .notNull()
+      .references(() => question.id, { onDelete: "restrict" }),
+    questionRevisionId: uuid("question_revision_id")
+      .notNull()
+      .references(() => questionRevision.id, { onDelete: "restrict" }),
+    state: privateQuestionCandidateState("state").notNull().default("unresolved"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    resolvedAt: timestamp("resolved_at"),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.questionId, table.questionRevisionId],
+      foreignColumns: [questionRevision.questionId, questionRevision.id],
+      name: "private_candidate_question_revision_belongs_to_question_fk",
+    }).onDelete("restrict"),
+    uniqueIndex("private_candidate_one_unresolved_uidx")
+      .on(table.conversationId)
+      .where(sql`${table.state} = 'unresolved'`),
+    index("private_candidate_conversation_created_idx").on(table.conversationId, table.createdAt),
   ],
 );
 
@@ -479,6 +511,22 @@ export const privateConversationRelations = relations(privateConversation, ({ on
     references: [participant.id],
   }),
   rounds: many(privateRound),
+  candidates: many(privateQuestionCandidate),
+}));
+
+export const privateQuestionCandidateRelations = relations(privateQuestionCandidate, ({ one }) => ({
+  conversation: one(privateConversation, {
+    fields: [privateQuestionCandidate.conversationId],
+    references: [privateConversation.id],
+  }),
+  question: one(question, {
+    fields: [privateQuestionCandidate.questionId],
+    references: [question.id],
+  }),
+  revision: one(questionRevision, {
+    fields: [privateQuestionCandidate.questionRevisionId],
+    references: [questionRevision.id],
+  }),
 }));
 
 export const privateRoundRelations = relations(privateRound, ({ one }) => ({
