@@ -10,21 +10,31 @@ const { createDb } = await import("./index");
 const {
   CloserDomainError,
   advanceTogetherSession,
+  askPrivateQuestionCandidate,
+  createQuestionRevision,
   createPairForParticipant,
+  declinePrivateRound,
+  endTogetherSession,
+  getFormerEraHistoryForParticipant,
   getPrivateRoundForParticipant,
   getTogetherSessionForParticipant,
   issueOrReuseInitialInvite,
   issueRejoinInvite,
   listActivePrivateConversations,
+  markPrivateRevealViewed,
   redeemInitialInvite,
   redeemRejoinInvite,
   resolveOrCreateParticipant,
   revokeRejoinInvites,
   startOrResumePrivateConversation,
   startTogetherSession,
+  setPrivateReaction,
+  setPrivateQuestionCandidateLike,
+  setPrivateReply,
+  skipPrivateQuestionCandidate,
   submitPrivateAnswer,
 } = await import("./closer");
-const { pair, pairMembership, pairMembershipEra, privateAnswer, privateConversation, privateQuestionCandidate, privateRound, togetherSession, participant } = await import("./schema/closer");
+const { pair, pairMembership, pairMembershipEra, privateAnswer, privateConversation, privateQuestionCandidate, privateRound, questionRevision, togetherSession, togetherSessionQuestion, participant } = await import("./schema/closer");
 const { user } = await import("./schema/auth");
 
 const db = createDb();
@@ -62,8 +72,8 @@ async function capture(promise: Promise<unknown>) {
   return promise.then(() => null, (error: unknown) => error);
 }
 
-async function createLegacyPrivateRound(pairId: string, participantId: string) {
-  const started = await startOrResumePrivateConversation(db, { pairId, participantId, category: "deep", clientRequestId: randomUUID() });
+async function createLegacyPrivateRound(pairId: string, participantId: string, category = "deep") {
+  const started = await startOrResumePrivateConversation(db, { pairId, participantId, category, clientRequestId: randomUUID() });
   if (started.state !== "CANDIDATE") {
     if (started.state === "CURRENT_ROUND") return { roundId: started.roundId, conversationId: started.id };
     throw new Error("Expected a candidate for the legacy Round fixture.");
@@ -200,4 +210,117 @@ test("replacement serializes concurrent redemption and Pair-scoped Together and 
     redeemRejoinInvite(db, { token: revokeCredential.token, authUserId: revokeReplacementAuthUserId, displayName: "Revocation race replacement" }),
   ]);
   expect(["fulfilled", "rejected"]).toContain(revokeRedemption.status);
+});
+
+test("former-era history is participant-relative, revision-pinned, and immutable", async () => {
+  const { pairId, continuing, former } = await createJoinedPair();
+  const mutualWithoutReveal = await createLegacyPrivateRound(pairId, continuing.id);
+  await submitPrivateAnswer(db, { pairId, participantId: continuing.id, roundId: mutualWithoutReveal.roundId, body: "Continuing's unseen answer." });
+  await submitPrivateAnswer(db, { pairId, participantId: former.id, roundId: mutualWithoutReveal.roundId, body: "Former's unseen answer." });
+
+  const revealedRound = await createLegacyPrivateRound(pairId, continuing.id, "fun");
+  await submitPrivateAnswer(db, { pairId, participantId: continuing.id, roundId: revealedRound.roundId, body: "Continuing's revealed answer." });
+  await submitPrivateAnswer(db, { pairId, participantId: former.id, roundId: revealedRound.roundId, body: "Former's revealed answer." });
+  await markPrivateRevealViewed(db, { pairId, participantId: continuing.id, roundId: revealedRound.roundId });
+  await markPrivateRevealViewed(db, { pairId, participantId: former.id, roundId: revealedRound.roundId });
+  await setPrivateReaction(db, { pairId, participantId: continuing.id, roundId: revealedRound.roundId, value: "heart" });
+  await setPrivateReply(db, { pairId, participantId: former.id, roundId: revealedRound.roundId, body: "A saved reply." });
+  const oldCandidate = await startOrResumePrivateConversation(db, { pairId, participantId: continuing.id, category: "fun", clientRequestId: randomUUID() });
+  if (oldCandidate.state !== "CANDIDATE") throw new Error("Expected an unresolved old-era candidate.");
+
+  const loneAnswer = await createLegacyPrivateRound(pairId, continuing.id, "memories");
+  await submitPrivateAnswer(db, { pairId, participantId: former.id, roundId: loneAnswer.roundId, body: "Only Former may read this." });
+  const declinedRound = await createLegacyPrivateRound(pairId, continuing.id, "relationship");
+  await submitPrivateAnswer(db, { pairId, participantId: former.id, roundId: declinedRound.roundId, body: "A passed-round answer." });
+  await declinePrivateRound(db, { pairId, participantId: continuing.id, roundId: declinedRound.roundId });
+  const together = await startTogetherSession(db, { pairId, participantId: continuing.id, category: "deep" });
+  await endTogetherSession(db, { pairId, participantId: continuing.id, sessionId: together.sessionId });
+
+  const credential = await issueRejoinInvite(db, { pairId, participantId: continuing.id });
+  const replacementAuthUserId = await createGuestAuthUser("Replacement");
+  const redeemed = await redeemRejoinInvite(db, { token: credential.token, authUserId: replacementAuthUserId, displayName: "Replacement" });
+  const replacement = { id: redeemed.participantId };
+
+  const originalRound = (await db.select().from(privateRound).where(eq(privateRound.id, mutualWithoutReveal.roundId)))[0]!;
+  const originalRevision = (await db.select().from(questionRevision).where(eq(questionRevision.id, originalRound.questionRevisionId)))[0]!;
+  await createQuestionRevision(db, {
+    questionId: originalRevision.questionId,
+    text: "A later edit must not replace history.",
+    category: originalRevision.category,
+    relationshipFit: originalRevision.relationshipFit,
+    modeFit: originalRevision.modeFit,
+    intensity: originalRevision.intensity,
+  });
+  const originalTogetherCard = (await db.select().from(togetherSessionQuestion).where(eq(togetherSessionQuestion.sessionId, together.sessionId)))[0]!;
+  const originalTogetherRevision = (await db.select().from(questionRevision).where(eq(questionRevision.id, originalTogetherCard.questionRevisionId)))[0]!;
+  await createQuestionRevision(db, {
+    questionId: originalTogetherRevision.questionId,
+    text: "A later Together edit must not replace history.",
+    category: originalTogetherRevision.category,
+    relationshipFit: originalTogetherRevision.relationshipFit,
+    modeFit: originalTogetherRevision.modeFit,
+    intensity: originalTogetherRevision.intensity,
+  });
+  await db.update(participant).set({ displayName: "Renamed Former" }).where(eq(participant.id, former.id));
+
+  const continuingHistory = await getFormerEraHistoryForParticipant(db, { pairId, participantId: continuing.id });
+  const formerHistory = await getFormerEraHistoryForParticipant(db, { pairId, participantId: former.id });
+  const replacementHistory = await getFormerEraHistoryForParticipant(db, { pairId, participantId: replacement.id });
+  const continuingRounds = continuingHistory.eras[0]!.privateConversations.flatMap((conversation) => conversation.rounds);
+  const formerRounds = formerHistory.eras[0]!.privateConversations.flatMap((conversation) => conversation.rounds);
+  const continuingMutual = continuingRounds.find((round) => round.id === mutualWithoutReveal.roundId)!;
+  const formerMutual = formerRounds.find((round) => round.id === mutualWithoutReveal.roundId)!;
+  const continuingLone = continuingRounds.find((round) => round.id === loneAnswer.roundId)!;
+  const formerLone = formerRounds.find((round) => round.id === loneAnswer.roundId)!;
+  const continuingDeclined = continuingRounds.find((round) => round.id === declinedRound.roundId)!;
+  const formerDeclined = formerRounds.find((round) => round.id === declinedRound.roundId)!;
+  const revealedHistory = continuingRounds.find((round) => round.id === revealedRound.roundId)!;
+
+  expect(continuingMutual.question.text).toBe(originalRevision.text);
+  expect(continuingMutual.answers.map((answer) => answer.body)).toEqual(["Continuing's unseen answer.", "Former's unseen answer."]);
+  expect(formerMutual.answers).toHaveLength(2);
+  expect(continuingMutual.answers.find((answer) => answer.participantId === former.id)?.displayName).toBe("Former name");
+  expect(continuingLone.answers).toEqual([]);
+  expect(formerLone.answers.map((answer) => answer.body)).toEqual(["Only Former may read this."]);
+  expect(continuingDeclined.status).toBe("passed");
+  expect(continuingDeclined.answers).toEqual([]);
+  expect(formerDeclined.answers.map((answer) => answer.body)).toEqual(["A passed-round answer."]);
+  expect(JSON.stringify(continuingDeclined)).not.toContain("declinedBy");
+  expect(revealedHistory.reactions).toHaveLength(1);
+  expect(revealedHistory.replies).toHaveLength(1);
+  expect(continuingHistory.eras[0]!.togetherSessions[0]?.questions[0]?.text).toBe(originalTogetherRevision.text);
+  expect(JSON.stringify(continuingHistory)).not.toContain(oldCandidate.candidate.question.text);
+  expect(replacementHistory.eras).toEqual([]);
+  expect(replacementHistory.preClaimTogetherSessions).toEqual([]);
+  expect(JSON.stringify(replacementHistory)).not.toContain(oldCandidate.candidate.question.text);
+  expect(await capture(askPrivateQuestionCandidate(db, { pairId, participantId: continuing.id, conversationId: oldCandidate.id, candidateId: oldCandidate.candidate.id }))).toBeInstanceOf(CloserDomainError);
+  expect(await capture(skipPrivateQuestionCandidate(db, { pairId, participantId: continuing.id, conversationId: oldCandidate.id, candidateId: oldCandidate.candidate.id }))).toBeInstanceOf(CloserDomainError);
+  expect(await capture(setPrivateQuestionCandidateLike(db, { pairId, participantId: continuing.id, conversationId: oldCandidate.id, candidateId: oldCandidate.candidate.id, liked: true }))).toBeInstanceOf(CloserDomainError);
+  expect(await capture(submitPrivateAnswer(db, { pairId, participantId: continuing.id, roundId: mutualWithoutReveal.roundId, body: "A late answer." }))).toBeInstanceOf(CloserDomainError);
+  expect(await capture(declinePrivateRound(db, { pairId, participantId: continuing.id, roundId: mutualWithoutReveal.roundId }))).toBeInstanceOf(CloserDomainError);
+  expect(await capture(markPrivateRevealViewed(db, { pairId, participantId: continuing.id, roundId: mutualWithoutReveal.roundId }))).toBeInstanceOf(CloserDomainError);
+  expect(await capture(setPrivateReaction(db, { pairId, participantId: continuing.id, roundId: revealedRound.roundId, value: "laugh" }))).toBeInstanceOf(CloserDomainError);
+  expect(await capture(setPrivateReply(db, { pairId, participantId: former.id, roundId: revealedRound.roundId, body: "A changed reply." }))).toBeInstanceOf(CloserDomainError);
+  expect(await capture(advanceTogetherSession(db, { pairId, participantId: continuing.id, sessionId: together.sessionId, action: "next" }))).toBeInstanceOf(CloserDomainError);
+
+  const newEraConversation = await startOrResumePrivateConversation(db, { pairId, participantId: replacement.id, category: "deep", clientRequestId: randomUUID() });
+  expect(newEraConversation.conversationId).not.toBe(mutualWithoutReveal.conversationId);
+  expect(await capture(getFormerEraHistoryForParticipant(db, { pairId, participantId: (await createGuest("Outsider")).id }))).toBeInstanceOf(CloserDomainError);
+});
+
+test("pre-claim Together history stays with the original sole member", async () => {
+  const original = await createGuest("Original");
+  const claimant = await createGuest("Claimant");
+  const created = await createPairForParticipant(db, { participantId: original.id, intendedPersonName: "Claimant", relationshipType: "partner" });
+  pairIds.push(created.pair.id);
+  const session = await startTogetherSession(db, { pairId: created.pair.id, participantId: original.id, category: "deep" });
+  await endTogetherSession(db, { pairId: created.pair.id, participantId: original.id, sessionId: session.sessionId });
+  const invite = await issueOrReuseInitialInvite(db, { pairId: created.pair.id, participantId: original.id });
+  if (invite.state !== "issued") throw new Error("Expected an initial invitation.");
+  await redeemInitialInvite(db, { token: invite.token, participantId: claimant.id });
+
+  const originalHistory = await getFormerEraHistoryForParticipant(db, { pairId: created.pair.id, participantId: original.id });
+  const claimantHistory = await getFormerEraHistoryForParticipant(db, { pairId: created.pair.id, participantId: claimant.id });
+  expect(originalHistory.preClaimTogetherSessions.map((item) => item.id)).toContain(session.sessionId);
+  expect(claimantHistory.preClaimTogetherSessions).toEqual([]);
 });

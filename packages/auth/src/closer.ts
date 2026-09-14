@@ -13,6 +13,7 @@ export {
   getRejoinInviteLanding,
   getParticipantByAuthUserId,
   getPrivateRoundForParticipant,
+  getFormerEraHistoryForParticipant,
   getPrivateConversationForParticipant,
   getPrivateRoundStatusForParticipant,
   getTogetherSessionForParticipant,

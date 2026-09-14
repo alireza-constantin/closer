@@ -2282,6 +2282,155 @@ export async function listActivePrivateConversations(
 /** @deprecated Pair Home must use conversation summaries. */
 export const listActivePrivateRounds = listActivePrivateConversations;
 
+/**
+ * Returns only read-only activity from membership configurations the viewer
+ * actually belonged to. This is deliberately separate from the active Private
+ * projections: history grants both era members access to a mutually answered
+ * Round even when neither recorded a Reveal View before the era closed.
+ */
+export async function getFormerEraHistoryForParticipant(
+  database: Database,
+  input: { participantId: string; pairId: string },
+) {
+  const viewerMemberships = await database
+    .select({ id: pairMembership.id })
+    .from(pairMembership)
+    .where(and(eq(pairMembership.pairId, input.pairId), eq(pairMembership.participantId, input.participantId)));
+  const viewerMembershipIds = new Set(viewerMemberships.map((membership) => membership.id));
+  if (!viewerMembershipIds.size) throw new CloserDomainError("PAIR_NOT_FOUND");
+
+  const eras = (await database
+    .select()
+    .from(pairMembershipEra)
+    .where(and(eq(pairMembershipEra.pairId, input.pairId), sql`${pairMembershipEra.endedAt} is not null`))
+    .orderBy(desc(pairMembershipEra.endedAt)))
+    .filter((era) => viewerMembershipIds.has(era.firstMembershipId) || viewerMembershipIds.has(era.secondMembershipId));
+
+  const projectSession = async (session: typeof togetherSession.$inferSelect) => {
+    const cards = await database
+      .select({ card: togetherSessionQuestion, revision: questionRevision })
+      .from(togetherSessionQuestion)
+      .innerJoin(questionRevision, eq(togetherSessionQuestion.questionRevisionId, questionRevision.id))
+      .where(eq(togetherSessionQuestion.sessionId, session.id))
+      .orderBy(asc(togetherSessionQuestion.position));
+    return {
+      id: session.id,
+      category: session.category,
+      startedAt: session.startedAt.toISOString(),
+      endedAt: session.endedAt?.toISOString() ?? null,
+      questions: cards.map(({ card, revision }) => ({
+        id: card.id,
+        position: card.position,
+        text: revision.text,
+        liked: card.likedAt !== null,
+        skipped: card.skippedAt !== null,
+        advanced: card.advancedAt !== null,
+      })),
+    };
+  };
+
+  const erasWithHistory = await Promise.all(eras.map(async (era) => {
+    const members = await database
+      .select({
+        id: pairMembership.id,
+        participantId: pairMembership.participantId,
+        displayName: sql<string>`coalesce(${pairMembership.endedDisplayName}, ${participant.displayName})`,
+      })
+      .from(pairMembership)
+      .innerJoin(participant, eq(pairMembership.participantId, participant.id))
+      .where(inArray(pairMembership.id, [era.firstMembershipId, era.secondMembershipId]));
+    const memberIds = new Set(members.map((member) => member.participantId));
+    const memberNames = new Map(members.map((member) => [member.participantId, member.displayName]));
+    const conversations = await database
+      .select()
+      .from(privateConversation)
+      .where(and(eq(privateConversation.pairId, input.pairId), eq(privateConversation.membershipEraId, era.id)))
+      .orderBy(desc(privateConversation.createdAt));
+
+    const privateConversations = (await Promise.all(conversations.map(async (conversation) => {
+      const rounds = await database
+        .select({ round: privateRound, revision: questionRevision })
+        .from(privateRound)
+        .innerJoin(questionRevision, eq(privateRound.questionRevisionId, questionRevision.id))
+        .where(eq(privateRound.conversationId, conversation.id))
+        .orderBy(asc(privateRound.questionNumber));
+      return {
+        id: conversation.id,
+        category: conversation.category,
+        rounds: await Promise.all(rounds.map(async ({ round, revision }) => {
+          const answers = (await database
+            .select()
+            .from(privateAnswer)
+            .where(eq(privateAnswer.roundId, round.id)))
+            .filter((answer) => memberIds.has(answer.participantId));
+          const mutuallyAnswered = round.status !== "declined" && answers.length === 2;
+          const visibleAnswers = mutuallyAnswered
+            ? answers
+            : answers.filter((answer) => answer.participantId === input.participantId);
+          const [reactions, replies] = mutuallyAnswered
+            ? await Promise.all([
+              database.select().from(privateReaction).where(eq(privateReaction.roundId, round.id)),
+              database.select().from(privateReply).where(eq(privateReply.roundId, round.id)),
+            ])
+            : [[], []] as const;
+          return {
+            id: round.id,
+            questionNumber: round.questionNumber,
+            question: { text: revision.text, category: revision.category },
+            status: round.status === "declined" ? "passed" as const : "answered" as const,
+            answers: visibleAnswers.map((answer) => ({
+              participantId: answer.participantId,
+              displayName: memberNames.get(answer.participantId) ?? "Participant",
+              body: answer.body,
+            })),
+            reactions: reactions
+              .filter((reaction) => memberIds.has(reaction.participantId))
+              .map((reaction) => ({
+                participantId: reaction.participantId,
+                displayName: memberNames.get(reaction.participantId) ?? "Participant",
+                value: reaction.value,
+              })),
+            replies: replies
+              .filter((reply) => memberIds.has(reply.participantId))
+              .map((reply) => ({
+                participantId: reply.participantId,
+                displayName: memberNames.get(reply.participantId) ?? "Participant",
+                body: reply.body,
+              })),
+          };
+        })),
+      };
+    }))).filter((conversation) => conversation.rounds.length > 0);
+    const sessions = await database
+      .select()
+      .from(togetherSession)
+      .where(eq(togetherSession.membershipEraId, era.id))
+      .orderBy(desc(togetherSession.startedAt));
+    return {
+      privateConversations,
+      togetherSessions: await Promise.all(sessions.map(projectSession)),
+    };
+  }));
+
+  // Before the initial claim there is no two-member era row. The person who
+  // started a pre-claim session retains it; the later claimant does not.
+  const preClaimSessions = await database
+    .select()
+    .from(togetherSession)
+    .where(and(
+      eq(togetherSession.pairId, input.pairId),
+      isNull(togetherSession.membershipEraId),
+      eq(togetherSession.startedByParticipantId, input.participantId),
+      sql`${togetherSession.endedAt} is not null`,
+    ))
+    .orderBy(desc(togetherSession.startedAt));
+
+  return {
+    eras: erasWithHistory,
+    preClaimTogetherSessions: await Promise.all(preClaimSessions.map(projectSession)),
+  };
+}
+
 export async function submitPrivateAnswer(
   database: Database,
   input: { participantId: string; pairId: string; roundId: string; body: string },

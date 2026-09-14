@@ -248,6 +248,7 @@ export default function PairHome({
           </EmptyHeader>
         </Empty>
       )}
+      <Link className="mx-auto mt-6 block w-fit text-xs font-bold text-closer-muted underline-offset-4 hover:text-closer-navy hover:underline" href={`/pair/${pairId}/history` as never}>Look back</Link>
       {isComplete ? <Link className="mx-auto mt-6 block w-fit text-xs text-closer-muted underline-offset-4 hover:text-closer-navy hover:underline" href={`/pair/${pairId}/rejoin` as never}>Need to reconnect your person?</Link> : null}
     </CloserPageShell>
   );
