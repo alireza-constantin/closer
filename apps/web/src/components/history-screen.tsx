@@ -86,11 +86,12 @@ export function HistoryScreen({ history, pairId }: { history: HistoryView; pairI
     || history.preClaimTogetherSessions.length > 0;
   return (
     <CloserPageShell>
-      <CloserTopbar action={<Link className="text-sm font-extrabold text-closer-muted underline-offset-4 hover:text-closer-navy hover:underline" href={`/pair/${pairId}` as never}>Back to space</Link>} href={`/pair/${pairId}`} />
+      <CloserTopbar action={history.formerPair.terminatedAt ? undefined : <Link className="text-sm font-extrabold text-closer-muted underline-offset-4 hover:text-closer-navy hover:underline" href={`/pair/${pairId}` as never}>Back to space</Link>} href={history.formerPair.terminatedAt ? "/" : `/pair/${pairId}`} />
       <section className="pb-7 pt-8">
-        <p className="text-sm font-extrabold uppercase tracking-[.16em] text-closer-coral">Look back</p>
+        <p className="text-sm font-extrabold uppercase tracking-[.16em] text-closer-coral">{history.formerPair.terminatedAt ? "Former space" : "Look back"}</p>
         <h1 className="mt-3 max-w-[12ch] text-balance text-[2.35rem] font-extrabold leading-tight tracking-[-.055em]">Shared moments, saved here.</h1>
         <p className="mt-3 max-w-[34ch] leading-relaxed text-closer-muted">These earlier conversations are here to revisit, just as they were.</p>
+        {history.formerPair.terminatedAt ? <p className="mt-3 max-w-[34ch] text-sm leading-relaxed text-closer-muted">This space is read-only.{history.formerPair.intendedPersonName ? ` It was created for ${history.formerPair.intendedPersonName}.` : ""}</p> : null}
       </section>
       {!hasHistory ? <p className="rounded-[1.4rem] bg-white/65 px-5 py-6 leading-relaxed text-closer-muted shadow-closer-soft">There are no earlier moments to look back on yet.</p> : null}
       {history.preClaimTogetherSessions.length > 0 ? (

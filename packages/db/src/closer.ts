@@ -398,10 +398,26 @@ async function requireActivePairAccess(database: Database, participantId: string
         eq(pairMembership.pairId, pairId),
         eq(pairMembership.participantId, participantId),
         isNull(pairMembership.endedAt),
+        isNull(pair.terminatedAt),
       ),
     )
     .limit(1);
 
+  if (!rows[0]) throw new CloserDomainError("PAIR_NOT_FOUND");
+  return rows[0];
+}
+
+/** Locks the aggregate lifecycle boundary and rejects terminal Pairs. */
+async function requireActivePairInTransaction(
+  tx: Database | Parameters<Parameters<Database["transaction"]>[0]>[0],
+  pairId: string,
+) {
+  const rows = await tx
+    .select({ id: pair.id })
+    .from(pair)
+    .where(and(eq(pair.id, pairId), isNull(pair.terminatedAt)))
+    .for("update")
+    .limit(1);
   if (!rows[0]) throw new CloserDomainError("PAIR_NOT_FOUND");
   return rows[0];
 }
@@ -411,7 +427,7 @@ async function requireSoleUnclaimedPairMemberInTransaction(
   participantId: string,
   pairId: string,
 ) {
-  await tx.execute(sql`select id from "pair" where id = ${pairId} for update`);
+  await requireActivePairInTransaction(tx, pairId);
   const activeMemberships = await tx
     .select({ participantId: pairMembership.participantId, slot: pairMembership.slot })
     .from(pairMembership)
@@ -428,6 +444,78 @@ async function requireSoleUnclaimedPairMemberInTransaction(
   ) {
     throw new CloserDomainError("INVITE_UNAVAILABLE");
   }
+}
+
+/**
+ * Atomically establishes the terminal lifecycle boundary for a Pair.
+ * Repeating the command from a former member is a stable no-op, so snapshots
+ * and timestamps are never rewritten.
+ */
+export async function terminatePair(
+  database: Database,
+  input: { participantId: string; pairId: string },
+) {
+  return database.transaction(async (transaction) => {
+    const tx = transaction as unknown as Database;
+    const lockedPairs = await tx.select().from(pair).where(eq(pair.id, input.pairId)).for("update").limit(1);
+    const lockedPair = lockedPairs[0];
+    if (!lockedPair) throw new CloserDomainError("PAIR_NOT_FOUND");
+
+    const actorMemberships = await tx
+      .select({ id: pairMembership.id, endedAt: pairMembership.endedAt })
+      .from(pairMembership)
+      .where(and(eq(pairMembership.pairId, input.pairId), eq(pairMembership.participantId, input.participantId)))
+      .limit(1);
+    if (!actorMemberships[0]) throw new CloserDomainError("PAIR_NOT_FOUND");
+    if (lockedPair.terminatedAt) return { pairId: lockedPair.id, state: "terminated" as const, terminatedAt: lockedPair.terminatedAt };
+    if (actorMemberships[0].endedAt) throw new CloserDomainError("PAIR_NOT_FOUND");
+
+    const endedAt = new Date();
+    const activeMemberships = await tx
+      .select({ id: pairMembership.id, displayName: participant.displayName })
+      .from(pairMembership)
+      .innerJoin(participant, eq(pairMembership.participantId, participant.id))
+      .where(and(eq(pairMembership.pairId, input.pairId), isNull(pairMembership.endedAt)))
+      .for("update");
+    if (!activeMemberships.length) throw new CloserDomainError("PAIR_NOT_FOUND");
+
+    await tx.update(pair).set({ terminatedAt: endedAt }).where(eq(pair.id, input.pairId));
+    for (const membership of activeMemberships) {
+      await tx
+        .update(pairMembership)
+        .set({ endedAt, endedDisplayName: membership.displayName })
+        .where(and(eq(pairMembership.id, membership.id), isNull(pairMembership.endedAt)));
+    }
+    await tx
+      .update(pairMembershipEra)
+      .set({ endedAt })
+      .where(and(eq(pairMembershipEra.pairId, input.pairId), isNull(pairMembershipEra.endedAt)));
+    await tx
+      .update(privateQuestionCandidate)
+      .set({ state: "invalidated", resolvedAt: endedAt })
+      .where(and(
+        eq(privateQuestionCandidate.state, "unresolved"),
+        sql`exists (
+          select 1 from private_conversation terminal_conversation
+          where terminal_conversation.id = ${privateQuestionCandidate.conversationId}
+            and terminal_conversation.pair_id = ${input.pairId}
+        )`,
+      ));
+    await tx
+      .update(initialInvite)
+      .set({ revokedAt: endedAt })
+      .where(and(eq(initialInvite.pairId, input.pairId), isNull(initialInvite.revokedAt), isNull(initialInvite.redeemedAt)));
+    await tx
+      .update(rejoinInvite)
+      .set({ revokedAt: endedAt })
+      .where(and(eq(rejoinInvite.pairId, input.pairId), isNull(rejoinInvite.revokedAt), isNull(rejoinInvite.redeemedAt)));
+    await tx
+      .update(togetherSession)
+      .set({ endedAt })
+      .where(and(eq(togetherSession.pairId, input.pairId), isNull(togetherSession.endedAt)));
+
+    return { pairId: lockedPair.id, state: "terminated" as const, terminatedAt: endedAt };
+  });
 }
 
 async function findUsableInitialInvite(
@@ -521,6 +609,7 @@ export async function updateIntendedPersonName(
   return database.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
     await tx.execute(sql`select id from "pair" where id = ${input.pairId} for update`);
+    await requireActivePairAccess(tx, input.participantId, input.pairId);
     const secondMember = await tx
       .select({ id: pairMembership.id })
       .from(pairMembership)
@@ -628,6 +717,7 @@ export async function revokeInitialInvites(
   await requireActivePairAccess(database, input.participantId, input.pairId);
   await database.transaction(async (tx) => {
     await tx.execute(sql`select id from "pair" where id = ${input.pairId} for update`);
+    await requireActivePairAccess(tx as unknown as Database, input.participantId, input.pairId);
     await tx
       .update(initialInvite)
       .set({ revokedAt: new Date() })
@@ -667,6 +757,7 @@ export async function getInitialInviteLanding(database: Database, token: string)
     .where(
       and(
         eq(initialInvite.tokenHash, hashInviteToken(token)),
+        isNull(pair.terminatedAt),
         isNull(initialInvite.revokedAt),
         isNull(initialInvite.redeemedAt),
         gt(initialInvite.expiresAt, new Date()),
@@ -689,7 +780,7 @@ export async function redeemInitialInvite(
     const invite = inviteRows[0];
     if (!invite) throw new CloserDomainError("INVITE_UNAVAILABLE");
 
-    await tx.execute(sql`select id from "pair" where id = ${invite.pairId} for update`);
+    await requireActivePairInTransaction(tx, invite.pairId);
 
     const usableInvite = await tx
       .select({ id: initialInvite.id })
@@ -917,9 +1008,11 @@ export async function getRejoinInviteLanding(database: Database, token: string) 
   const rows = await database
     .select({ targetSlot: rejoinInvite.targetSlot })
     .from(rejoinInvite)
+    .innerJoin(pair, eq(pair.id, rejoinInvite.pairId))
     .where(
       and(
         eq(rejoinInvite.tokenHash, hashInviteToken(token)),
+        isNull(pair.terminatedAt),
         isNull(rejoinInvite.revokedAt),
         isNull(rejoinInvite.redeemedAt),
         gt(rejoinInvite.expiresAt, new Date()),
@@ -943,7 +1036,7 @@ export async function redeemRejoinInvite(
     const invite = inviteRows[0];
     if (!invite) throw new CloserDomainError("REJOIN_UNAVAILABLE");
 
-    await tx.execute(sql`select id from "pair" where id = ${invite.pairId} for update`);
+    await requireActivePairInTransaction(tx, invite.pairId);
 
     const targetMembershipRows = await tx
       .select({ membership: pairMembership, targetParticipant: participant })
@@ -2292,6 +2385,13 @@ export async function getFormerEraHistoryForParticipant(
   database: Database,
   input: { participantId: string; pairId: string },
 ) {
+  const pairs = await database
+    .select({ terminatedAt: pair.terminatedAt, intendedPersonName: pair.intendedPersonName })
+    .from(pair)
+    .where(eq(pair.id, input.pairId))
+    .limit(1);
+  const formerPair = pairs[0];
+  if (!formerPair) throw new CloserDomainError("PAIR_NOT_FOUND");
   const viewerMemberships = await database
     .select({ id: pairMembership.id })
     .from(pairMembership)
@@ -2426,6 +2526,10 @@ export async function getFormerEraHistoryForParticipant(
     .orderBy(desc(togetherSession.startedAt));
 
   return {
+    formerPair: {
+      terminatedAt: formerPair.terminatedAt?.toISOString() ?? null,
+      intendedPersonName: formerPair.terminatedAt ? formerPair.intendedPersonName : null,
+    },
     eras: erasWithHistory,
     preClaimTogetherSessions: await Promise.all(preClaimSessions.map(projectSession)),
   };

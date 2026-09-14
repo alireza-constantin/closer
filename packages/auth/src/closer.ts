@@ -38,6 +38,7 @@ export {
   setPrivateReply,
   skipPrivateQuestionCandidate,
   setTogetherSessionLike,
+  terminatePair,
   startOrResumePrivateConversation,
   startTogetherSession,
   endTogetherSession,

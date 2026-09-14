@@ -17,6 +17,7 @@ import { CloserCompanions, CloserPageShell, CloserTopbar } from "@/components/cl
 import { FormServerError } from "@/components/closer/feedback";
 import { CloserModeCard } from "@/components/closer/navigation";
 import { CloserPageTitle, CloserSubtitle } from "@/components/closer/typography";
+import { PairTerminationControl } from "@/components/pair-termination-control";
 import { useVisiblePolling } from "@/hooks/use-visible-polling";
 import { intendedPersonNameSchema, type IntendedPersonNameValues } from "@/lib/validation";
 
@@ -250,6 +251,7 @@ export default function PairHome({
       )}
       <Link className="mx-auto mt-6 block w-fit text-xs font-bold text-closer-muted underline-offset-4 hover:text-closer-navy hover:underline" href={`/pair/${pairId}/history` as never}>Look back</Link>
       {isComplete ? <Link className="mx-auto mt-6 block w-fit text-xs text-closer-muted underline-offset-4 hover:text-closer-navy hover:underline" href={`/pair/${pairId}/rejoin` as never}>Need to reconnect your person?</Link> : null}
+      <PairTerminationControl isComplete={isComplete} pairId={pairId} />
     </CloserPageShell>
   );
 }

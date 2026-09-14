@@ -55,6 +55,7 @@ export const pair = pgTable("pair", {
   relationshipType: pairRelationshipType("relationship_type").notNull(),
   intendedPersonName: text("intended_person_name"),
   creationRequestId: uuid("creation_request_id"),
+  terminatedAt: timestamp("terminated_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => [
   uniqueIndex("pair_creation_request_uidx").on(table.creationRequestId),
