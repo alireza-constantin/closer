@@ -1,5 +1,5 @@
 import { db, getPairForParticipant } from "@Closer/auth/closer";
-import { notFound, redirect } from "next/navigation";
+import { notFound, redirect, unstable_rethrow } from "next/navigation";
 
 import ConnectPerson from "@/components/connect-person";
 import { getCurrentParticipant } from "@/lib/closer-server";
@@ -17,7 +17,8 @@ export default async function InvitePage({ params, searchParams }: { params: Pro
     const pairView = await getPairForParticipant(db, currentParticipant.id, pairId);
     if (pairView.members.length === 2) redirect(`/pair/${pairId}`);
     return <ConnectPerson issueOnEntry={reason === "private"} pairId={pairId} />;
-  } catch {
+  } catch (error) {
+    unstable_rethrow(error);
     notFound();
   }
 }

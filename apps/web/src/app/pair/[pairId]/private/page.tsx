@@ -1,5 +1,5 @@
 import { db, getPairForParticipant } from "@Closer/auth/closer";
-import { notFound, redirect } from "next/navigation";
+import { notFound, redirect, unstable_rethrow } from "next/navigation";
 
 import PrivatePicker from "@/components/private-picker";
 import { getCurrentParticipant } from "@/lib/closer-server";
@@ -15,7 +15,8 @@ export default async function PrivatePickerPage({ params }: { params: Promise<{ 
     const pairView = await getPairForParticipant(db, currentParticipant.id, pairId);
     if (pairView.members.length !== 2) redirect(`/pair/${pairId}/invite?reason=private` as never);
     return <PrivatePicker pairId={pairId} relationshipType={pairView.pair.relationshipType} />;
-  } catch {
+  } catch (error) {
+    unstable_rethrow(error);
     notFound();
   }
 }

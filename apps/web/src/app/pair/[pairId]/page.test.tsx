@@ -24,6 +24,10 @@ mock.module("next/navigation", () => ({
   notFound: () => {
     throw new Error("notFound");
   },
+  redirect: () => {
+    throw new Error("redirect");
+  },
+  unstable_rethrow: () => {},
 }));
 
 mock.module("@/components/pair-home", () => ({ default: "pair-home" }));

@@ -33,6 +33,7 @@ mock.module("next/navigation", () => ({
     throw new Error("NOT_FOUND");
   },
   redirect,
+  unstable_rethrow: () => {},
 }));
 mock.module("@/components/zero-space-home", () => ({ default: "zero-space-home" }));
 mock.module("@/components/your-spaces", () => ({ default: "your-spaces" }));
