@@ -1,11 +1,45 @@
 import { Skeleton } from "@Closer/ui/components/skeleton";
+import { cn } from "@Closer/ui/lib/utils";
 
+import { categorySurfaceClass, type CloserCategory } from "@/components/closer/category";
 import { CloserPageShell, CloserTopbar } from "@/components/closer/page-shell";
 
-type RouteLoadingVariant = "form" | "history" | "home" | "picker";
+type RouteLoadingVariant =
+  | "form"
+  | "history"
+  | "home"
+  | "private-conversation"
+  | "private-picker"
+  | "private-round"
+  | "together-picker"
+  | "together-question";
+
+const loadingCategories = ["fun", "deep", "memories", "relationship"] as const satisfies readonly CloserCategory[];
 
 function LoadingLine({ className }: { className: string }) {
   return <Skeleton className={`rounded-full bg-closer-navy/10 ${className}`} />;
+}
+
+function LoadingBackButton() {
+  return <Skeleton aria-hidden="true" className="size-9 rounded-[.8rem] bg-white/65" />;
+}
+
+function LoadingModeBadge({ mode }: { mode: "private" | "together" }) {
+  return <Skeleton aria-hidden="true" className={cn("h-9 rounded-full", mode === "private" ? "w-[76px] bg-closer-lavender-soft" : "w-[88px] bg-closer-coral-soft")} />;
+}
+
+function LoadingWordmark() {
+  return <Skeleton aria-hidden="true" className="h-8 w-24 rounded-[.7rem] bg-closer-navy/10" />;
+}
+
+function LoadingCategoryCard({ category, compact }: { category: CloserCategory; compact?: boolean }) {
+  return (
+    <Skeleton aria-hidden="true" className={cn("grid w-full grid-cols-[1fr_auto] items-center gap-x-2.5 gap-y-0.5 rounded-[1.3rem] px-[18px] text-left shadow-closer-soft", compact ? "min-h-[70px] py-3" : "min-h-[78px] py-4", categorySurfaceClass(category))}>
+      <LoadingLine className="h-4 w-20 bg-closer-navy/20" />
+      <LoadingLine className="col-start-1 h-3 w-44 max-w-full bg-closer-navy/15" />
+      <Skeleton className="col-start-2 row-span-2 row-start-1 size-5 rounded-full bg-closer-navy/15" />
+    </Skeleton>
+  );
 }
 
 function HomeSkeleton() {
@@ -42,20 +76,117 @@ function FormSkeleton() {
   );
 }
 
-function PickerSkeleton() {
+function PrivatePickerSkeleton() {
   return (
     <>
-      <Skeleton className="mt-2 size-10 rounded-[0.9rem] bg-closer-lavender-soft" />
-      <section className="pb-7 pt-6 text-center" aria-hidden="true">
-        <LoadingLine className="mx-auto h-3 w-28" />
-        <LoadingLine className="mx-auto mt-4 h-9 w-64 max-w-[82%]" />
-        <LoadingLine className="mx-auto mt-3 h-4 w-52 max-w-[70%]" />
+      <LoadingBackButton />
+      <section className="pt-10" aria-hidden="true">
+        <LoadingModeBadge mode="private" />
+        <LoadingLine className="mt-6 h-10 w-[78%] max-w-[18rem]" />
+        <LoadingLine className="mt-3 h-10 w-[52%] max-w-[12rem]" />
+        <LoadingLine className="mt-3 h-4 w-[88%] max-w-[20rem]" />
+        <LoadingLine className="mt-2 h-4 w-[66%] max-w-[15rem]" />
+        <div className="mt-6 grid gap-2.5">
+          {loadingCategories.map((category) => <LoadingCategoryCard category={category} key={category} />)}
+        </div>
       </section>
-      <section className="grid grid-cols-2 gap-3" aria-hidden="true">
-        {Array.from({ length: 4 }, (_, index) => (
-          <Skeleton className="h-32 rounded-[1.35rem] bg-white/65 shadow-closer-soft" key={index} />
+    </>
+  );
+}
+
+function TogetherPickerSkeleton() {
+  return (
+    <>
+      <header className="flex min-h-[42px] items-center justify-between gap-3" aria-hidden="true">
+        <LoadingBackButton />
+        <LoadingWordmark />
+        <LoadingModeBadge mode="together" />
+      </header>
+      <section className="pt-7" aria-hidden="true">
+        <LoadingLine className="h-9 w-[70%] max-w-[17rem]" />
+        <LoadingLine className="mt-1 h-9 w-[54%] max-w-[13rem]" />
+        <LoadingLine className="mt-2 h-4 w-[92%] max-w-[22rem]" />
+        <LoadingLine className="mt-2 h-4 w-[82%] max-w-[19rem]" />
+        <div className="mt-5 grid gap-2.5">
+          {loadingCategories.map((category) => <LoadingCategoryCard category={category} compact key={category} />)}
+        </div>
+      </section>
+    </>
+  );
+}
+
+function PrivateConversationSkeleton() {
+  return (
+    <>
+      <LoadingBackButton />
+      <section className="pt-10" aria-hidden="true">
+        <LoadingModeBadge mode="private" />
+        <LoadingLine className="mt-6 h-3 w-20" />
+        <LoadingLine className="mt-4 h-10 w-[82%] max-w-[18rem]" />
+        <LoadingLine className="mt-2 h-10 w-[68%] max-w-[15rem]" />
+        <LoadingLine className="mt-2 h-10 w-[52%] max-w-[12rem]" />
+        <LoadingLine className="mt-4 h-4 w-[88%] max-w-[20rem]" />
+        <LoadingLine className="mt-2 h-4 w-[66%] max-w-[15rem]" />
+        <div className="mt-8 grid gap-3">
+          <Skeleton className="h-12 rounded-[1.05rem] bg-closer-coral-soft" />
+          <div className="grid grid-cols-2 gap-3">
+            <Skeleton className="h-12 rounded-[1.05rem] bg-white/90" />
+            <Skeleton className="h-12 rounded-[1.05rem] bg-closer-lavender-soft" />
+          </div>
+        </div>
+      </section>
+    </>
+  );
+}
+
+function PrivateRoundSkeleton() {
+  return (
+    <>
+      <header className="flex min-h-[42px] items-center justify-between" aria-hidden="true">
+        <LoadingBackButton />
+        <LoadingModeBadge mode="private" />
+        <span className="w-[38px]" />
+      </header>
+      <section className="flex min-h-[calc(100svh-100px)] flex-col items-center pt-6" aria-hidden="true">
+        <Skeleton className="h-9 w-[76px] rounded-full bg-closer-yellow" />
+        <LoadingLine className="mt-3 h-3 w-36" />
+        <LoadingLine className="mt-7 h-10 w-[88%] max-w-[18rem]" />
+        <LoadingLine className="mt-2 h-10 w-[72%] max-w-[15rem]" />
+        <LoadingLine className="mt-2 h-10 w-[56%] max-w-[12rem]" />
+        <div className="mt-auto flex w-full flex-col pt-7">
+          <Skeleton className="min-h-[132px] w-full rounded-[1.05rem] bg-white/90" />
+          <Skeleton className="mt-[18px] h-12 w-full rounded-[1.05rem] bg-closer-coral-soft" />
+          <Skeleton className="mt-3 h-12 w-full rounded-[1.05rem] bg-white/65" />
+          <LoadingLine className="mx-auto mt-4 h-3 w-56 max-w-full" />
+        </div>
+      </section>
+    </>
+  );
+}
+
+function TogetherQuestionSkeleton() {
+  return (
+    <>
+      <header className="flex min-h-[42px] items-center justify-between gap-3" aria-hidden="true">
+        <LoadingBackButton />
+        <LoadingModeBadge mode="together" />
+        <span className="w-[38px]" />
+      </header>
+      <section className="flex min-h-[min(52svh,470px)] flex-1 flex-col items-center justify-center py-9 text-center" aria-hidden="true">
+        <Skeleton className="h-9 w-[76px] rounded-full bg-closer-yellow" />
+        <LoadingLine className="mx-auto mt-7 h-10 w-[88%] max-w-[18rem]" />
+        <LoadingLine className="mx-auto mt-2 h-10 w-[72%] max-w-[15rem]" />
+        <LoadingLine className="mx-auto mt-2 h-10 w-[56%] max-w-[12rem]" />
+      </section>
+      <section aria-hidden="true" className="mx-auto grid w-full max-w-[330px] grid-cols-3 gap-2.5">
+        {Array.from({ length: 3 }, (_, index) => (
+          <div className="grid justify-items-center gap-2" key={index}>
+            <Skeleton className={cn("size-[66px] rounded-full shadow-closer-card", index === 2 ? "bg-closer-coral" : "bg-white")} />
+            <LoadingLine className="h-3 w-10" />
+          </div>
         ))}
       </section>
+      <div aria-hidden="true" className="mt-6 flex justify-center border-t border-closer-navy/10 pt-4"><LoadingLine className="h-4 w-20" /></div>
     </>
   );
 }
@@ -78,14 +209,26 @@ function HistorySkeleton() {
 }
 
 export function CloserRouteLoading({ variant }: { variant: RouteLoadingVariant }) {
+  const shellClassName = variant === "private-picker" || variant === "private-conversation" || variant === "private-round"
+    ? "pt-5"
+    : variant === "together-picker"
+      ? "pt-[18px]"
+      : variant === "together-question"
+        ? "flex min-h-svh flex-col pb-[max(28px,env(safe-area-inset-bottom))]"
+        : undefined;
+
   return (
-    <CloserPageShell aria-busy="true" aria-live="polite">
-      <CloserTopbar />
+    <CloserPageShell aria-busy="true" aria-live="polite" className={shellClassName}>
+      {variant === "home" || variant === "form" || variant === "history" ? <CloserTopbar /> : null}
       <span className="sr-only">Opening this part of Closer…</span>
       {variant === "home" ? <HomeSkeleton /> : null}
       {variant === "form" ? <FormSkeleton /> : null}
-      {variant === "picker" ? <PickerSkeleton /> : null}
       {variant === "history" ? <HistorySkeleton /> : null}
+      {variant === "private-picker" ? <PrivatePickerSkeleton /> : null}
+      {variant === "together-picker" ? <TogetherPickerSkeleton /> : null}
+      {variant === "private-conversation" ? <PrivateConversationSkeleton /> : null}
+      {variant === "private-round" ? <PrivateRoundSkeleton /> : null}
+      {variant === "together-question" ? <TogetherQuestionSkeleton /> : null}
     </CloserPageShell>
   );
 }

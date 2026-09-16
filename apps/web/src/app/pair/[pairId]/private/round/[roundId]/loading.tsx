@@ -1,5 +1,5 @@
 import { CloserRouteLoading } from "@/components/closer/route-loading";
 
 export default function Loading() {
-  return <CloserRouteLoading variant="private-picker" />;
+  return <CloserRouteLoading variant="private-round" />;
 }

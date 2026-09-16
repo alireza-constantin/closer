@@ -13,7 +13,10 @@ describe("App Router navigation feedback", () => {
     "pair/[pairId]/invite/loading.tsx",
     "pair/[pairId]/rejoin/loading.tsx",
     "pair/[pairId]/together/loading.tsx",
+    "pair/[pairId]/together/[sessionId]/loading.tsx",
     "pair/[pairId]/private/loading.tsx",
+    "pair/[pairId]/private/conversation/[conversationId]/loading.tsx",
+    "pair/[pairId]/private/round/[roundId]/loading.tsx",
     "pair/[pairId]/history/loading.tsx",
   ])("provides an immediate loading boundary for %s", async (routeFile) => {
     expect(await Bun.file(join(appDirectory, routeFile)).exists()).toBe(true);
