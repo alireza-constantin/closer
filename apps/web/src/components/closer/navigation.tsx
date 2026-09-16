@@ -37,6 +37,7 @@ export function CloserModeCard({
   title,
   description,
   className,
+  prefetch,
 }: {
   href: string;
   kind: "together" | "private";
@@ -44,6 +45,7 @@ export function CloserModeCard({
   title: string;
   description: string;
   className?: string;
+  prefetch?: boolean;
 }) {
   return (
     <Link
@@ -53,6 +55,7 @@ export function CloserModeCard({
         className,
       )}
       href={href as never}
+      prefetch={prefetch}
     >
       <span className="grid size-14 place-items-center rounded-[1.25rem] bg-white/60 [&_svg]:size-7">{icon}</span>
       <span className="min-w-0"><strong className="block text-[1.05rem] font-extrabold tracking-[-.025em]">{title}</strong><small className="mt-0.5 block max-w-[22ch] text-[.82rem] leading-tight text-closer-navy/75">{description}</small></span>

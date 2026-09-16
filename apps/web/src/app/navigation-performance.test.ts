@@ -24,7 +24,12 @@ describe("App Router navigation feedback", () => {
   test("renders static Together picker routes without an authorization or Pair projection", async () => {
     const partnerSource = await Bun.file(join(appDirectory, "pair/[pairId]/together/partner/page.tsx")).text();
     const friendSource = await Bun.file(join(appDirectory, "pair/[pairId]/together/friend/page.tsx")).text();
+    const partnerLoadingSource = await Bun.file(join(appDirectory, "pair/[pairId]/together/partner/loading.tsx")).text();
+    const friendLoadingSource = await Bun.file(join(appDirectory, "pair/[pairId]/together/friend/loading.tsx")).text();
     const frameSource = await Bun.file(join(appDirectory, "..", "components/together-picker-frame.tsx")).text();
+    const modeCardSource = await Bun.file(join(appDirectory, "..", "components/closer/navigation.tsx")).text();
+    const pairHomeSource = await Bun.file(join(appDirectory, "..", "components/pair-home.tsx")).text();
+    const createPairSource = await Bun.file(join(appDirectory, "..", "components/create-pair-form.tsx")).text();
 
     expect(partnerSource).toContain('relationshipType="partner"');
     expect(friendSource).toContain('relationshipType="friend"');
@@ -32,6 +37,11 @@ describe("App Router navigation feedback", () => {
     expect(friendSource).not.toContain("getPairForParticipant");
     expect(partnerSource).not.toContain("Suspense");
     expect(friendSource).not.toContain("Suspense");
+    expect(partnerLoadingSource).toContain("return null;");
+    expect(friendLoadingSource).toContain("return null;");
+    expect(modeCardSource).toContain("prefetch={prefetch}");
+    expect(pairHomeSource).toContain("prefetch title=\"Talk Together\"");
+    expect(createPairSource).toContain("prefetch title=\"Together\"");
     expect(frameSource).toContain("CloserWordmark");
     expect(frameSource).toContain('<ModeBadge mode="together" />');
     expect(frameSource).toContain("CloserPageTitle");
