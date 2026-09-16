@@ -1,7 +1,7 @@
 import { Skeleton } from "@Closer/ui/components/skeleton";
 import { cn } from "@Closer/ui/lib/utils";
 
-import { categorySurfaceClass, type CloserCategory } from "@/components/closer/category";
+import { categoriesForRelationship, categorySurfaceClass, type CloserCategory } from "@/components/closer/category";
 import { CloserPageShell, CloserTopbar } from "@/components/closer/page-shell";
 
 type RouteLoadingVariant =
@@ -11,10 +11,9 @@ type RouteLoadingVariant =
   | "private-conversation"
   | "private-picker"
   | "private-round"
-  | "together-picker"
   | "together-question";
 
-const loadingCategories = ["fun", "deep", "memories", "relationship"] as const satisfies readonly CloserCategory[];
+const loadingCategories = categoriesForRelationship("partner");
 
 function LoadingLine({ className }: { className: string }) {
   return <Skeleton className={`rounded-full bg-closer-navy/10 ${className}`} />;
@@ -26,10 +25,6 @@ function LoadingBackButton() {
 
 function LoadingModeBadge({ mode }: { mode: "private" | "together" }) {
   return <Skeleton aria-hidden="true" className={cn("h-9 rounded-full", mode === "private" ? "w-[76px] bg-closer-lavender-soft" : "w-[88px] bg-closer-coral-soft")} />;
-}
-
-function LoadingWordmark() {
-  return <Skeleton aria-hidden="true" className="h-8 w-24 rounded-[.7rem] bg-closer-navy/10" />;
 }
 
 function LoadingCategoryCard({ category, compact }: { category: CloserCategory; compact?: boolean }) {
@@ -94,24 +89,14 @@ function PrivatePickerSkeleton() {
   );
 }
 
-function TogetherPickerSkeleton() {
+export function TogetherPickerLoading() {
   return (
-    <>
-      <header className="flex min-h-[42px] items-center justify-between gap-3" aria-hidden="true">
-        <LoadingBackButton />
-        <LoadingWordmark />
-        <LoadingModeBadge mode="together" />
-      </header>
-      <section className="pt-7" aria-hidden="true">
-        <LoadingLine className="h-9 w-[70%] max-w-[17rem]" />
-        <LoadingLine className="mt-1 h-9 w-[54%] max-w-[13rem]" />
-        <LoadingLine className="mt-2 h-4 w-[92%] max-w-[22rem]" />
-        <LoadingLine className="mt-2 h-4 w-[82%] max-w-[19rem]" />
-        <div className="mt-5 grid gap-2.5">
-          {loadingCategories.map((category) => <LoadingCategoryCard category={category} compact key={category} />)}
-        </div>
-      </section>
-    </>
+    <div aria-busy="true" aria-live="polite">
+      <span className="sr-only">Opening the conversation topics…</span>
+      <div aria-hidden="true" className="mt-5 grid gap-2.5">
+        {loadingCategories.map((category) => <LoadingCategoryCard category={category} compact key={category} />)}
+      </div>
+    </div>
   );
 }
 
@@ -211,11 +196,9 @@ function HistorySkeleton() {
 export function CloserRouteLoading({ variant }: { variant: RouteLoadingVariant }) {
   const shellClassName = variant === "private-picker" || variant === "private-conversation" || variant === "private-round"
     ? "pt-5"
-    : variant === "together-picker"
-      ? "pt-[18px]"
-      : variant === "together-question"
-        ? "flex min-h-svh flex-col pb-[max(28px,env(safe-area-inset-bottom))]"
-        : undefined;
+    : variant === "together-question"
+      ? "flex min-h-svh flex-col pb-[max(28px,env(safe-area-inset-bottom))]"
+      : undefined;
 
   return (
     <CloserPageShell aria-busy="true" aria-live="polite" className={shellClassName}>
@@ -225,7 +208,6 @@ export function CloserRouteLoading({ variant }: { variant: RouteLoadingVariant }
       {variant === "form" ? <FormSkeleton /> : null}
       {variant === "history" ? <HistorySkeleton /> : null}
       {variant === "private-picker" ? <PrivatePickerSkeleton /> : null}
-      {variant === "together-picker" ? <TogetherPickerSkeleton /> : null}
       {variant === "private-conversation" ? <PrivateConversationSkeleton /> : null}
       {variant === "private-round" ? <PrivateRoundSkeleton /> : null}
       {variant === "together-question" ? <TogetherQuestionSkeleton /> : null}

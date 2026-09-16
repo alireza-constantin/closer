@@ -22,6 +22,11 @@ const categoryMeta: Record<CloserCategory, { label: string; descriptions: Record
   friendship: { label: "Friendship", descriptions: { private: "For the way you show up", together: "The good stuff you share" } },
 };
 
+const categoriesByRelationship = {
+  partner: ["fun", "deep", "memories", "relationship"],
+  friend: ["fun", "deep", "memories", "friendship"],
+} as const satisfies Record<CloserRelationship, readonly CloserCategory[]>;
+
 export function categoryLabel(category: CloserCategory) {
   return categoryMeta[category].label;
 }
@@ -34,8 +39,8 @@ export function categorySurfaceClass(category: CloserCategory) {
   return categorySurfaceClasses[category];
 }
 
-export function categoriesForRelationship(relationship: CloserRelationship): CloserCategory[] {
-  return relationship === "partner" ? ["fun", "deep", "memories", "relationship"] : ["fun", "deep", "memories", "friendship"];
+export function categoriesForRelationship(relationship: CloserRelationship): readonly CloserCategory[] {
+  return categoriesByRelationship[relationship];
 }
 
 export function CategoryBadge({ category }: { category: CloserCategory }) {

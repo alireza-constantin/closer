@@ -22,6 +22,17 @@ describe("App Router navigation feedback", () => {
     expect(await Bun.file(join(appDirectory, routeFile)).exists()).toBe(true);
   });
 
+  test("streams the static Together picker chrome around its authorized category content", async () => {
+    const pageSource = await Bun.file(join(appDirectory, "pair/[pairId]/together/page.tsx")).text();
+    const frameSource = await Bun.file(join(appDirectory, "..", "components/together-picker-frame.tsx")).text();
+
+    expect(pageSource).toContain("<Suspense fallback={<TogetherPickerLoading />}>");
+    expect(frameSource).toContain("CloserWordmark");
+    expect(frameSource).toContain('<ModeBadge mode="together" />');
+    expect(frameSource).toContain("CloserPageTitle");
+    expect(frameSource).toContain("CloserSubtitle");
+  });
+
   test.each([
     "pair/[pairId]/private/page.tsx",
     "pair/[pairId]/private/conversation/[conversationId]/page.tsx",
@@ -37,7 +48,7 @@ describe("App Router navigation feedback", () => {
   test.each([
     "components/connect-person.tsx",
     "components/rejoin-controls.tsx",
-    "components/together-picker.tsx",
+    "components/together-picker-frame.tsx",
     "components/private-picker.tsx",
     "components/private-conversation-screen.tsx",
     "components/private-round-screen.tsx",
