@@ -1879,11 +1879,11 @@ async function lockPairAndFindConversation(
   return resolved[0];
 }
 
-export async function getPrivateConversationForParticipant(
+async function projectPrivateConversationForParticipant(
   database: Database,
   input: { participantId: string; pairId: string; conversationId: string },
+  access: Awaited<ReturnType<typeof requireCompletePairAccess>>,
 ) {
-  const access = await requireCompletePairAccess(database, input.participantId, input.pairId);
   const rows = await database
     .select({ conversation: privateConversation, era: pairMembershipEra })
     .from(privateConversation)
@@ -1919,33 +1919,36 @@ export async function getPrivateConversationForParticipant(
     .where(eq(privateRound.conversationId, row.conversation.id))
     .orderBy(desc(privateRound.questionNumber))
     .limit(1);
-  if (currentRound[0] && await privateRoundIsUnresolved(database, currentRound[0].round.id)) {
+  if (currentRound[0] && currentRound[0].round.status !== "declined") {
     const [answers, revealViews] = await Promise.all([
       database.select({ participantId: privateAnswer.participantId }).from(privateAnswer).where(eq(privateAnswer.roundId, currentRound[0].round.id)),
       database.select({ participantId: privateRevealView.participantId }).from(privateRevealView).where(eq(privateRevealView.roundId, currentRound[0].round.id)),
     ]);
-    return {
-      ...base,
-      state: "CURRENT_ROUND" as const,
-      roundId: currentRound[0].round.id,
-      currentRound: {
-        id: currentRound[0].round.id,
-        question: {
-          id: currentRound[0].round.questionId,
-          questionRevisionId: currentRound[0].round.questionRevisionId,
-          text: currentRound[0].revision.text,
-          category: currentRound[0].revision.category,
-          intensity: currentRound[0].revision.intensity,
+    const isUnresolved = answers.length < 2 || revealViews.length < 2;
+    if (isUnresolved) {
+      return {
+        ...base,
+        state: "CURRENT_ROUND" as const,
+        roundId: currentRound[0].round.id,
+        currentRound: {
+          id: currentRound[0].round.id,
+          question: {
+            id: currentRound[0].round.questionId,
+            questionRevisionId: currentRound[0].round.questionRevisionId,
+            text: currentRound[0].revision.text,
+            category: currentRound[0].revision.category,
+            intensity: currentRound[0].revision.intensity,
+          },
+          state: viewerRoundState(
+            answers.length,
+            answers.some((answer) => answer.participantId === input.participantId),
+            revealViews.some((view) => view.participantId === input.participantId) ? new Date() : null,
+            false,
+          ),
+          otherRevealViewed: revealViews.some((view) => view.participantId !== input.participantId),
         },
-        state: viewerRoundState(
-          answers.length,
-          answers.some((answer) => answer.participantId === input.participantId),
-          revealViews.some((view) => view.participantId === input.participantId) ? new Date() : null,
-          currentRound[0].round.status === "declined",
-        ),
-        otherRevealViewed: revealViews.some((view) => view.participantId !== input.participantId),
-      },
-    };
+      };
+    }
   }
 
   const unresolvedCandidate = await database
@@ -1980,6 +1983,14 @@ export async function getPrivateConversationForParticipant(
     return { ...base, state: "READY_FOR_NEXT" as const };
   }
   return { ...base, state: "WAITING_FOR_CREATOR" as const, message: `Waiting for ${creator.displayName} to choose a question.` };
+}
+
+export async function getPrivateConversationForParticipant(
+  database: Database,
+  input: { participantId: string; pairId: string; conversationId: string },
+) {
+  const access = await requireCompletePairAccess(database, input.participantId, input.pairId);
+  return projectPrivateConversationForParticipant(database, input, access);
 }
 
 async function insertRoundForConversation(
@@ -2347,11 +2358,11 @@ export async function listActivePrivateConversations(
   if (!conversations.length) return [];
 
   return Promise.all(conversations.map(async (conversation) => {
-    const projection = await getPrivateConversationForParticipant(database, {
+    const projection = await projectPrivateConversationForParticipant(database, {
       participantId: input.participantId,
       pairId: input.pairId,
       conversationId: conversation.id,
-    });
+    }, access);
     const rounds = await database
       .select({ id: privateRound.id })
       .from(privateRound)
@@ -2385,137 +2396,42 @@ export async function getFormerEraHistoryForParticipant(
   database: Database,
   input: { participantId: string; pairId: string },
 ) {
-  const pairs = await database
-    .select({ terminatedAt: pair.terminatedAt, intendedPersonName: pair.intendedPersonName })
-    .from(pair)
-    .where(eq(pair.id, input.pairId))
-    .limit(1);
-  const formerPair = pairs[0];
+  const [[formerPair], viewerMemberships] = await Promise.all([
+    database
+      .select({ terminatedAt: pair.terminatedAt, intendedPersonName: pair.intendedPersonName })
+      .from(pair)
+      .where(eq(pair.id, input.pairId))
+      .limit(1),
+    database
+      .select({ id: pairMembership.id })
+      .from(pairMembership)
+      .where(and(eq(pairMembership.pairId, input.pairId), eq(pairMembership.participantId, input.participantId))),
+  ]);
   if (!formerPair) throw new CloserDomainError("PAIR_NOT_FOUND");
-  const viewerMemberships = await database
-    .select({ id: pairMembership.id })
-    .from(pairMembership)
-    .where(and(eq(pairMembership.pairId, input.pairId), eq(pairMembership.participantId, input.participantId)));
   const viewerMembershipIds = new Set(viewerMemberships.map((membership) => membership.id));
   if (!viewerMembershipIds.size) throw new CloserDomainError("PAIR_NOT_FOUND");
 
   const eras = (await database
-    .select()
+    .select({
+      id: pairMembershipEra.id,
+      firstMembershipId: pairMembershipEra.firstMembershipId,
+      secondMembershipId: pairMembershipEra.secondMembershipId,
+      endedAt: pairMembershipEra.endedAt,
+    })
     .from(pairMembershipEra)
     .where(and(eq(pairMembershipEra.pairId, input.pairId), sql`${pairMembershipEra.endedAt} is not null`))
     .orderBy(desc(pairMembershipEra.endedAt)))
     .filter((era) => viewerMembershipIds.has(era.firstMembershipId) || viewerMembershipIds.has(era.secondMembershipId));
 
-  const projectSession = async (session: typeof togetherSession.$inferSelect) => {
-    const cards = await database
-      .select({ card: togetherSessionQuestion, revision: questionRevision })
-      .from(togetherSessionQuestion)
-      .innerJoin(questionRevision, eq(togetherSessionQuestion.questionRevisionId, questionRevision.id))
-      .where(eq(togetherSessionQuestion.sessionId, session.id))
-      .orderBy(asc(togetherSessionQuestion.position));
-    return {
-      id: session.id,
-      category: session.category,
-      startedAt: session.startedAt.toISOString(),
-      endedAt: session.endedAt?.toISOString() ?? null,
-      questions: cards.map(({ card, revision }) => ({
-        id: card.id,
-        position: card.position,
-        text: revision.text,
-        liked: card.likedAt !== null,
-        skipped: card.skippedAt !== null,
-        advanced: card.advancedAt !== null,
-      })),
-    };
-  };
-
-  const erasWithHistory = await Promise.all(eras.map(async (era) => {
-    const members = await database
-      .select({
-        id: pairMembership.id,
-        participantId: pairMembership.participantId,
-        displayName: sql<string>`coalesce(${pairMembership.endedDisplayName}, ${participant.displayName})`,
-      })
-      .from(pairMembership)
-      .innerJoin(participant, eq(pairMembership.participantId, participant.id))
-      .where(inArray(pairMembership.id, [era.firstMembershipId, era.secondMembershipId]));
-    const memberIds = new Set(members.map((member) => member.participantId));
-    const memberNames = new Map(members.map((member) => [member.participantId, member.displayName]));
-    const conversations = await database
-      .select()
-      .from(privateConversation)
-      .where(and(eq(privateConversation.pairId, input.pairId), eq(privateConversation.membershipEraId, era.id)))
-      .orderBy(desc(privateConversation.createdAt));
-
-    const privateConversations = (await Promise.all(conversations.map(async (conversation) => {
-      const rounds = await database
-        .select({ round: privateRound, revision: questionRevision })
-        .from(privateRound)
-        .innerJoin(questionRevision, eq(privateRound.questionRevisionId, questionRevision.id))
-        .where(eq(privateRound.conversationId, conversation.id))
-        .orderBy(asc(privateRound.questionNumber));
-      return {
-        id: conversation.id,
-        category: conversation.category,
-        rounds: await Promise.all(rounds.map(async ({ round, revision }) => {
-          const answers = (await database
-            .select()
-            .from(privateAnswer)
-            .where(eq(privateAnswer.roundId, round.id)))
-            .filter((answer) => memberIds.has(answer.participantId));
-          const mutuallyAnswered = round.status !== "declined" && answers.length === 2;
-          const visibleAnswers = mutuallyAnswered
-            ? answers
-            : answers.filter((answer) => answer.participantId === input.participantId);
-          const [reactions, replies] = mutuallyAnswered
-            ? await Promise.all([
-              database.select().from(privateReaction).where(eq(privateReaction.roundId, round.id)),
-              database.select().from(privateReply).where(eq(privateReply.roundId, round.id)),
-            ])
-            : [[], []] as const;
-          return {
-            id: round.id,
-            questionNumber: round.questionNumber,
-            question: { text: revision.text, category: revision.category },
-            status: round.status === "declined" ? "passed" as const : "answered" as const,
-            answers: visibleAnswers.map((answer) => ({
-              participantId: answer.participantId,
-              displayName: memberNames.get(answer.participantId) ?? "Participant",
-              body: answer.body,
-            })),
-            reactions: reactions
-              .filter((reaction) => memberIds.has(reaction.participantId))
-              .map((reaction) => ({
-                participantId: reaction.participantId,
-                displayName: memberNames.get(reaction.participantId) ?? "Participant",
-                value: reaction.value,
-              })),
-            replies: replies
-              .filter((reply) => memberIds.has(reply.participantId))
-              .map((reply) => ({
-                participantId: reply.participantId,
-                displayName: memberNames.get(reply.participantId) ?? "Participant",
-                body: reply.body,
-              })),
-          };
-        })),
-      };
-    }))).filter((conversation) => conversation.rounds.length > 0);
-    const sessions = await database
-      .select()
-      .from(togetherSession)
-      .where(eq(togetherSession.membershipEraId, era.id))
-      .orderBy(desc(togetherSession.startedAt));
-    return {
-      privateConversations,
-      togetherSessions: await Promise.all(sessions.map(projectSession)),
-    };
-  }));
-
-  // Before the initial claim there is no two-member era row. The person who
-  // started a pre-claim session retains it; the later claimant does not.
-  const preClaimSessions = await database
-    .select()
+  const eraIds = eras.map((era) => era.id);
+  const eraMembershipIds = eras.flatMap((era) => [era.firstMembershipId, era.secondMembershipId]);
+  const preClaimSessionsPromise = database
+    .select({
+      id: togetherSession.id,
+      category: togetherSession.category,
+      startedAt: togetherSession.startedAt,
+      endedAt: togetherSession.endedAt,
+    })
     .from(togetherSession)
     .where(and(
       eq(togetherSession.pairId, input.pairId),
@@ -2524,6 +2440,203 @@ export async function getFormerEraHistoryForParticipant(
       sql`${togetherSession.endedAt} is not null`,
     ))
     .orderBy(desc(togetherSession.startedAt));
+  const membersPromise = eraMembershipIds.length
+    ? database
+      .select({
+        id: pairMembership.id,
+        participantId: pairMembership.participantId,
+        displayName: sql<string>`coalesce(${pairMembership.endedDisplayName}, ${participant.displayName})`,
+      })
+      .from(pairMembership)
+      .innerJoin(participant, eq(pairMembership.participantId, participant.id))
+      .where(inArray(pairMembership.id, eraMembershipIds))
+    : Promise.resolve([]);
+  const conversationsPromise = eraIds.length
+    ? database
+      .select({
+        id: privateConversation.id,
+        membershipEraId: privateConversation.membershipEraId,
+        category: privateConversation.category,
+        createdAt: privateConversation.createdAt,
+      })
+      .from(privateConversation)
+      .where(and(eq(privateConversation.pairId, input.pairId), inArray(privateConversation.membershipEraId, eraIds)))
+      .orderBy(desc(privateConversation.createdAt))
+    : Promise.resolve([]);
+  const sessionsPromise = eraIds.length
+    ? database
+      .select({
+        id: togetherSession.id,
+        membershipEraId: togetherSession.membershipEraId,
+        category: togetherSession.category,
+        startedAt: togetherSession.startedAt,
+        endedAt: togetherSession.endedAt,
+      })
+      .from(togetherSession)
+      .where(inArray(togetherSession.membershipEraId, eraIds))
+      .orderBy(desc(togetherSession.startedAt))
+    : Promise.resolve([]);
+  const [members, conversations, sessions, preClaimSessions] = await Promise.all([
+    membersPromise,
+    conversationsPromise,
+    sessionsPromise,
+    preClaimSessionsPromise,
+  ]);
+
+  const conversationIds = conversations.map((conversation) => conversation.id);
+  const allSessions = [...sessions, ...preClaimSessions];
+  const sessionIds = allSessions.map((session) => session.id);
+  const [roundRows, cardRows] = await Promise.all([
+    conversationIds.length
+      ? database
+        .select({
+          id: privateRound.id,
+          conversationId: privateRound.conversationId,
+          questionNumber: privateRound.questionNumber,
+          status: privateRound.status,
+          text: questionRevision.text,
+          category: questionRevision.category,
+        })
+        .from(privateRound)
+        .innerJoin(questionRevision, eq(privateRound.questionRevisionId, questionRevision.id))
+        .where(inArray(privateRound.conversationId, conversationIds))
+        .orderBy(asc(privateRound.questionNumber))
+      : Promise.resolve([]),
+    sessionIds.length
+      ? database
+        .select({
+          id: togetherSessionQuestion.id,
+          sessionId: togetherSessionQuestion.sessionId,
+          position: togetherSessionQuestion.position,
+          text: questionRevision.text,
+          likedAt: togetherSessionQuestion.likedAt,
+          skippedAt: togetherSessionQuestion.skippedAt,
+          advancedAt: togetherSessionQuestion.advancedAt,
+        })
+        .from(togetherSessionQuestion)
+        .innerJoin(questionRevision, eq(togetherSessionQuestion.questionRevisionId, questionRevision.id))
+        .where(inArray(togetherSessionQuestion.sessionId, sessionIds))
+        .orderBy(asc(togetherSessionQuestion.position))
+      : Promise.resolve([]),
+  ]);
+
+  const roundIds = roundRows.map((round) => round.id);
+  const [answerRows, reactionRows, replyRows] = await Promise.all([
+    roundIds.length
+      ? database
+        .select({ roundId: privateAnswer.roundId, participantId: privateAnswer.participantId, body: privateAnswer.body })
+        .from(privateAnswer)
+        .where(inArray(privateAnswer.roundId, roundIds))
+      : Promise.resolve([]),
+    roundIds.length
+      ? database
+        .select({ roundId: privateReaction.roundId, participantId: privateReaction.participantId, value: privateReaction.value })
+        .from(privateReaction)
+        .where(inArray(privateReaction.roundId, roundIds))
+      : Promise.resolve([]),
+    roundIds.length
+      ? database
+        .select({ roundId: privateReply.roundId, participantId: privateReply.participantId, body: privateReply.body })
+        .from(privateReply)
+        .where(inArray(privateReply.roundId, roundIds))
+      : Promise.resolve([]),
+  ]);
+
+  const memberByMembershipId = new Map(members.map((member) => [member.id, member]));
+  const conversationsByEra = new Map<string, typeof conversations>();
+  for (const conversation of conversations) {
+    const eraConversations = conversationsByEra.get(conversation.membershipEraId) ?? [];
+    eraConversations.push(conversation);
+    conversationsByEra.set(conversation.membershipEraId, eraConversations);
+  }
+  const roundsByConversation = new Map<string, typeof roundRows>();
+  for (const round of roundRows) {
+    const conversationRounds = roundsByConversation.get(round.conversationId) ?? [];
+    conversationRounds.push(round);
+    roundsByConversation.set(round.conversationId, conversationRounds);
+  }
+  const cardsBySession = new Map<string, typeof cardRows>();
+  for (const card of cardRows) {
+    const sessionCards = cardsBySession.get(card.sessionId) ?? [];
+    sessionCards.push(card);
+    cardsBySession.set(card.sessionId, sessionCards);
+  }
+  const answersByRound = new Map<string, typeof answerRows>();
+  for (const answer of answerRows) {
+    const roundAnswers = answersByRound.get(answer.roundId) ?? [];
+    roundAnswers.push(answer);
+    answersByRound.set(answer.roundId, roundAnswers);
+  }
+  const reactionsByRound = new Map<string, typeof reactionRows>();
+  for (const reaction of reactionRows) {
+    const roundReactions = reactionsByRound.get(reaction.roundId) ?? [];
+    roundReactions.push(reaction);
+    reactionsByRound.set(reaction.roundId, roundReactions);
+  }
+  const repliesByRound = new Map<string, typeof replyRows>();
+  for (const reply of replyRows) {
+    const roundReplies = repliesByRound.get(reply.roundId) ?? [];
+    roundReplies.push(reply);
+    repliesByRound.set(reply.roundId, roundReplies);
+  }
+
+  const projectSession = (session: (typeof allSessions)[number]) => ({
+    id: session.id,
+    category: session.category,
+    startedAt: session.startedAt.toISOString(),
+    endedAt: session.endedAt?.toISOString() ?? null,
+    questions: (cardsBySession.get(session.id) ?? []).map((card) => ({
+      id: card.id,
+      position: card.position,
+      text: card.text,
+      liked: card.likedAt !== null,
+      skipped: card.skippedAt !== null,
+      advanced: card.advancedAt !== null,
+    })),
+  });
+
+  const erasWithHistory = eras.map((era) => {
+    const firstMember = memberByMembershipId.get(era.firstMembershipId);
+    const secondMember = memberByMembershipId.get(era.secondMembershipId);
+    const membersForEra = [firstMember, secondMember].filter((member): member is NonNullable<typeof member> => Boolean(member));
+    const memberIds = new Set(membersForEra.map((member) => member.participantId));
+    const memberNames = new Map(membersForEra.map((member) => [member.participantId, member.displayName]));
+    const privateConversations = (conversationsByEra.get(era.id) ?? []).map((conversation) => {
+      const rounds = (roundsByConversation.get(conversation.id) ?? []).map((round) => {
+        const answers = (answersByRound.get(round.id) ?? []).filter((answer) => memberIds.has(answer.participantId));
+        const mutuallyAnswered = round.status !== "declined" && answers.length === 2;
+        const visibleAnswers = mutuallyAnswered ? answers : answers.filter((answer) => answer.participantId === input.participantId);
+        const reactions = mutuallyAnswered ? (reactionsByRound.get(round.id) ?? []).filter((reaction) => memberIds.has(reaction.participantId)) : [];
+        const replies = mutuallyAnswered ? (repliesByRound.get(round.id) ?? []).filter((reply) => memberIds.has(reply.participantId)) : [];
+        return {
+          id: round.id,
+          questionNumber: round.questionNumber,
+          question: { text: round.text, category: round.category },
+          status: round.status === "declined" ? "passed" as const : "answered" as const,
+          answers: visibleAnswers.map((answer) => ({
+            participantId: answer.participantId,
+            displayName: memberNames.get(answer.participantId) ?? "Participant",
+            body: answer.body,
+          })),
+          reactions: reactions.map((reaction) => ({
+            participantId: reaction.participantId,
+            displayName: memberNames.get(reaction.participantId) ?? "Participant",
+            value: reaction.value,
+          })),
+          replies: replies.map((reply) => ({
+            participantId: reply.participantId,
+            displayName: memberNames.get(reply.participantId) ?? "Participant",
+            body: reply.body,
+          })),
+        };
+      });
+      return { id: conversation.id, category: conversation.category, rounds };
+    }).filter((conversation) => conversation.rounds.length > 0);
+    return {
+      privateConversations,
+      togetherSessions: sessions.filter((session) => session.membershipEraId === era.id).map(projectSession),
+    };
+  });
 
   return {
     formerPair: {
@@ -2531,7 +2644,7 @@ export async function getFormerEraHistoryForParticipant(
       intendedPersonName: formerPair.terminatedAt ? formerPair.intendedPersonName : null,
     },
     eras: erasWithHistory,
-    preClaimTogetherSessions: await Promise.all(preClaimSessions.map(projectSession)),
+    preClaimTogetherSessions: preClaimSessions.map(projectSession),
   };
 }
 

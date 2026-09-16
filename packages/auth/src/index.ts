@@ -1,4 +1,4 @@
-import { createDb } from "@Closer/db";
+import { db } from "@Closer/db";
 import * as schema from "@Closer/db/schema/auth";
 import { env } from "@Closer/env/server";
 import { betterAuth } from "better-auth";
@@ -7,8 +7,6 @@ import { nextCookies } from "better-auth/next-js";
 import { anonymous } from "better-auth/plugins/anonymous";
 
 export function createAuth() {
-  const db = createDb();
-
   return betterAuth({
     database: drizzleAdapter(db, {
       provider: "pg",
