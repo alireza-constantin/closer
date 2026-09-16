@@ -1,14 +1,16 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Heart } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { Button } from "@Closer/ui/components/button";
+import { Button, buttonVariants } from "@Closer/ui/components/button";
+import { cn } from "@Closer/ui/lib/utils";
 
 import { AsyncButton } from "@/components/closer/async-button";
 import { ActionError } from "@/components/closer/feedback";
-import { CloserBackButton } from "@/components/closer/navigation";
+import { CloserBackLink } from "@/components/closer/navigation";
 import { CloserPageShell } from "@/components/closer/page-shell";
 import { ModeBadge } from "@/components/closer/mode-badge";
 
@@ -84,7 +86,7 @@ export default function PrivateConversationScreen({ view }: { view: Conversation
   }
   return (
     <CloserPageShell className="pt-5">
-      <CloserBackButton onClick={() => router.push(`/pair/${view.pairId}` as never)} />
+      <CloserBackLink href={`/pair/${view.pairId}`} />
       <section className="pt-10">
         <ModeBadge mode="private" />
         <p className="mt-6 text-sm font-extrabold uppercase tracking-[.16em] text-closer-muted">{view.category}</p>
@@ -105,7 +107,7 @@ export default function PrivateConversationScreen({ view }: { view: Conversation
           <>
             <h1 className="mt-4 max-w-[18ch] text-balance text-[2.25rem] font-extrabold leading-tight tracking-[-.048em]">Choose the next question</h1>
             <p className="mt-4 max-w-[32ch] leading-relaxed text-closer-muted">You can continue once you&apos;re ready.</p>
-            <Button className="mt-8" onClick={() => router.push(`/pair/${view.pairId}/private` as never)} size="lg" type="button">Choose next question</Button>
+            <Link className={cn(buttonVariants({ size: "lg" }), "mt-8")} href={`/pair/${view.pairId}/private` as never}>Choose next question</Link>
           </>
         ) : view.state === "EXHAUSTED" ? (
           <h1 className="mt-4 max-w-[18ch] text-balance text-[2.25rem] font-extrabold leading-tight tracking-[-.048em]">You&apos;ve reached the end for now.</h1>

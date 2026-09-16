@@ -22,7 +22,6 @@ export function PairTerminationControl({ pairId, isComplete }: { pairId: string;
       const response = await fetch(`/api/pairs/${encodeURIComponent(pairId)}/terminate`, { method: "POST" });
       if (!response.ok) throw new Error();
       router.replace(`/pair/${pairId}/history` as never);
-      router.refresh();
     } catch {
       setError("We couldn't end this space. Please try again.");
       setPending(false);

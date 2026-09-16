@@ -4,7 +4,7 @@ import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { CategoryCard, categoriesForRelationship, type CloserCategory } from "@/components/closer/category";
-import { CloserBackButton } from "@/components/closer/navigation";
+import { CloserBackLink } from "@/components/closer/navigation";
 import { CloserPageShell } from "@/components/closer/page-shell";
 import { ActionError } from "@/components/closer/feedback";
 import { ModeBadge } from "@/components/closer/mode-badge";
@@ -43,7 +43,7 @@ export default function PrivatePicker({ pairId, relationshipType }: { pairId: st
 
   return (
     <CloserPageShell className="pt-5">
-      <CloserBackButton onClick={() => router.push(`/pair/${pairId}` as never)} />
+      <CloserBackLink href={`/pair/${pairId}`} />
       <section className="pt-10">
         <ModeBadge mode="private" />
         <h1 className="mt-6 max-w-[12ch] text-balance text-[2.25rem] font-extrabold leading-tight tracking-[-.048em]">What kind of question feels right?</h1>

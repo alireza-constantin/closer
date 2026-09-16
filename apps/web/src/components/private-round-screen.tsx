@@ -2,11 +2,11 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Heart, LockKeyhole, MessageCircle, Send } from "lucide-react";
+import Link from "next/link";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
-import { useRouter } from "next/navigation";
 
-import { Button } from "@Closer/ui/components/button";
+import { Button, buttonVariants } from "@Closer/ui/components/button";
 import { Field, FieldError, FieldGroup, FieldLabel } from "@Closer/ui/components/field";
 import { Textarea } from "@Closer/ui/components/textarea";
 import { cn } from "@Closer/ui/lib/utils";
@@ -14,7 +14,7 @@ import { cn } from "@Closer/ui/lib/utils";
 import { AsyncButton } from "@/components/closer/async-button";
 import { CategoryBadge, type CloserCategory } from "@/components/closer/category";
 import { ActionError } from "@/components/closer/feedback";
-import { CloserBackButton } from "@/components/closer/navigation";
+import { CloserBackLink } from "@/components/closer/navigation";
 import { ModeBadge } from "@/components/closer/mode-badge";
 import { CloserCompanions, CloserPageShell, CloserRoundHeader } from "@/components/closer/page-shell";
 import { useVisiblePolling } from "@/hooks/use-visible-polling";
@@ -49,7 +49,6 @@ function parseRound(value: unknown): RoundView | null {
 }
 
 export default function PrivateRoundScreen({ initialRound }: { initialRound: RoundView }) {
-  const router = useRouter();
   const [round, setRound] = useState(initialRound);
   const [isPassing, setIsPassing] = useState(false);
   const [isRevealing, setIsRevealing] = useState(false);
@@ -179,7 +178,7 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
 
   const header = (
     <CloserRoundHeader>
-      <CloserBackButton label="Back to pair" onClick={() => router.push(`/pair/${round.pairId}` as never)} />
+      <CloserBackLink href={`/pair/${round.pairId}`} label="Back to pair" />
       <ModeBadge mode="private" />
       <span aria-hidden="true" className="w-[38px]" />
     </CloserRoundHeader>
@@ -223,8 +222,8 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
           <h2 className="mt-1 text-[1.35rem] font-extrabold">Waiting for {round.otherParticipant.displayName}</h2>
           <p className="mx-auto my-6 max-w-[27ch] leading-relaxed text-closer-muted">You’ll both see your answers when {round.otherParticipant.displayName} responds.</p>
           <div className="grid justify-items-center gap-3">
-            <Button onClick={() => router.push(`/pair/${round.pairId}` as never)} size="sm" type="button" variant="ghost">Back to Closer</Button>
-            <Button onClick={() => router.push(`/pair/${round.pairId}/private` as never)} size="sm" type="button" variant="ghost">Choose another topic</Button>
+            <Link className={buttonVariants({ size: "sm", variant: "ghost" })} href={`/pair/${round.pairId}` as never}>Back to Closer</Link>
+            <Link className={buttonVariants({ size: "sm", variant: "ghost" })} href={`/pair/${round.pairId}/private` as never}>Choose another topic</Link>
           </div>
         </section>
       </CloserPageShell>
@@ -256,11 +255,11 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
           <h1 className="text-[2.25rem] font-extrabold leading-tight tracking-[-.048em]">Question passed</h1>
           <p className="mx-auto my-6 max-w-[27ch] leading-relaxed text-closer-muted">This question is complete without a reveal.</p>
           {round.conversation.isCreator ? (
-            <Button onClick={() => router.push(`/pair/${round.pairId}/private` as never)} size="lg" type="button">Choose next question</Button>
+            <Link className={buttonVariants({ size: "lg" })} href={`/pair/${round.pairId}/private` as never}>Choose next question</Link>
           ) : (
             <p className="text-sm leading-relaxed text-closer-muted">Waiting for {round.otherParticipant.displayName} to choose a question.</p>
           )}
-          <Button className="mt-3" onClick={() => router.push(`/pair/${round.pairId}` as never)} size="sm" type="button" variant="ghost">Back to Closer</Button>
+          <Link className={cn(buttonVariants({ size: "sm", variant: "ghost" }), "mt-3")} href={`/pair/${round.pairId}` as never}>Back to Closer</Link>
         </section>
       </CloserPageShell>
     );
@@ -308,8 +307,8 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
           </div>
         </form>
         {round.replies?.filter((item) => !item.isOwner).map((item) => <p className="px-1.5 py-3 text-[.9rem] leading-relaxed text-closer-muted" key={item.participantId}><strong className="text-closer-navy">{item.displayName}</strong> {item.body}</p>)}
-        {round.conversation.isCreator && round.otherRevealViewed ? <Button className="mt-2.5 w-full" onClick={() => router.push(`/pair/${round.pairId}/private` as never)} size="lg" type="button" variant="secondary">Choose next question</Button> : null}
-        <Button className="mx-auto mt-2 block" onClick={() => router.push(`/pair/${round.pairId}` as never)} size="sm" type="button" variant="ghost">Back to Closer</Button>
+        {round.conversation.isCreator && round.otherRevealViewed ? <Link className={cn(buttonVariants({ size: "lg", variant: "secondary" }), "mt-2.5 w-full")} href={`/pair/${round.pairId}/private` as never}>Choose next question</Link> : null}
+        <Link className={cn(buttonVariants({ size: "sm", variant: "ghost" }), "mx-auto mt-2 flex w-fit")} href={`/pair/${round.pairId}` as never}>Back to Closer</Link>
         {error ? <ActionError>{error}</ActionError> : null}
       </section>
     </CloserPageShell>

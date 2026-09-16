@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 
 import { ActionError } from "@/components/closer/feedback";
 import { CategoryCard, categoriesForRelationship, type CloserCategory } from "@/components/closer/category";
-import { CloserBackButton } from "@/components/closer/navigation";
+import { CloserBackLink } from "@/components/closer/navigation";
 import { ModeBadge } from "@/components/closer/mode-badge";
 import { CloserPageShell, CloserWordmark } from "@/components/closer/page-shell";
 import { CloserPageTitle, CloserSubtitle } from "@/components/closer/typography";
@@ -42,7 +42,7 @@ export default function TogetherPicker({ pairId, relationshipType }: { pairId: s
   return (
     <CloserPageShell className="pt-[18px]">
       <header className="flex min-h-[42px] items-center justify-between gap-3">
-        <CloserBackButton label="Back to pair home" onClick={() => router.push(`/pair/${pairId}` as never)} />
+        <CloserBackLink href={`/pair/${pairId}`} label="Back to pair home" />
         <CloserWordmark />
         <ModeBadge mode="together" />
       </header>

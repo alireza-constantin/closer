@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, ArrowRight, Heart, X } from "lucide-react";
+import { ArrowRight, Heart, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import type { ReactNode } from "react";
 import { useState } from "react";
@@ -11,6 +11,7 @@ import { cn } from "@Closer/ui/lib/utils";
 
 import { ActionError } from "@/components/closer/feedback";
 import { CategoryBadge, type CloserCategory } from "@/components/closer/category";
+import { CloserBackLink } from "@/components/closer/navigation";
 import { CloserPageShell } from "@/components/closer/page-shell";
 import { ModeBadge } from "@/components/closer/mode-badge";
 
@@ -114,7 +115,7 @@ export default function TogetherSessionScreen({ initialSession }: { initialSessi
   return (
     <CloserPageShell className="flex min-h-svh flex-col pb-[max(28px,env(safe-area-inset-bottom))]">
       <header className="flex min-h-[42px] items-center justify-between gap-3">
-        <Button aria-label="Back to pair home" className="px-2" onClick={() => router.push(`/pair/${session.pairId}` as never)} size="icon-lg" type="button" variant="ghost"><ArrowLeft aria-hidden="true" data-icon="inline-start" /></Button>
+        <CloserBackLink href={`/pair/${session.pairId}`} label="Back to pair home" />
         <ModeBadge mode="together" />
         <span aria-hidden="true" className="w-[38px]" />
       </header>

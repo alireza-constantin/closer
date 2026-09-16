@@ -1,18 +1,32 @@
 "use client";
 
 import { ArrowLeft, ChevronRight } from "lucide-react";
-import Link from "next/link";
+import Link, { useLinkStatus } from "next/link";
 import type { ReactNode } from "react";
 
-import { Button } from "@Closer/ui/components/button";
+import { buttonVariants } from "@Closer/ui/components/button";
 import { cn } from "@Closer/ui/lib/utils";
 
-export function CloserBackButton({ onClick, label = "Back" }: { onClick: () => void; label?: string }) {
+function BackLinkStatus({ label }: { label: string }) {
+  const { pending } = useLinkStatus();
+
   return (
-    <Button aria-label={label === "Back" ? undefined : label} className="w-fit px-2" onClick={onClick} size="sm" type="button" variant="ghost">
-      <ArrowLeft aria-hidden="true" data-icon="inline-start" />
-      {label === "Back" ? <span>{label}</span> : <span className="sr-only">{label}</span>}
-    </Button>
+    <>
+      <ArrowLeft aria-hidden="true" className={pending ? "animate-pulse" : undefined} data-icon="inline-start" />
+      <span className={label === "Back" || pending ? undefined : "sr-only"}>{pending ? "Opening…" : label}</span>
+    </>
+  );
+}
+
+export function CloserBackLink({ href, label = "Back" }: { href: string; label?: string }) {
+  return (
+    <Link
+      aria-label={label === "Back" ? undefined : label}
+      className={cn(buttonVariants({ size: "sm", variant: "ghost" }), "w-fit px-2")}
+      href={href as never}
+    >
+      <BackLinkStatus label={label} />
+    </Link>
   );
 }
 

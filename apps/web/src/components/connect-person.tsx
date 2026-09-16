@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import InviteControls from "@/components/invite-controls";
-import { CloserBackButton } from "@/components/closer/navigation";
+import { CloserBackLink } from "@/components/closer/navigation";
 import { ModeBadge } from "@/components/closer/mode-badge";
 import { CloserPageShell } from "@/components/closer/page-shell";
 import { CloserEyebrow, CloserPageTitle, CloserSubtitle } from "@/components/closer/typography";
@@ -49,7 +49,7 @@ export default function ConnectPerson({ pairId, issueOnEntry = false }: { pairId
 
   return (
     <CloserPageShell className="pb-[max(28px,env(safe-area-inset-bottom))] pt-5">
-      <CloserBackButton label="Back to space" onClick={() => router.push(`/pair/${pairId}` as never)} />
+      <CloserBackLink href={`/pair/${pairId}`} label="Back to space" />
       <section className="mx-auto max-w-[34rem] px-1 pt-4 text-center">
         <ModeBadge mode="private" />
         <CloserEyebrow className="mt-4">Separate phones, one shared reveal</CloserEyebrow>

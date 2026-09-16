@@ -16,8 +16,10 @@ export default async function PairPage({ params }: { params: Promise<{ pairId: s
   if (!currentParticipant) notFound();
 
   try {
-    const pairView = await getPairForParticipant(db, currentParticipant.id, pairId);
-    const spaces = await listActivePairsForParticipant(db, currentParticipant.id);
+    const [pairView, spaces] = await Promise.all([
+      getPairForParticipant(db, currentParticipant.id, pairId),
+      listActivePairsForParticipant(db, currentParticipant.id),
+    ]);
     const firstMember = pairView.members.find((member) => member.slot === "first");
     const secondMember = pairView.members.find((member) => member.slot === "second");
 
