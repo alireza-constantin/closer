@@ -17,6 +17,6 @@ export default async function TogetherSessionPage({ params }: { params: Promise<
   } catch {
     notFound();
   }
-  if (view.endedAt) redirect(`/pair/${pairId}`);
+  if (view.endedAt) redirect(`/pair/${pairId}/together/${view.relationshipType}`);
   return <TogetherSessionScreen initialSession={view} />;
 }

@@ -136,6 +136,7 @@ test("either claimed member can Unpair atomically and repeated termination is st
   expect((await db.select().from(rejoinInvite).where(eq(rejoinInvite.pairId, pairId)))[0]?.revokedAt).not.toBeNull();
   expect(await getRejoinInviteLanding(db, rejoin.token)).toBeNull();
   expect(await capture(advanceTogetherSession(db, { pairId, participantId: first.id, sessionId: session.sessionId, action: "next" }))).toBeInstanceOf(CloserDomainError);
+  expect(await capture(startTogetherSession(db, { pairId, participantId: first.id, category: "deep" }))).toBeInstanceOf(CloserDomainError);
   expect(await capture(startOrResumePrivateConversation(db, { pairId, participantId: first.id, category: "deep", clientRequestId: randomUUID() }))).toBeInstanceOf(CloserDomainError);
 
   const history = await getFormerEraHistoryForParticipant(db, { pairId, participantId: first.id });
@@ -170,6 +171,7 @@ test("an unclaimed member can End this space without manufacturing a second part
   expect(await getInitialInviteLanding(db, invite.token)).toBeNull();
   expect((await db.select().from(togetherSession).where(eq(togetherSession.id, session.sessionId)))[0]?.endedAt).not.toBeNull();
   expect(await capture(redeemInitialInvite(db, { token: invite.token, participantId: await createGuest("Late claimant") }))).toBeInstanceOf(CloserDomainError);
+  expect(await capture(startTogetherSession(db, { pairId: created.pair.id, participantId: first.id, category: "fun" }))).toBeInstanceOf(CloserDomainError);
 
   const history = await getFormerEraHistoryForParticipant(db, { pairId: created.pair.id, participantId: first.id });
   expect(history.formerPair.intendedPersonName).toBe("Intended only");

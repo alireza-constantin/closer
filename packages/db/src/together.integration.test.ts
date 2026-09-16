@@ -127,7 +127,7 @@ describe("Closer Slice 02 Together sessions", () => {
         clientRequestId: randomUUID(),
       });
       const view = await getTogetherSessionForParticipant(db, { pairId: partner.pair.id, participantId: partner.creator.id, sessionId: started.sessionId });
-      expect(view.category).toBe(category);
+      expect(view).toMatchObject({ category, relationshipType: "partner" });
       await endTogetherSession(db, { pairId: partner.pair.id, participantId: partner.creator.id, sessionId: started.sessionId });
     }
     for (const category of friendCategories) {
@@ -137,16 +137,20 @@ describe("Closer Slice 02 Together sessions", () => {
         category,
         clientRequestId: randomUUID(),
       });
-      expect((await getTogetherSessionForParticipant(db, { pairId: friend.pair.id, participantId: friend.creator.id, sessionId: started.sessionId })).category).toBe(category);
+      expect(await getTogetherSessionForParticipant(db, { pairId: friend.pair.id, participantId: friend.creator.id, sessionId: started.sessionId })).toMatchObject({ category, relationshipType: "friend" });
       await endTogetherSession(db, { pairId: friend.pair.id, participantId: friend.creator.id, sessionId: started.sessionId });
     }
   });
 
-  test("relationship-specific categories are rejected for the other relationship", async () => {
+  test("a Partner Pair cannot start Friendship from a manually opened Friend picker", async () => {
     const partner = await createPair("partner");
-    const friend = await createPair("friend");
 
     expect(await captureError(startTogetherSession(db, { pairId: partner.pair.id, participantId: partner.creator.id, category: "friendship", clientRequestId: randomUUID() }))).toMatchObject({ code: "QUESTION_UNAVAILABLE" });
+  });
+
+  test("a Friend Pair cannot start Relationship from a manually opened Partner picker", async () => {
+    const friend = await createPair("friend");
+
     expect(await captureError(startTogetherSession(db, { pairId: friend.pair.id, participantId: friend.creator.id, category: "relationship", clientRequestId: randomUUID() }))).toMatchObject({ code: "QUESTION_UNAVAILABLE" });
   });
 
@@ -414,6 +418,7 @@ describe("Closer Slice 02 Together sessions", () => {
     const pair = await createPair("partner");
     const outsider = await createParticipant("Outsider");
     const started = await startTogetherSession(db, { pairId: pair.pair.id, participantId: pair.creator.id, category: "deep", clientRequestId: randomUUID() });
+    expect(await captureError(startTogetherSession(db, { pairId: pair.pair.id, participantId: outsider.id, category: "deep", clientRequestId: randomUUID() }))).toMatchObject({ code: "PAIR_NOT_FOUND" });
     expect(await captureError(getTogetherSessionForParticipant(db, { pairId: pair.pair.id, participantId: outsider.id, sessionId: started.sessionId }))).toMatchObject({ code: "PAIR_NOT_FOUND" });
     expect(await captureError(advanceTogetherSession(db, { pairId: pair.pair.id, participantId: outsider.id, sessionId: started.sessionId, action: "next", clientRequestId: randomUUID() }))).toMatchObject({ code: "PAIR_NOT_FOUND" });
   });

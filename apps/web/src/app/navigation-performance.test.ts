@@ -12,7 +12,6 @@ describe("App Router navigation feedback", () => {
     "pair/[pairId]/loading.tsx",
     "pair/[pairId]/invite/loading.tsx",
     "pair/[pairId]/rejoin/loading.tsx",
-    "pair/[pairId]/together/loading.tsx",
     "pair/[pairId]/together/[sessionId]/loading.tsx",
     "pair/[pairId]/private/loading.tsx",
     "pair/[pairId]/private/conversation/[conversationId]/loading.tsx",
@@ -22,11 +21,17 @@ describe("App Router navigation feedback", () => {
     expect(await Bun.file(join(appDirectory, routeFile)).exists()).toBe(true);
   });
 
-  test("streams the static Together picker chrome around its authorized category content", async () => {
-    const pageSource = await Bun.file(join(appDirectory, "pair/[pairId]/together/page.tsx")).text();
+  test("renders static Together picker routes without an authorization or Pair projection", async () => {
+    const partnerSource = await Bun.file(join(appDirectory, "pair/[pairId]/together/partner/page.tsx")).text();
+    const friendSource = await Bun.file(join(appDirectory, "pair/[pairId]/together/friend/page.tsx")).text();
     const frameSource = await Bun.file(join(appDirectory, "..", "components/together-picker-frame.tsx")).text();
 
-    expect(pageSource).toContain("<Suspense fallback={<TogetherPickerLoading />}>");
+    expect(partnerSource).toContain('relationshipType="partner"');
+    expect(friendSource).toContain('relationshipType="friend"');
+    expect(partnerSource).not.toContain("getPairForParticipant");
+    expect(friendSource).not.toContain("getPairForParticipant");
+    expect(partnerSource).not.toContain("Suspense");
+    expect(friendSource).not.toContain("Suspense");
     expect(frameSource).toContain("CloserWordmark");
     expect(frameSource).toContain('<ModeBadge mode="together" />');
     expect(frameSource).toContain("CloserPageTitle");

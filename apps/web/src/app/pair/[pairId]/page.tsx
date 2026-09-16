@@ -35,6 +35,7 @@ export default async function PairPage({ params }: { params: Promise<{ pairId: s
         isComplete={Boolean(secondMember)}
         memberNames={[firstMember.displayName, secondMember?.displayName ?? null]}
         pairId={pairId}
+        relationshipType={pairView.pair.relationshipType}
       />
     );
   } catch {

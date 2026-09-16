@@ -22,11 +22,12 @@ import { CloserModeCard } from "@/components/closer/navigation";
 import { OnboardingIcon, OnboardingSurface } from "@/components/closer/onboarding-surface";
 import { FormServerError } from "@/components/closer/feedback";
 import { CloserEyebrow } from "@/components/closer/typography";
+import { togetherPickerPath, type PairRelationshipType } from "@/lib/together-picker-path";
 import { createPairSchema, type CreatePairValues } from "@/lib/validation";
 
 import { Input } from "@Closer/ui/components/input";
 
-type PairCreation = { pairId: string };
+type PairCreation = { pairId: string; relationshipType: PairRelationshipType };
 
 export default function CreatePairForm({ isFirstSpace = true }: { isFirstSpace?: boolean }) {
   const [result, setResult] = useState<PairCreation | null>(null);
@@ -53,7 +54,7 @@ export default function CreatePairForm({ isFirstSpace = true }: { isFirstSpace?:
         form.setError("root.server", { message: typeof message === "string" ? message : "We could not create your space." });
         return;
       }
-      setResult({ pairId: body.pairId as string });
+      setResult({ pairId: body.pairId as string, relationshipType: values.relationshipType });
     } catch {
       form.setError("root.server", { message: "We could not create your space." });
     }
@@ -67,7 +68,7 @@ export default function CreatePairForm({ isFirstSpace = true }: { isFirstSpace?:
         <h1 className="mt-3 max-w-[12ch] text-balance text-[clamp(2rem,8.8vw,2.55rem)] font-extrabold leading-[1.03] tracking-[-.055em]">How do you want to connect?</h1>
         <p className="mt-3 max-w-[31ch] text-[.98rem] leading-relaxed text-closer-muted">Choose the kind of moment you want right now. You can bring your person in when you’re ready.</p>
         <div className="mt-6 flex w-full flex-col gap-3 text-left">
-          <CloserModeCard href={`/pair/${result.pairId}/together`} kind="together" icon={<MessageCircleMore aria-hidden="true" />} title="Together" description="Use this phone and talk face-to-face." />
+          <CloserModeCard href={togetherPickerPath(result.pairId, result.relationshipType)} kind="together" icon={<MessageCircleMore aria-hidden="true" />} title="Together" description="Use this phone and talk face-to-face." />
           <CloserModeCard href={`/pair/${result.pairId}/private`} kind="private" icon={<LockKeyhole aria-hidden="true" />} title="Private" description="Answer separately on your own phones." />
         </div>
         <Link className="mt-5 text-sm font-bold text-closer-muted underline-offset-4 hover:text-closer-navy hover:underline" href={`/pair/${result.pairId}` as never}>I’ll choose later</Link>

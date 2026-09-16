@@ -1407,6 +1407,7 @@ export async function getTogetherSessionForParticipant(
   return {
     id: context.session.id,
     pairId: context.session.pairId,
+    relationshipType: context.pair.relationshipType,
     category: context.session.category,
     startedByParticipantId: context.session.startedByParticipantId,
     startedAt: context.session.startedAt.toISOString(),

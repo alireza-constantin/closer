@@ -14,10 +14,12 @@ import { CategoryBadge, type CloserCategory } from "@/components/closer/category
 import { CloserBackLink } from "@/components/closer/navigation";
 import { CloserPageShell } from "@/components/closer/page-shell";
 import { ModeBadge } from "@/components/closer/mode-badge";
+import { togetherPickerPath, type PairRelationshipType } from "@/lib/together-picker-path";
 
 type TogetherView = {
   id: string;
   pairId: string;
+  relationshipType: PairRelationshipType;
   category: string;
   startedAt: string;
   endedAt: string | null;
@@ -27,7 +29,7 @@ type TogetherView = {
 type Action = "like" | "skip" | "next" | "end";
 
 function parseView(value: unknown): TogetherView | null {
-  if (!value || typeof value !== "object" || !("id" in value) || typeof value.id !== "string" || !("pairId" in value) || typeof value.pairId !== "string" || !("category" in value) || typeof value.category !== "string" || !("exhausted" in value) || typeof value.exhausted !== "boolean") return null;
+  if (!value || typeof value !== "object" || !("id" in value) || typeof value.id !== "string" || !("pairId" in value) || typeof value.pairId !== "string" || !("relationshipType" in value) || (value.relationshipType !== "partner" && value.relationshipType !== "friend") || !("category" in value) || typeof value.category !== "string" || !("exhausted" in value) || typeof value.exhausted !== "boolean") return null;
   const question = "question" in value ? value.question : null;
   if (question !== null && (!question || typeof question !== "object" || !("id" in question) || typeof question.id !== "string" || !("text" in question) || typeof question.text !== "string" || !("liked" in question) || typeof question.liked !== "boolean")) return null;
   return value as TogetherView;
@@ -105,7 +107,7 @@ export default function TogetherSessionScreen({ initialSession }: { initialSessi
     try {
       const response = await fetch(`${baseUrl}/end`, { method: "POST" });
       if (!response.ok) throw new Error();
-      router.replace(`/pair/${session.pairId}` as never);
+      router.replace(togetherPickerPath(session.pairId, session.relationshipType) as never);
     } catch {
       setError("We couldn’t end the session right now. Please try again.");
       setPending(null);
@@ -115,7 +117,7 @@ export default function TogetherSessionScreen({ initialSession }: { initialSessi
   return (
     <CloserPageShell className="flex min-h-svh flex-col pb-[max(28px,env(safe-area-inset-bottom))]">
       <header className="flex min-h-[42px] items-center justify-between gap-3">
-        <CloserBackLink href={`/pair/${session.pairId}`} label="Back to pair home" />
+        <CloserBackLink href={togetherPickerPath(session.pairId, session.relationshipType)} label="Back to conversation topics" />
         <ModeBadge mode="together" />
         <span aria-hidden="true" className="w-[38px]" />
       </header>

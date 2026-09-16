@@ -1,9 +1,11 @@
 import { describe, expect, mock, test } from "bun:test";
 
+let relationshipType: "partner" | "friend" = "friend";
+
 mock.module("@Closer/auth/closer", () => ({
   db: {},
   getPairForParticipant: async () => ({
-    pair: { relationshipType: "friend", intendedPersonName: "Nima" },
+    pair: { relationshipType, intendedPersonName: "Nima" },
     members: [{ slot: "first", displayName: "Ali" }],
   }),
   getInitialInviteStatus: async () => ({ state: "active", expiresAt: new Date("2030-01-01T00:00:00.000Z") }),
@@ -34,7 +36,8 @@ mock.module("@/components/pair-home", () => ({ default: "pair-home" }));
 const { default: PairPage } = await import("./page");
 
 describe("Pair route entry", () => {
-  test("keeps a one-member space on Pair Home", async () => {
+  test.each(["partner", "friend"] as const)("passes an authorized %s Pair type to Pair Home", async (type) => {
+    relationshipType = type;
     const element = await PairPage({ params: Promise.resolve({ pairId: "pair-1" }) });
 
     expect(element.type).toBe("pair-home");
@@ -43,6 +46,7 @@ describe("Pair route entry", () => {
       memberNames: ["Ali", null],
       intendedPersonName: "Nima",
       pairId: "pair-1",
+      relationshipType: type,
     });
   });
 });

@@ -19,6 +19,7 @@ import { CloserModeCard } from "@/components/closer/navigation";
 import { CloserPageTitle, CloserSubtitle } from "@/components/closer/typography";
 import { PairTerminationControl } from "@/components/pair-termination-control";
 import { useVisiblePolling } from "@/hooks/use-visible-polling";
+import { togetherPickerPath, type PairRelationshipType } from "@/lib/together-picker-path";
 import { intendedPersonNameSchema, type IntendedPersonNameValues } from "@/lib/validation";
 
 export const ACTIVE_CONVERSATIONS_POLL_INTERVAL_MS = 3_500;
@@ -190,6 +191,7 @@ export default function PairHome({
   intendedPersonName,
   isComplete,
   hasMultipleSpaces,
+  relationshipType,
   activeConversations: initialActiveConversations,
 }: {
   pairId: string;
@@ -197,6 +199,7 @@ export default function PairHome({
   intendedPersonName: string | null;
   isComplete: boolean;
   hasMultipleSpaces: boolean;
+  relationshipType: PairRelationshipType;
   activeConversations: ActiveConversation[];
 }) {
   const [activeConversations, setActiveConversations] = useState(initialActiveConversations);
@@ -228,7 +231,7 @@ export default function PairHome({
         <CloserSubtitle>What do you feel like doing?</CloserSubtitle>
       </section>
       <section className="grid gap-3" aria-label="Choose a way to connect">
-        <CloserModeCard href={`/pair/${pairId}/together`} kind="together" icon={<MessageCircleMore aria-hidden="true" />} title="Talk Together" description="Use this phone and talk face-to-face" />
+        <CloserModeCard href={togetherPickerPath(pairId, relationshipType)} kind="together" icon={<MessageCircleMore aria-hidden="true" />} title="Talk Together" description="Use this phone and talk face-to-face" />
         <CloserModeCard href={`/pair/${pairId}/private`} kind="private" icon={<LockKeyhole aria-hidden="true" />} title="Answer Privately" description={isComplete ? "Answer separately, reveal together" : "Invite them to answer separately"} />
       </section>
       {!isComplete ? <UnclaimedPersonName initialName={intendedPersonName} pairId={pairId} /> : null}
