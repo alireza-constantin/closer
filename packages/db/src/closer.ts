@@ -4,6 +4,15 @@ import { and, asc, desc, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
 
 import { createDb } from "./index";
 import {
+  TOGETHER_QUESTION_PAGE_SIZE,
+  togetherIntensityFallback,
+  togetherQuestionBands,
+  type TogetherLoadedQuestion,
+  type TogetherQuestionBand,
+  type TogetherQuestionPage,
+  type TogetherQuestionPools,
+} from "./together-playback";
+import {
   initialInvite,
   pair,
   pairMembershipEra,
@@ -1285,40 +1294,142 @@ export async function listEligibleTogetherQuestions(
   });
 }
 
+function deterministicTogetherQuestionRank(selectionSeed: string, questionId: string) {
+  return createHash("sha256").update(`closer:together:${selectionSeed}:${questionId}`).digest("hex");
+}
+
+function encodeTogetherQuestionCursor(questionId: string) {
+  return Buffer.from(questionId, "utf8").toString("base64url");
+}
+
+function decodeTogetherQuestionCursor(cursor: string | undefined) {
+  if (!cursor) return null;
+  try {
+    const questionId = Buffer.from(cursor, "base64url").toString("utf8");
+    return isUuid(questionId) ? questionId : null;
+  } catch {
+    return null;
+  }
+}
+
+async function loadTogetherQuestionPage(
+  database: Database,
+  input: {
+    sessionId?: string;
+    selectionSeed: string;
+    relationshipType: RelationshipType;
+    category: QuestionCategory;
+    band: TogetherQuestionBand;
+    cursor?: string;
+  },
+): Promise<TogetherQuestionPage> {
+  const cursorQuestionId = decodeTogetherQuestionCursor(input.cursor);
+  if (input.cursor && !cursorQuestionId) throw new CloserDomainError("TOGETHER_ACTION_INVALID");
+
+  const canonicalRank = sql<string>`encode(digest(${`closer:together:${input.selectionSeed}:`} || ${question.id}::text, 'sha256'), 'hex')`;
+  const cursorRank = cursorQuestionId ? deterministicTogetherQuestionRank(input.selectionSeed, cursorQuestionId) : null;
+  const cursorCondition = cursorQuestionId && cursorRank
+    ? or(
+        gt(canonicalRank, cursorRank),
+        and(eq(canonicalRank, cursorRank), gt(question.id, cursorQuestionId)),
+      )
+    : undefined;
+  const shownCondition = input.sessionId
+    ? sql`not exists (
+        select 1
+        from together_session_question shown_question
+        where shown_question.session_id = ${input.sessionId}
+          and shown_question.question_id = ${question.id}
+      )`
+    : undefined;
+  const rows = await database
+    .select({
+      questionId: question.id,
+      questionRevisionId: questionRevision.id,
+      text: questionRevision.text,
+    })
+    .from(question)
+    .innerJoin(questionRevision, eq(question.currentRevisionId, questionRevision.id))
+    .where(
+      and(
+        eq(question.isActive, true),
+        eq(questionRevision.category, input.category),
+        inArray(questionRevision.relationshipFit, ["both", input.relationshipType]),
+        inArray(questionRevision.modeFit, ["both", "together"]),
+        eq(questionRevision.intensity, input.band),
+        isNull(questionRevision.withdrawnAt),
+        shownCondition,
+        cursorCondition,
+      ),
+    )
+    .orderBy(asc(canonicalRank), asc(question.id))
+    .limit(TOGETHER_QUESTION_PAGE_SIZE + 1);
+  const hasMore = rows.length > TOGETHER_QUESTION_PAGE_SIZE;
+  const items = rows.slice(0, TOGETHER_QUESTION_PAGE_SIZE);
+  const lastQuestion = items.at(-1);
+  return {
+    items,
+    hasMore,
+    nextCursor: hasMore && lastQuestion ? encodeTogetherQuestionCursor(lastQuestion.questionId) : null,
+  };
+}
+
+async function loadCompletedTogetherNextTransitionCount(database: Database, sessionId: string) {
+  return (
+    await database
+      .select({ id: togetherSessionQuestion.id })
+      .from(togetherSessionQuestion)
+      .where(
+        and(
+          eq(togetherSessionQuestion.sessionId, sessionId),
+          isNull(togetherSessionQuestion.skippedAt),
+          sql`${togetherSessionQuestion.advancedAt} is not null`,
+        ),
+      )
+  ).length;
+}
+
+async function requireActiveTogetherSessionForPage(
+  database: Database,
+  input: { participantId: string; pairId: string; sessionId: string },
+) {
+  const context = await loadTogetherSessionContext(database, input.participantId, input.pairId, input.sessionId);
+  if (context.session.endedAt) throw new CloserDomainError("TOGETHER_SESSION_ENDED");
+  const activeEra = await getActiveMembershipEra(database, input.pairId);
+  if (context.session.membershipEraId !== (activeEra?.id ?? null)) {
+    throw new CloserDomainError("TOGETHER_SESSION_ENDED");
+  }
+  return context;
+}
+
+export async function getTogetherQuestionPageForParticipant(
+  database: Database,
+  input: { participantId: string; pairId: string; sessionId: string; band: string; cursor?: string },
+) {
+  if (!togetherQuestionBands.includes(input.band as TogetherQuestionBand)) {
+    throw new CloserDomainError("TOGETHER_ACTION_INVALID");
+  }
+  const context = await requireActiveTogetherSessionForPage(database, input);
+  return loadTogetherQuestionPage(database, {
+    sessionId: context.session.id,
+    selectionSeed: context.session.selectionSeed,
+    relationshipType: context.pair.relationshipType,
+    category: context.session.category,
+    band: input.band as TogetherQuestionBand,
+    cursor: input.cursor,
+  });
+}
+
 async function nextTogetherQuestion(
   database: Database,
   input: { sessionId?: string; selectionSeed: string; relationshipType: RelationshipType; category: QuestionCategory; completedNextTransitions?: number },
 ) {
-  const eligible = await eligibleTogetherQuestions(database, input);
-  const shownIds = new Set<string>();
-  if (input.sessionId) {
-    const shown = await database
-      .select({ questionId: togetherSessionQuestion.questionId })
-      .from(togetherSessionQuestion)
-      .where(eq(togetherSessionQuestion.sessionId, input.sessionId));
-    for (const row of shown) shownIds.add(row.questionId);
+  for (const band of togetherIntensityFallback(input.completedNextTransitions ?? 0)) {
+    const page = await loadTogetherQuestionPage(database, { ...input, band });
+    const candidate = page.items[0];
+    if (candidate) return candidate;
   }
-  const available = eligible.filter((candidate) => !shownIds.has(candidate.id));
-  const preferredIntensity: QuestionIntensity = (input.completedNextTransitions ?? 0) >= 4
-    ? "deep"
-    : (input.completedNextTransitions ?? 0) >= 2
-      ? "medium"
-      : "light";
-  const intensityFallback: Record<QuestionIntensity, QuestionIntensity[]> = {
-    light: ["light", "medium", "deep"],
-    medium: ["medium", "light", "deep"],
-    deep: ["deep", "medium", "light"],
-  };
-  const candidates = intensityFallback[preferredIntensity]
-    .map((intensity) => available.filter((candidate) => candidate.intensity === intensity))
-    .find((band) => band.length > 0);
-  if (!candidates) return null;
-
-  return candidates.toSorted((left, right) => {
-    const leftOrder = createHash("sha256").update(`closer:together:${input.selectionSeed}:${left.id}`).digest("hex");
-    const rightOrder = createHash("sha256").update(`closer:together:${input.selectionSeed}:${right.id}`).digest("hex");
-    return leftOrder.localeCompare(rightOrder) || left.id.localeCompare(right.id);
-  })[0] ?? null;
+  return null;
 }
 
 async function currentTogetherQuestion(database: Database, sessionId: string) {
@@ -1390,11 +1501,11 @@ export async function startTogetherSession(
 
     await tx.insert(togetherSessionQuestion).values({
       sessionId: session.id,
-      questionId: nextQuestion.id,
+      questionId: nextQuestion.questionId,
       questionRevisionId: nextQuestion.questionRevisionId,
       position: 1,
     });
-    return { sessionId: session.id, questionId: nextQuestion.id, questionRevisionId: nextQuestion.questionRevisionId };
+    return { sessionId: session.id, questionId: nextQuestion.questionId, questionRevisionId: nextQuestion.questionRevisionId };
   });
 }
 
@@ -1427,11 +1538,89 @@ export async function getTogetherSessionForParticipant(
   };
 }
 
+function emptyTogetherQuestionPage(): TogetherQuestionPage {
+  return { items: [], nextCursor: null, hasMore: false };
+}
+
+function emptyTogetherQuestionPools(): TogetherQuestionPools {
+  return {
+    light: emptyTogetherQuestionPage(),
+    medium: emptyTogetherQuestionPage(),
+    deep: emptyTogetherQuestionPage(),
+  };
+}
+
+export async function getTogetherSessionPlaybackForParticipant(
+  database: Database,
+  input: { participantId: string; pairId: string; sessionId: string },
+) {
+  const context = await loadTogetherSessionContext(database, input.participantId, input.pairId, input.sessionId);
+  const [current, activeEra] = await Promise.all([
+    currentTogetherQuestion(database, input.sessionId),
+    getActiveMembershipEra(database, input.pairId),
+  ]);
+  const sessionIsActive = !context.session.endedAt && context.session.membershipEraId === (activeEra?.id ?? null);
+  const completedNextTransitions = current
+    ? await loadCompletedTogetherNextTransitionCount(database, input.sessionId)
+    : 0;
+  const pages = current && sessionIsActive
+    ? Object.fromEntries(
+        await Promise.all(
+          togetherQuestionBands.map(async (band) => [
+            band,
+            await loadTogetherQuestionPage(database, {
+              sessionId: context.session.id,
+              selectionSeed: context.session.selectionSeed,
+              relationshipType: context.pair.relationshipType,
+              category: context.session.category,
+              band,
+            }),
+          ]),
+        ),
+      ) as TogetherQuestionPools
+    : emptyTogetherQuestionPools();
+
+  return {
+    id: context.session.id,
+    pairId: context.session.pairId,
+    relationshipType: context.pair.relationshipType,
+    category: context.session.category,
+    endedAt: context.session.endedAt?.toISOString() ?? null,
+    exhausted: current === null || !sessionIsActive,
+    completedNextTransitions,
+    question: current
+      ? {
+          questionId: current.card.questionId,
+          questionRevisionId: current.card.questionRevisionId,
+          text: current.revision.text,
+          position: current.card.position,
+          liked: current.card.likedAt !== null,
+        }
+      : null,
+    pages,
+  };
+}
+
 export async function advanceTogetherSession(
   database: Database,
-  input: { participantId: string; pairId: string; sessionId: string; action: "next" | "skip"; clientRequestId?: string; currentQuestionId?: string },
+  input: {
+    participantId: string;
+    pairId: string;
+    sessionId: string;
+    action: "next" | "skip";
+    clientRequestId?: string;
+    currentQuestionId?: string;
+    nextQuestionId?: string;
+    nextQuestionRevisionId?: string;
+  },
 ) {
   if (input.clientRequestId && !isUuid(input.clientRequestId)) throw new CloserDomainError("TOGETHER_ACTION_INVALID");
+  if (
+    (input.nextQuestionId === undefined) !== (input.nextQuestionRevisionId === undefined)
+    || (input.nextQuestionId !== undefined && (!isUuid(input.nextQuestionId) || !isUuid(input.nextQuestionRevisionId!)))
+  ) {
+    throw new CloserDomainError("TOGETHER_ACTION_INVALID");
+  }
   return database.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
     const mutableContext = await requireMutableTogetherSessionInTransaction(tx, input);
@@ -1459,9 +1648,17 @@ export async function advanceTogetherSession(
         .limit(1);
       if (previous[0]) {
         const current = await currentTogetherQuestion(tx, input.sessionId);
+        const completedNextTransitions = await loadCompletedTogetherNextTransitionCount(tx, input.sessionId);
         return current
-          ? { kind: "QUESTION" as const, sessionId: input.sessionId, questionId: current.card.questionId, questionRevisionId: current.card.questionRevisionId }
-          : { kind: "EXHAUSTED" as const, sessionId: input.sessionId };
+          ? {
+              kind: "QUESTION" as const,
+              sessionId: input.sessionId,
+              questionId: current.card.questionId,
+              questionRevisionId: current.card.questionRevisionId,
+              position: current.card.position,
+              completedNextTransitions,
+            }
+          : { kind: "EXHAUSTED" as const, sessionId: input.sessionId, completedNextTransitions };
       }
     }
 
@@ -1481,33 +1678,36 @@ export async function advanceTogetherSession(
       })
       .where(eq(togetherSessionQuestion.id, current.card.id));
 
+    const completedNextTransitions = await loadCompletedTogetherNextTransitionCount(tx, input.sessionId);
     const nextQuestion = await nextTogetherQuestion(tx, {
       sessionId: input.sessionId,
       selectionSeed: session.selectionSeed,
       relationshipType: mutableContext.pair.relationshipType,
       category: session.category,
-      completedNextTransitions: (
-        await tx
-          .select({ id: togetherSessionQuestion.id })
-          .from(togetherSessionQuestion)
-          .where(
-            and(
-              eq(togetherSessionQuestion.sessionId, input.sessionId),
-              isNull(togetherSessionQuestion.skippedAt),
-              sql`${togetherSessionQuestion.advancedAt} is not null`,
-            ),
-          )
-      ).length,
+      completedNextTransitions,
     });
-    if (!nextQuestion) return { kind: "EXHAUSTED" as const, sessionId: input.sessionId };
+    if (!nextQuestion) return { kind: "EXHAUSTED" as const, sessionId: input.sessionId, completedNextTransitions };
+    if (
+      input.nextQuestionId
+      && (nextQuestion.questionId !== input.nextQuestionId || nextQuestion.questionRevisionId !== input.nextQuestionRevisionId)
+    ) {
+      throw new CloserDomainError("TOGETHER_ACTION_INVALID");
+    }
 
     await tx.insert(togetherSessionQuestion).values({
       sessionId: input.sessionId,
-      questionId: nextQuestion.id,
+      questionId: nextQuestion.questionId,
       questionRevisionId: nextQuestion.questionRevisionId,
       position: current.card.position + 1,
     });
-    return { kind: "QUESTION" as const, sessionId: input.sessionId, questionId: nextQuestion.id, questionRevisionId: nextQuestion.questionRevisionId };
+    return {
+      kind: "QUESTION" as const,
+      sessionId: input.sessionId,
+      questionId: nextQuestion.questionId,
+      questionRevisionId: nextQuestion.questionRevisionId,
+      position: current.card.position + 1,
+      completedNextTransitions,
+    };
   });
 }
 
@@ -1515,7 +1715,6 @@ export async function setTogetherSessionLike(
   database: Database,
   input: { participantId: string; pairId: string; sessionId: string; liked: boolean; currentQuestionId?: string },
 ) {
-  await loadTogetherSessionContext(database, input.participantId, input.pairId, input.sessionId);
   await database.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
     await requireMutableTogetherSessionInTransaction(tx, input);
@@ -1544,7 +1743,6 @@ export async function endTogetherSession(
   database: Database,
   input: { participantId: string; pairId: string; sessionId: string },
 ) {
-  await loadTogetherSessionContext(database, input.participantId, input.pairId, input.sessionId);
   await database.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
     await requireMutableTogetherSessionInTransaction(tx, input);

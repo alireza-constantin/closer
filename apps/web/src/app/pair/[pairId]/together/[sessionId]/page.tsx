@@ -1,4 +1,4 @@
-import { db, getTogetherSessionForParticipant } from "@Closer/auth/closer";
+import { db, getTogetherSessionPlaybackForParticipant } from "@Closer/auth/closer";
 import { notFound, redirect } from "next/navigation";
 
 import TogetherSessionScreen from "@/components/together-session-screen";
@@ -13,10 +13,11 @@ export default async function TogetherSessionPage({ params }: { params: Promise<
   if (!currentParticipant) notFound();
   let view;
   try {
-    view = await getTogetherSessionForParticipant(db, { participantId: currentParticipant.id, pairId, sessionId });
+    view = await getTogetherSessionPlaybackForParticipant(db, { participantId: currentParticipant.id, pairId, sessionId });
   } catch {
     notFound();
   }
   if (view.endedAt) redirect(`/pair/${pairId}/together/${view.relationshipType}`);
-  return <TogetherSessionScreen initialSession={view} />;
+  const { endedAt: _endedAt, ...playback } = view;
+  return <TogetherSessionScreen initialSession={playback} />;
 }

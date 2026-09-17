@@ -3,36 +3,119 @@
 import { ArrowRight, Heart, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import type { ReactNode } from "react";
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
+import {
+  chooseBufferedTogetherQuestion,
+  shouldPrefetchTogetherQuestionPage,
+  togetherQuestionBands,
+  type TogetherLoadedQuestion,
+  type TogetherQuestionBand,
+  type TogetherQuestionPage,
+  type TogetherQuestionPools,
+} from "@Closer/db/together-playback";
 import { Button } from "@Closer/ui/components/button";
 import { Drawer, DrawerContent, DrawerFooter, DrawerHeader, DrawerTitle } from "@Closer/ui/components/drawer";
 import { cn } from "@Closer/ui/lib/utils";
 
-import { ActionError } from "@/components/closer/feedback";
 import { CategoryBadge, type CloserCategory } from "@/components/closer/category";
+import { ActionError } from "@/components/closer/feedback";
+import { ModeBadge } from "@/components/closer/mode-badge";
 import { CloserBackLink } from "@/components/closer/navigation";
 import { CloserPageShell } from "@/components/closer/page-shell";
-import { ModeBadge } from "@/components/closer/mode-badge";
 import { togetherPickerPath, type PairRelationshipType } from "@/lib/together-picker-path";
 
-type TogetherView = {
+type TogetherQuestion = TogetherLoadedQuestion & {
+  position: number;
+  liked: boolean;
+};
+
+type TogetherPlayback = {
   id: string;
   pairId: string;
   relationshipType: PairRelationshipType;
   category: string;
-  startedAt: string;
-  endedAt: string | null;
   exhausted: boolean;
-  question: { id: string; questionRevisionId: string; text: string; category: string; intensity: string; position: number; liked: boolean } | null;
+  completedNextTransitions: number;
+  question: TogetherQuestion | null;
+  pages: TogetherQuestionPools;
 };
+
+type Transition =
+  | { kind: "QUESTION"; questionId: string; questionRevisionId: string; position: number; completedNextTransitions: number }
+  | { kind: "EXHAUSTED"; completedNextTransitions: number };
+
 type Action = "like" | "skip" | "next" | "end";
 
-function parseView(value: unknown): TogetherView | null {
-  if (!value || typeof value !== "object" || !("id" in value) || typeof value.id !== "string" || !("pairId" in value) || typeof value.pairId !== "string" || !("relationshipType" in value) || (value.relationshipType !== "partner" && value.relationshipType !== "friend") || !("category" in value) || typeof value.category !== "string" || !("exhausted" in value) || typeof value.exhausted !== "boolean") return null;
-  const question = "question" in value ? value.question : null;
-  if (question !== null && (!question || typeof question !== "object" || !("id" in question) || typeof question.id !== "string" || !("text" in question) || typeof question.text !== "string" || !("liked" in question) || typeof question.liked !== "boolean")) return null;
-  return value as TogetherView;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object";
+}
+
+function parseQuestion(value: unknown): TogetherQuestion | null {
+  if (!isRecord(value)) return null;
+  if (
+    typeof value.questionId !== "string"
+    || typeof value.questionRevisionId !== "string"
+    || typeof value.text !== "string"
+    || typeof value.position !== "number"
+    || typeof value.liked !== "boolean"
+  ) {
+    return null;
+  }
+  return value as TogetherQuestion;
+}
+
+function parseQuestionPage(value: unknown): TogetherQuestionPage | null {
+  if (!isRecord(value) || !Array.isArray(value.items) || typeof value.hasMore !== "boolean") return null;
+  if (value.nextCursor !== null && typeof value.nextCursor !== "string") return null;
+  const items = value.items.map((item) => {
+    if (!isRecord(item) || typeof item.questionId !== "string" || typeof item.questionRevisionId !== "string" || typeof item.text !== "string") return null;
+    return item as TogetherLoadedQuestion;
+  });
+  if (items.some((item) => item === null)) return null;
+  return { items: items as TogetherLoadedQuestion[], hasMore: value.hasMore, nextCursor: value.nextCursor as string | null };
+}
+
+function parsePlayback(value: unknown): TogetherPlayback | null {
+  if (!isRecord(value)) return null;
+  const rawPages = value.pages;
+  if (
+    typeof value.id !== "string"
+    || typeof value.pairId !== "string"
+    || (value.relationshipType !== "partner" && value.relationshipType !== "friend")
+    || typeof value.category !== "string"
+    || typeof value.exhausted !== "boolean"
+    || typeof value.completedNextTransitions !== "number"
+    || !isRecord(rawPages)
+  ) {
+    return null;
+  }
+  const question = value.question === null ? null : parseQuestion(value.question);
+  const pages = Object.fromEntries(
+    togetherQuestionBands.map((band) => [band, parseQuestionPage(rawPages[band])]),
+  ) as Record<TogetherQuestionBand, TogetherQuestionPage | null>;
+  if ((value.question !== null && !question) || togetherQuestionBands.some((band) => !pages[band])) return null;
+  return { ...value, question, pages: pages as TogetherQuestionPools } as TogetherPlayback;
+}
+
+function parseTransition(value: unknown): Transition | null {
+  if (!isRecord(value) || typeof value.completedNextTransitions !== "number") return null;
+  if (value.kind === "EXHAUSTED") return { kind: "EXHAUSTED", completedNextTransitions: value.completedNextTransitions };
+  if (
+    value.kind === "QUESTION"
+    && typeof value.questionId === "string"
+    && typeof value.questionRevisionId === "string"
+    && typeof value.position === "number"
+  ) {
+    return {
+      kind: "QUESTION",
+      questionId: value.questionId,
+      questionRevisionId: value.questionRevisionId,
+      position: value.position,
+      completedNextTransitions: value.completedNextTransitions,
+    };
+  }
+  return null;
 }
 
 function TogetherAction({
@@ -58,27 +141,131 @@ function TogetherAction({
   );
 }
 
-export default function TogetherSessionScreen({ initialSession }: { initialSession: TogetherView }) {
+export default function TogetherSessionScreen({ initialSession }: { initialSession: TogetherPlayback }) {
   const router = useRouter();
   const [session, setSession] = useState(initialSession);
   const [pending, setPending] = useState<Action | null>(null);
+  const [isWaitingForPage, setIsWaitingForPage] = useState(false);
   const [motion, setMotion] = useState<"next" | "skip" | null>(null);
   const [isEndSheetOpen, setIsEndSheetOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const inFlightPrefetches = useRef(new Set<string>());
   const baseUrl = `/api/pairs/${encodeURIComponent(session.pairId)}/together/sessions/${encodeURIComponent(session.id)}`;
 
+  const prefetchPage = useCallback(async (band: TogetherQuestionBand, cursor: string | null) => {
+    if (!cursor) return false;
+    const requestKey = `${band}:${cursor}`;
+    if (inFlightPrefetches.current.has(requestKey)) return false;
+    inFlightPrefetches.current.add(requestKey);
+    try {
+      const response = await fetch(`${baseUrl}/questions?band=${encodeURIComponent(band)}&cursor=${encodeURIComponent(cursor)}`, { cache: "no-store" });
+      const page = parseQuestionPage(await response.json());
+      if (!response.ok || !page) throw new Error("Together question page failed to load.");
+      setSession((current) => {
+        const existing = current.pages[band];
+        if (existing.nextCursor !== cursor) return current;
+        const seenQuestionIds = new Set(existing.items.map((item) => item.questionId));
+        return {
+          ...current,
+          pages: {
+            ...current.pages,
+            [band]: {
+              items: [...existing.items, ...page.items.filter((item) => !seenQuestionIds.has(item.questionId))],
+              hasMore: page.hasMore,
+              nextCursor: page.nextCursor,
+            },
+          },
+        };
+      });
+      return true;
+    } catch {
+      return false;
+    } finally {
+      inFlightPrefetches.current.delete(requestKey);
+    }
+  }, [baseUrl]);
+
+  useEffect(() => {
+    for (const band of togetherQuestionBands) {
+      const page = session.pages[band];
+      if (shouldPrefetchTogetherQuestionPage(page)) void prefetchPage(band, page.nextCursor);
+    }
+  }, [prefetchPage, session.pages]);
+
+  const reconcile = useCallback(async () => {
+    const response = await fetch(baseUrl, { cache: "no-store" });
+    const next = parsePlayback(await response.json());
+    if (!response.ok || !next) throw new Error("Together session reconciliation failed.");
+    setSession(next);
+  }, [baseUrl]);
+
   async function advance(action: "next" | "skip") {
-    if (pending || !session.question) return;
+    const currentQuestion = session.question;
+    if (pending || isWaitingForPage || !currentQuestion) return;
+    const completedNextTransitions = session.completedNextTransitions + (action === "next" ? 1 : 0);
+    const choice = chooseBufferedTogetherQuestion(session.pages, completedNextTransitions);
+    if (choice.kind === "loading") {
+      setIsWaitingForPage(true);
+      setError("Getting the next question ready.");
+      const loaded = await prefetchPage(choice.band, session.pages[choice.band].nextCursor);
+      if (!loaded) setError("We couldn’t load the next question. Please try again.");
+      setIsWaitingForPage(false);
+      return;
+    }
+
+    const previousSession = session;
     setError(null);
     setPending(action);
     setMotion(action);
+    setSession((current) => {
+      if (current.question?.questionId !== currentQuestion.questionId) return current;
+      if (choice.kind === "exhausted") {
+        return { ...current, exhausted: true, question: null, completedNextTransitions };
+      }
+      return {
+        ...current,
+        exhausted: false,
+        completedNextTransitions,
+        question: { ...choice.question, liked: false, position: currentQuestion.position + 1 },
+        pages: {
+          ...current.pages,
+          [choice.band]: { ...current.pages[choice.band], items: current.pages[choice.band].items.slice(1) },
+        },
+      };
+    });
+
     try {
-      const response = await fetch(`${baseUrl}/advance`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action, currentQuestionId: session.question.id, clientRequestId: crypto.randomUUID() }) });
-      const next = parseView(await response.json());
-      if (!response.ok || !next) throw new Error();
-      setSession(next);
+      const response = await fetch(`${baseUrl}/advance`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action,
+          currentQuestionId: currentQuestion.questionId,
+          nextQuestionId: choice.kind === "question" ? choice.question.questionId : undefined,
+          nextQuestionRevisionId: choice.kind === "question" ? choice.question.questionRevisionId : undefined,
+          clientRequestId: crypto.randomUUID(),
+        }),
+      });
+      const transition = parseTransition(await response.json());
+      if (!response.ok || !transition) throw new Error("Together advance failed.");
+      const matchesOptimisticQuestion = choice.kind === "question"
+        && transition.kind === "QUESTION"
+        && transition.questionId === choice.question.questionId
+        && transition.questionRevisionId === choice.question.questionRevisionId
+        && transition.position === currentQuestion.position + 1;
+      const matchesOptimisticExhaustion = choice.kind === "exhausted" && transition.kind === "EXHAUSTED";
+      if (!matchesOptimisticQuestion && !matchesOptimisticExhaustion) {
+        await reconcile();
+      } else {
+        setSession((current) => ({ ...current, completedNextTransitions: transition.completedNextTransitions }));
+      }
     } catch {
-      setError("That question is still here. Please try again.");
+      setSession(previousSession);
+      try {
+        await reconcile();
+      } catch {
+        setError("We couldn’t confirm that change. Your last confirmed question is still showing.");
+      }
     } finally {
       setPending(null);
       window.setTimeout(() => setMotion(null), 240);
@@ -86,14 +273,20 @@ export default function TogetherSessionScreen({ initialSession }: { initialSessi
   }
 
   async function toggleLike() {
-    if (pending || !session.question) return;
+    const currentQuestion = session.question;
+    if (pending || isWaitingForPage || !currentQuestion) return;
     setError(null);
     setPending("like");
     try {
-      const response = await fetch(`${baseUrl}/like`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ liked: !session.question.liked, currentQuestionId: session.question.id }) });
-      const next = parseView(await response.json());
-      if (!response.ok || !next) throw new Error();
-      setSession(next);
+      const response = await fetch(`${baseUrl}/like`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ liked: !currentQuestion.liked, currentQuestionId: currentQuestion.questionId }),
+      });
+      if (!response.ok) throw new Error("Together like failed.");
+      setSession((current) => current.question?.questionId === currentQuestion.questionId
+        ? { ...current, question: { ...current.question, liked: !currentQuestion.liked } }
+        : current);
     } catch {
       setError("We couldn’t save that like. Please try again.");
     } finally {
@@ -106,13 +299,15 @@ export default function TogetherSessionScreen({ initialSession }: { initialSessi
     setPending("end");
     try {
       const response = await fetch(`${baseUrl}/end`, { method: "POST" });
-      if (!response.ok) throw new Error();
+      if (!response.ok) throw new Error("Together end failed.");
       router.replace(togetherPickerPath(session.pairId, session.relationshipType) as never);
     } catch {
       setError("We couldn’t end the session right now. Please try again.");
       setPending(null);
     }
   }
+
+  const controlsDisabled = pending !== null || isWaitingForPage;
 
   return (
     <CloserPageShell className="flex min-h-svh flex-col pb-[max(28px,env(safe-area-inset-bottom))]">
@@ -127,21 +322,21 @@ export default function TogetherSessionScreen({ initialSession }: { initialSessi
           <span aria-hidden="true" className="mb-6 grid size-[58px] place-items-center rounded-[1.25rem] bg-closer-peach text-[1.8rem] text-closer-navy">✦</span>
           <h1 className="max-w-[13ch] text-[2.2rem] font-extrabold leading-tight tracking-[-.05em]">You’ve reached the end for now.</h1>
           <p className="mt-3 mb-6 text-closer-muted">That was a good little corner of the deck.</p>
-          <Button disabled={pending !== null} onClick={() => setIsEndSheetOpen(true)} size="lg" type="button">End session</Button>
+          <Button disabled={controlsDisabled} onClick={() => setIsEndSheetOpen(true)} size="lg" type="button">End session</Button>
         </section>
       ) : (
         <>
-          <section className={cn("flex min-h-[min(52svh,470px)] flex-1 flex-col items-center justify-center py-9 text-center", motion === "next" && "animate-[closer-together-next_240ms_cubic-bezier(.2,.8,.3,1)_both]", motion === "skip" && "animate-[closer-together-skip_170ms_ease-out_both]")} key={session.question?.id}>
+          <section className={cn("flex min-h-[min(52svh,470px)] flex-1 flex-col items-center justify-center py-9 text-center", motion === "next" && "animate-[closer-together-next_240ms_cubic-bezier(.2,.8,.3,1)_both]", motion === "skip" && "animate-[closer-together-skip_170ms_ease-out_both]")} key={session.question?.questionId}>
             <CategoryBadge category={session.category as CloserCategory} />
             <h1 className="mx-auto mt-7 max-w-[15ch] text-balance text-[clamp(2rem,9vw,2.8rem)] font-extrabold leading-tight tracking-[-.055em]">{session.question?.text}</h1>
           </section>
           <section aria-label="Question actions" className="mx-auto grid w-full max-w-[330px] grid-cols-3 gap-2.5">
-            <TogetherAction disabled={pending !== null} icon={<Heart aria-hidden="true" fill={session.question?.liked ? "currentColor" : "none"} />} label="Like" onClick={() => void toggleLike()} selected={session.question?.liked ?? false} />
-            <TogetherAction disabled={pending !== null} icon={<X aria-hidden="true" />} label="Skip" onClick={() => void advance("skip")} />
-            <TogetherAction disabled={pending !== null} icon={<ArrowRight aria-hidden="true" />} label="Next" next onClick={() => void advance("next")} />
+            <TogetherAction disabled={controlsDisabled} icon={<Heart aria-hidden="true" fill={session.question?.liked ? "currentColor" : "none"} />} label="Like" onClick={() => void toggleLike()} selected={session.question?.liked ?? false} />
+            <TogetherAction disabled={controlsDisabled} icon={<X aria-hidden="true" />} label="Skip" onClick={() => void advance("skip")} />
+            <TogetherAction disabled={controlsDisabled} icon={<ArrowRight aria-hidden="true" />} label="Next" next onClick={() => void advance("next")} />
           </section>
           <div className="mt-6 flex justify-center border-t border-closer-navy/10 pt-4">
-            <Button className="px-3 text-closer-muted underline decoration-closer-muted/50 underline-offset-4" disabled={pending !== null} onClick={() => setIsEndSheetOpen(true)} size="sm" type="button" variant="ghost">End session</Button>
+            <Button className="px-3 text-closer-muted underline decoration-closer-muted/50 underline-offset-4" disabled={controlsDisabled} onClick={() => setIsEndSheetOpen(true)} size="sm" type="button" variant="ghost">End session</Button>
           </div>
         </>
       )}
@@ -154,8 +349,8 @@ export default function TogetherSessionScreen({ initialSession }: { initialSessi
             <DrawerTitle className="text-[1.35rem] font-extrabold tracking-[-.035em]">End this session?</DrawerTitle>
           </DrawerHeader>
           <DrawerFooter className="mt-3">
-            <Button disabled={pending !== null} onClick={() => void endSession()} size="lg" type="button">End session</Button>
-            <Button disabled={pending !== null} onClick={() => setIsEndSheetOpen(false)} size="lg" type="button" variant="secondary">Keep talking</Button>
+            <Button disabled={controlsDisabled} onClick={() => void endSession()} size="lg" type="button">End session</Button>
+            <Button disabled={controlsDisabled} onClick={() => setIsEndSheetOpen(false)} size="lg" type="button" variant="secondary">Keep talking</Button>
           </DrawerFooter>
         </DrawerContent>
       </Drawer>

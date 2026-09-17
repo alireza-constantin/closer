@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import dotenv from "dotenv";
@@ -13,6 +13,8 @@ const {
   createQuestionRevision,
   createPairForParticipant,
   endTogetherSession,
+  getTogetherQuestionPageForParticipant,
+  getTogetherSessionPlaybackForParticipant,
   getTogetherSessionForParticipant,
   listEligibleTogetherQuestions,
   issueOrReuseInitialInvite,
@@ -20,6 +22,7 @@ const {
   resolveOrCreateParticipant,
   setTogetherSessionLike,
   startTogetherSession,
+  withdrawQuestionRevision,
 } = await import("./closer");
 const { pair, pairMembership, pairMembershipEra, participant, togetherSession, togetherSessionQuestion, question, questionRevision, privateAnswer, privateRound } = await import("./schema/closer");
 const { user } = await import("./schema/auth");
@@ -475,5 +478,116 @@ describe("Closer Slice 02 Together sessions", () => {
     ]);
     expect(first).toEqual(retry);
     expect(await db.select().from(togetherSession).where(eq(togetherSession.pairId, pair.pair.id))).toHaveLength(1);
+  });
+
+  test("initial playback exposes at most twenty deterministic, non-consumed Questions per intensity band", async () => {
+    const pair = await createPair("partner");
+    const questionsByBand = {
+      light: await Promise.all(Array.from({ length: 21 }, () => createTogetherQuestion({ category: "deep", intensity: "light" }))),
+      medium: await Promise.all(Array.from({ length: 21 }, () => createTogetherQuestion({ category: "deep", intensity: "medium" }))),
+      deep: await Promise.all(Array.from({ length: 21 }, () => createTogetherQuestion({ category: "deep", intensity: "deep" }))),
+    };
+    const selectionSeed = "together-page-window";
+    const started = await startTogetherSession(db, { pairId: pair.pair.id, participantId: pair.creator.id, category: "deep", clientRequestId: randomUUID(), selectionSeed });
+    const playback = await getTogetherSessionPlaybackForParticipant(db, { pairId: pair.pair.id, participantId: pair.creator.id, sessionId: started.sessionId });
+
+    expect(playback.pages.light.items).toHaveLength(20);
+    expect(playback.pages.medium.items).toHaveLength(20);
+    expect(playback.pages.deep.items).toHaveLength(20);
+    expect(playback.pages.medium.hasMore).toBe(true);
+    expect(playback.pages.light.items.map((item) => item.questionId)).not.toContain(started.questionId);
+    expect(await db.select().from(togetherSessionQuestion).where(eq(togetherSessionQuestion.sessionId, started.sessionId))).toHaveLength(1);
+
+    const expectedMediumOrder = questionsByBand.medium
+      .map((created) => created.question.id)
+      .toSorted((left, right) => {
+        const leftRank = createHash("sha256").update(`closer:together:${selectionSeed}:${left}`).digest("hex");
+        const rightRank = createHash("sha256").update(`closer:together:${selectionSeed}:${right}`).digest("hex");
+        return leftRank.localeCompare(rightRank) || left.localeCompare(right);
+      });
+    expect(playback.pages.medium.items.map((item) => item.questionId)).toEqual(expectedMediumOrder.slice(0, 20));
+  });
+
+  test("a Together question cursor continues the same canonical band order without duplicate logical Questions", async () => {
+    const pair = await createPair("partner");
+    await Promise.all(Array.from({ length: 23 }, () => createTogetherQuestion({ category: "deep", intensity: "medium" })));
+    await Promise.all(Array.from({ length: 2 }, () => createTogetherQuestion({ category: "deep", intensity: "light" })));
+    const started = await startTogetherSession(db, { pairId: pair.pair.id, participantId: pair.creator.id, category: "deep", clientRequestId: randomUUID(), selectionSeed: "together-page-cursor" });
+    const firstPage = await getTogetherQuestionPageForParticipant(db, { pairId: pair.pair.id, participantId: pair.creator.id, sessionId: started.sessionId, band: "medium" });
+    const secondPage = await getTogetherQuestionPageForParticipant(db, { pairId: pair.pair.id, participantId: pair.creator.id, sessionId: started.sessionId, band: "medium", cursor: firstPage.nextCursor ?? undefined });
+
+    expect(firstPage.items).toHaveLength(20);
+    expect(firstPage.hasMore).toBe(true);
+    expect(secondPage.items.length).toBeGreaterThan(0);
+    expect(secondPage.hasMore).toBe(false);
+    expect(new Set([...firstPage.items, ...secondPage.items].map((item) => item.questionId)).size).toBe(firstPage.items.length + secondPage.items.length);
+    expect(await db.select().from(togetherSessionQuestion).where(eq(togetherSessionQuestion.sessionId, started.sessionId))).toHaveLength(1);
+  });
+
+  test("a client cannot force a non-canonical prefetched Question to become the next card", async () => {
+    const pair = await createPair("partner");
+    await Promise.all(Array.from({ length: 3 }, () => createTogetherQuestion({ category: "deep", intensity: "light" })));
+    const started = await startTogetherSession(db, { pairId: pair.pair.id, participantId: pair.creator.id, category: "deep", clientRequestId: randomUUID(), selectionSeed: "together-stale-client-next" });
+    const page = await getTogetherQuestionPageForParticipant(db, { pairId: pair.pair.id, participantId: pair.creator.id, sessionId: started.sessionId, band: "light" });
+    const invalidChoice = page.items[1]!;
+    const canonicalChoice = page.items[0]!;
+
+    expect(await captureError(advanceTogetherSession(db, {
+      pairId: pair.pair.id,
+      participantId: pair.creator.id,
+      sessionId: started.sessionId,
+      action: "next",
+      currentQuestionId: started.questionId,
+      nextQuestionId: invalidChoice.questionId,
+      nextQuestionRevisionId: invalidChoice.questionRevisionId,
+      clientRequestId: randomUUID(),
+    }))).toMatchObject({ code: "TOGETHER_ACTION_INVALID" });
+    expect((await getTogetherSessionForParticipant(db, { pairId: pair.pair.id, participantId: pair.creator.id, sessionId: started.sessionId })).question?.id).toBe(started.questionId);
+
+    const transition = await advanceTogetherSession(db, {
+      pairId: pair.pair.id,
+      participantId: pair.creator.id,
+      sessionId: started.sessionId,
+      action: "next",
+      currentQuestionId: started.questionId,
+      nextQuestionId: canonicalChoice.questionId,
+      nextQuestionRevisionId: canonicalChoice.questionRevisionId,
+      clientRequestId: randomUUID(),
+    });
+    expect(transition).toMatchObject({ kind: "QUESTION", questionId: canonicalChoice.questionId });
+  });
+
+  test("a withdrawn prefetched revision cannot become a newly shown Together occurrence", async () => {
+    const pair = await createPair("partner");
+    await Promise.all(Array.from({ length: 3 }, () => createTogetherQuestion({ category: "deep", intensity: "light" })));
+    const started = await startTogetherSession(db, { pairId: pair.pair.id, participantId: pair.creator.id, category: "deep", clientRequestId: randomUUID(), selectionSeed: "together-withdrawn-prefetch" });
+    const page = await getTogetherQuestionPageForParticipant(db, { pairId: pair.pair.id, participantId: pair.creator.id, sessionId: started.sessionId, band: "light" });
+    const withdrawn = page.items[0]!;
+    await withdrawQuestionRevision(db, withdrawn.questionRevisionId);
+
+    expect(await captureError(advanceTogetherSession(db, {
+      pairId: pair.pair.id,
+      participantId: pair.creator.id,
+      sessionId: started.sessionId,
+      action: "next",
+      currentQuestionId: started.questionId,
+      nextQuestionId: withdrawn.questionId,
+      nextQuestionRevisionId: withdrawn.questionRevisionId,
+      clientRequestId: randomUUID(),
+    }))).toMatchObject({ code: "TOGETHER_ACTION_INVALID" });
+    expect((await getTogetherSessionForParticipant(db, { pairId: pair.pair.id, participantId: pair.creator.id, sessionId: started.sessionId })).question?.id).toBe(started.questionId);
+  });
+
+  test("question pages reject an ended Together Session", async () => {
+    const pair = await createPair("partner");
+    const started = await startTogetherSession(db, { pairId: pair.pair.id, participantId: pair.creator.id, category: "deep", clientRequestId: randomUUID() });
+    await endTogetherSession(db, { pairId: pair.pair.id, participantId: pair.creator.id, sessionId: started.sessionId });
+
+    expect(await captureError(getTogetherQuestionPageForParticipant(db, {
+      pairId: pair.pair.id,
+      participantId: pair.creator.id,
+      sessionId: started.sessionId,
+      band: "light",
+    }))).toMatchObject({ code: "TOGETHER_SESSION_ENDED" });
   });
 });

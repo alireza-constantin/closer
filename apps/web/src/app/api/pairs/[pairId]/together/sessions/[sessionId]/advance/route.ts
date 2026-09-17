@@ -1,4 +1,4 @@
-import { advanceTogetherSession, db, getTogetherSessionForParticipant } from "@Closer/auth/closer";
+import { advanceTogetherSession, db } from "@Closer/auth/closer";
 
 import {
   togetherDomainErrorResponse,
@@ -16,15 +16,32 @@ export async function POST(request: Request, context: { params: Promise<{ pairId
   const action = "action" in body ? body.action : null;
   const clientRequestId = "clientRequestId" in body ? body.clientRequestId : undefined;
   const currentQuestionId = "currentQuestionId" in body ? body.currentQuestionId : undefined;
-  if ((action !== "next" && action !== "skip") || (clientRequestId !== undefined && typeof clientRequestId !== "string") || (currentQuestionId !== undefined && typeof currentQuestionId !== "string")) {
+  const nextQuestionId = "nextQuestionId" in body ? body.nextQuestionId : undefined;
+  const nextQuestionRevisionId = "nextQuestionRevisionId" in body ? body.nextQuestionRevisionId : undefined;
+  if (
+    (action !== "next" && action !== "skip")
+    || (clientRequestId !== undefined && typeof clientRequestId !== "string")
+    || (currentQuestionId !== undefined && typeof currentQuestionId !== "string")
+    || (nextQuestionId !== undefined && typeof nextQuestionId !== "string")
+    || (nextQuestionRevisionId !== undefined && typeof nextQuestionRevisionId !== "string")
+  ) {
     return Response.json({ error: "Invalid request." }, { status: 400, headers: togetherNoStoreHeaders });
   }
 
   const { pairId, sessionId } = await context.params;
   try {
-    await advanceTogetherSession(db, { participantId: participant.id, pairId, sessionId, action, clientRequestId, currentQuestionId });
+    const transition = await advanceTogetherSession(db, {
+      participantId: participant.id,
+      pairId,
+      sessionId,
+      action,
+      clientRequestId,
+      currentQuestionId,
+      nextQuestionId,
+      nextQuestionRevisionId,
+    });
     return Response.json(
-      await getTogetherSessionForParticipant(db, { participantId: participant.id, pairId, sessionId }),
+      transition,
       { headers: togetherNoStoreHeaders },
     );
   } catch (error) {

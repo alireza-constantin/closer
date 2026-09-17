@@ -2,6 +2,7 @@
 // named by CLOSER_PERF_DATABASE_URL and creates a temporary local fixture.
 import { createHash, randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { gzipSync } from "node:zlib";
 
 import { auth } from "../../packages/auth/src/index.ts";
 import {
@@ -16,6 +17,8 @@ import {
   getPrivateRoundForParticipant,
   getRejoinInviteLanding,
   getTogetherSessionForParticipant,
+  getTogetherSessionPlaybackForParticipant,
+  getTogetherQuestionPageForParticipant,
   listActivePairsForParticipant,
   listActivePrivateConversations,
   markPrivateRevealViewed,
@@ -69,38 +72,14 @@ type Fixture = {
   rejoinInviteToken: string;
 };
 
-type QueryStat = {
-  query: string;
-  calls: number;
-  total_exec_time: number;
-  rows: number;
-};
-
-function rowsFrom(result: unknown): QueryStat[] {
-  if (Array.isArray(result)) return result as QueryStat[];
-  const rows = (result as { rows?: unknown[] })?.rows;
-  return Array.isArray(rows) ? rows as QueryStat[] : [];
-}
-
-async function resetStats() {
-  await database.execute(sql`select pg_stat_statements_reset()`);
-}
-
-async function readStats() {
-  const result = await database.execute(sql`
-    select query, calls, total_exec_time, rows
-    from pg_stat_statements
-    where dbid = (select oid from pg_database where datname = current_database())
-      and query not like '%pg_stat_statements%'
-    order by total_exec_time desc
-    limit 12
-  `);
-  return rowsFrom(result);
-}
-
 function median(values: number[]) {
   const ordered = [...values].sort((a, b) => a - b);
   return ordered[Math.floor(ordered.length / 2)] ?? 0;
+}
+
+function serializedPayloadSize(value: unknown) {
+  const body = Buffer.from(JSON.stringify(value));
+  return { jsonBytes: body.byteLength, gzipBytes: gzipSync(body).byteLength };
 }
 
 async function measure(
@@ -109,30 +88,33 @@ async function measure(
   count = repeats,
 ) {
   const durations: number[] = [];
-  let lastStats: QueryStat[] = [];
+  const queryCounts: number[] = [];
   for (let index = 0; index < count; index += 1) {
-    await resetStats();
-    const started = performance.now();
-    await operation();
-    durations.push(performance.now() - started);
-    lastStats = await readStats();
+    const client = database.$client as unknown as {
+      query: (...arguments_: unknown[]) => Promise<unknown>;
+    };
+    const originalQuery = client.query.bind(database.$client);
+    let queryCount = 0;
+    client.query = (...arguments_) => {
+      queryCount += 1;
+      return originalQuery(...arguments_);
+    };
+    try {
+      const started = performance.now();
+      await operation();
+      durations.push(performance.now() - started);
+      queryCounts.push(queryCount);
+    } finally {
+      client.query = originalQuery;
+    }
   }
-  const queryCount = lastStats.reduce((sum, row) => sum + Number(row.calls), 0);
-  const dbTimeMs = lastStats.reduce((sum, row) => sum + Number(row.total_exec_time), 0);
   return {
     name,
     repeats: count,
     medianMs: Number(median(durations).toFixed(2)),
     minMs: Number(Math.min(...durations).toFixed(2)),
     maxMs: Number(Math.max(...durations).toFixed(2)),
-    queryCount,
-    dbTimeMs: Number(dbTimeMs.toFixed(2)),
-    slowestQueries: lastStats.slice(0, 5).map((row) => ({
-      ms: Number(Number(row.total_exec_time).toFixed(3)),
-      calls: Number(row.calls),
-      rows: Number(row.rows),
-      sql: row.query.replace(/\s+/g, " ").trim(),
-    })),
+    queryCount: median(queryCounts),
   };
 }
 
@@ -429,6 +411,12 @@ async function run() {
   results.push(await measure("together.session.load", async () => {
     await getTogetherSessionForParticipant(database, { participantId: f.participantId, pairId: f.pairId, sessionId: f.togetherSessionId });
   }));
+  results.push(await measure("together.playback.initial", async () => {
+    await getTogetherSessionPlaybackForParticipant(database, { participantId: f.participantId, pairId: f.pairId, sessionId: f.togetherSessionId });
+  }));
+  results.push(await measure("together.question-page.light", async () => {
+    await getTogetherQuestionPageForParticipant(database, { participantId: f.participantId, pairId: f.pairId, sessionId: f.togetherSessionId, band: "light" });
+  }));
   results.push(await measure("private.conversation.load", async () => {
     await getPrivateConversationForParticipant(database, { participantId: f.participantId, pairId: f.pairId, conversationId: f.privateConversationId });
   }));
@@ -448,16 +436,22 @@ async function run() {
     await getRejoinInviteLanding(database, f.rejoinInviteToken);
   }));
 
-  results.push(await measure("together.next.mutation+projection", async () => {
+  const legacyTogetherProjection = await getTogetherSessionForParticipant(database, { participantId: f.participantId, pairId: f.pairId, sessionId: f.togetherSessionId });
+  const initialTogetherPlayback = await getTogetherSessionPlaybackForParticipant(database, { participantId: f.participantId, pairId: f.pairId, sessionId: f.togetherSessionId });
+  const nextTogetherPage = await getTogetherQuestionPageForParticipant(database, { participantId: f.participantId, pairId: f.pairId, sessionId: f.togetherSessionId, band: "light" });
+  const nextTogetherQuestion = nextTogetherPage.items[0];
+  if (!nextTogetherQuestion) throw new Error("performance fixture did not produce a next Together Question");
+  results.push(await measure("together.next.mutation", async () => {
     await advanceTogetherSession(database, {
       participantId: f.participantId,
       pairId: f.pairId,
       sessionId: f.togetherSessionId,
       action: "next",
       currentQuestionId: f.togetherQuestionId,
+      nextQuestionId: nextTogetherQuestion.questionId,
+      nextQuestionRevisionId: nextTogetherQuestion.questionRevisionId,
       clientRequestId: randomUUID(),
     });
-    await getTogetherSessionForParticipant(database, { participantId: f.participantId, pairId: f.pairId, sessionId: f.togetherSessionId });
   }, 1));
 
   // Mutations are measured once against isolated fixture rows because they advance lifecycle state.
@@ -471,7 +465,15 @@ async function run() {
     await askPrivateQuestionCandidate(database, { participantId: f.participantId, pairId: f.pairId, conversationId: f.privateConversationId, candidateId: f.candidateId, clientRequestId: randomUUID() });
   }, 1));
 
-  console.log(JSON.stringify({ fixture: { pairId: f.pairId, participantId: f.participantId }, results }, null, 2));
+  console.log(JSON.stringify({
+    fixture: { pairId: f.pairId, participantId: f.participantId },
+    togetherPayloads: {
+      legacyInitialProjection: serializedPayloadSize(legacyTogetherProjection),
+      initialPlaybackProjection: serializedPayloadSize(initialTogetherPlayback),
+      subsequentQuestionPage: serializedPayloadSize(nextTogetherPage),
+    },
+    results,
+  }, null, 2));
   process.exit(0);
 }
 
