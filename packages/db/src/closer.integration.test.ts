@@ -536,9 +536,9 @@ describe("Closer Slice 01A", () => {
     expect(await captureError(getPairForParticipant(db, unrelated.id, created.pair.id))).toBeInstanceOf(CloserDomainError);
   });
 
-  test("returns an authorized minimal status that changes when the second slot is occupied", async () => {
+  test("returns an authorized minimal status with the claimant's actual name after the second slot is occupied", async () => {
     const created = await createPair();
-    const invitee = await createParticipant("Invitee");
+    const invitee = await createParticipant("Fafa");
 
     expect(await getPairStatusForParticipant(db, created.creator.id, created.pair.id)).toEqual({ state: "waiting" });
 
@@ -546,12 +546,16 @@ describe("Closer Slice 01A", () => {
 
     expect(await getPairStatusForParticipant(db, created.creator.id, created.pair.id)).toEqual({
       state: "connected",
-      otherParticipantDisplayName: "Invitee",
+      otherParticipantDisplayName: "Fafa",
     });
     expect(await getPairStatusForParticipant(db, invitee.id, created.pair.id)).toEqual({
       state: "connected",
       otherParticipantDisplayName: "Creator",
     });
+    // The status projection is deliberately no more than current claim state
+    // and the current participant presentation. It cannot retain the intended
+    // label or disclose Private, Together, invite, or history data.
+    expect((await getPairForParticipant(db, created.creator.id, created.pair.id)).pair.intendedPersonName).toBeNull();
   });
 
   test("does not disclose pair status to an unrelated participant", async () => {

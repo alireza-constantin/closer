@@ -5,19 +5,9 @@ import type { ReactNode } from "react";
 import { useState } from "react";
 
 import { useVisiblePolling } from "@/hooks/use-visible-polling";
+import { isConnectedPairStatus } from "@/lib/pair-status";
 
 const PAIR_STATUS_POLL_INTERVAL_MS = 5_000;
-
-function isConnectedPairStatus(value: unknown): value is { state: "connected"; otherParticipantDisplayName: string } {
-  return (
-    !!value
-    && typeof value === "object"
-    && "state" in value
-    && value.state === "connected"
-    && "otherParticipantDisplayName" in value
-    && typeof value.otherParticipantDisplayName === "string"
-  );
-}
 
 export default function ConnectPerson({ children, pairId }: { children: ReactNode; pairId: string }) {
   const router = useRouter();

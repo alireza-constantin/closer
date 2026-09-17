@@ -19,10 +19,12 @@ import { CloserModeCard } from "@/components/closer/navigation";
 import { CloserPageTitle, CloserSubtitle } from "@/components/closer/typography";
 import { PairTerminationControl } from "@/components/pair-termination-control";
 import { useVisiblePolling } from "@/hooks/use-visible-polling";
+import { isConnectedPairStatus } from "@/lib/pair-status";
 import { togetherPickerPath, type PairRelationshipType } from "@/lib/together-picker-path";
 import { intendedPersonNameSchema, type IntendedPersonNameValues } from "@/lib/validation";
 
 export const ACTIVE_CONVERSATIONS_POLL_INTERVAL_MS = 3_500;
+export const PAIR_HOME_CLAIM_STATUS_POLL_INTERVAL_MS = 4_000;
 
 type ActiveConversation = {
   id: string;
@@ -203,7 +205,27 @@ export default function PairHome({
   activeConversations: ActiveConversation[];
 }) {
   const [activeConversations, setActiveConversations] = useState(initialActiveConversations);
+  const [claimedParticipantDisplayName, setClaimedParticipantDisplayName] = useState<string | null>(isComplete ? memberNames[1] : null);
+  const isCurrentlyComplete = claimedParticipantDisplayName !== null;
   const hasWaitingConversation = activeConversations.some((conversation) => ["WAITING", "WAITING_FOR_REVEAL", "WAITING_FOR_CREATOR"].includes(conversation.state));
+
+  // This is deliberately a separate, tiny projection: a remote initial claim
+  // must update this home without re-reading Private, Together, or history data.
+  useVisiblePolling({
+    enabled: !isCurrentlyComplete,
+    forceOnForeground: true,
+    intervalMs: PAIR_HOME_CLAIM_STATUS_POLL_INTERVAL_MS,
+    onPoll: async (signal) => {
+      try {
+        const response = await fetch(`/api/pairs/${encodeURIComponent(pairId)}/status`, { cache: "no-store", signal });
+        if (!response.ok) return;
+        const status: unknown = await response.json();
+        if (isConnectedPairStatus(status)) setClaimedParticipantDisplayName(status.otherParticipantDisplayName);
+      } catch {
+        // A transient foreground refresh must not discard the current Pair Home.
+      }
+    },
+  });
 
   useVisiblePolling({
     enabled: hasWaitingConversation,
@@ -227,15 +249,15 @@ export default function PairHome({
       />
       <section className="pb-7 pt-8 text-center">
         <CloserCompanions />
-        <CloserPageTitle>{isComplete ? `${memberNames[0]} + ${memberNames[1] ?? "your person"}` : `${memberNames[0]} + your person`}</CloserPageTitle>
+        <CloserPageTitle>{isCurrentlyComplete ? `${memberNames[0]} + ${claimedParticipantDisplayName}` : `${memberNames[0]} + your person`}</CloserPageTitle>
         <CloserSubtitle>What do you feel like doing?</CloserSubtitle>
       </section>
       <section className="grid gap-3" aria-label="Choose a way to connect">
         <CloserModeCard href={togetherPickerPath(pairId, relationshipType)} kind="together" icon={<MessageCircleMore aria-hidden="true" />} prefetch title="Talk Together" description="Use this phone and talk face-to-face" />
-        <CloserModeCard href={isComplete ? `/pair/${pairId}/private` : `/pair/${pairId}/invite?reason=private`} kind="private" icon={<LockKeyhole aria-hidden="true" />} title="Answer Privately" description={isComplete ? "Answer separately, reveal together" : "Invite them to answer separately"} />
+        <CloserModeCard href={isCurrentlyComplete ? `/pair/${pairId}/private` : `/pair/${pairId}/invite?reason=private`} kind="private" icon={<LockKeyhole aria-hidden="true" />} title="Answer Privately" description={isCurrentlyComplete ? "Answer separately, reveal together" : "Invite them to answer separately"} />
       </section>
-      {!isComplete ? <UnclaimedPersonName initialName={intendedPersonName} pairId={pairId} /> : null}
-      {!isComplete ? <Link className="mx-auto mt-5 block w-fit text-xs text-closer-muted underline-offset-4 hover:text-closer-navy hover:underline" href={`/pair/${pairId}/invite` as never} prefetch>Invite them to Closer</Link> : null}
+      {!isCurrentlyComplete ? <UnclaimedPersonName initialName={intendedPersonName} pairId={pairId} /> : null}
+      {!isCurrentlyComplete ? <Link className="mx-auto mt-5 block w-fit text-xs text-closer-muted underline-offset-4 hover:text-closer-navy hover:underline" href={`/pair/${pairId}/invite` as never} prefetch>Invite them to Closer</Link> : null}
       {activeConversations.length > 0 ? (
         <section className="mt-8" aria-labelledby="private-conversations-heading">
           <h2 className="mb-3 text-[1.15rem] font-extrabold tracking-[-.025em]" id="private-conversations-heading">Your conversations</h2>
@@ -253,8 +275,8 @@ export default function PairHome({
         </Empty>
       )}
       <Link className="mx-auto mt-6 block w-fit text-xs font-bold text-closer-muted underline-offset-4 hover:text-closer-navy hover:underline" href={`/pair/${pairId}/history` as never} prefetch>Look back</Link>
-      {isComplete ? <Link className="mx-auto mt-6 block w-fit text-xs text-closer-muted underline-offset-4 hover:text-closer-navy hover:underline" href={`/pair/${pairId}/rejoin` as never} prefetch>Need to reconnect your person?</Link> : null}
-      <PairTerminationControl isComplete={isComplete} pairId={pairId} />
+      {isCurrentlyComplete ? <Link className="mx-auto mt-6 block w-fit text-xs text-closer-muted underline-offset-4 hover:text-closer-navy hover:underline" href={`/pair/${pairId}/rejoin` as never} prefetch>Need to reconnect your person?</Link> : null}
+      <PairTerminationControl isComplete={isCurrentlyComplete} pairId={pairId} />
     </CloserPageShell>
   );
 }

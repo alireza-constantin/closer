@@ -16,7 +16,9 @@ async function AuthorizedInviteControls({ issueOnEntry, pairId }: { issueOnEntry
 
   try {
     const pairView = await getPairForParticipant(db, currentParticipant.id, pairId);
-    if (pairView.members.length === 2) redirect(`/pair/${pairId}`);
+    // A stale unclaimed URL remains legitimate for an active member after a
+    // remote claim. Preserve its intent without issuing or rotating an invite.
+    if (pairView.members.length === 2) redirect(issueOnEntry ? `/pair/${pairId}/private` : `/pair/${pairId}`);
     return <InviteControls autoGenerate={issueOnEntry} kind="initial" pairId={pairId} />;
   } catch (error) {
     unstable_rethrow(error);
