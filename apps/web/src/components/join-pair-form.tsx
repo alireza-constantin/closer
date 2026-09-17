@@ -77,7 +77,7 @@ export default function JoinPairForm({
       {kind === "initial" && claimantDisplayName ? <p className="mt-5 text-sm text-closer-muted">You’ll join as <strong className="text-closer-navy">{claimantDisplayName}</strong>.</p> : null}
       {unavailable ? <FormServerError>{unavailableMessage}</FormServerError> : null}
       {kind === "rejoin" ? <FieldGroup className="mt-6"><DisplayNameField error={nameError} errorId="join-display-name-error" registration={form.register("displayName")} /></FieldGroup> : null}
-      {kind === "initial" && !claimantDisplayName ? <Link className="mt-6 inline-flex text-sm font-bold text-closer-indigo underline underline-offset-4" href={`/onboarding?next=${encodeURIComponent(`/join/${token}`)}`}>Choose your name before joining</Link> : null}
+      {kind === "initial" && !claimantDisplayName ? <Link className="mt-6 inline-flex text-sm font-bold text-closer-indigo underline underline-offset-4" href={`/onboarding?next=${encodeURIComponent(`/join/${token}`)}`} prefetch>Choose your name before joining</Link> : null}
       {form.formState.errors.root?.server?.message ? <FormServerError>{form.formState.errors.root.server.message}</FormServerError> : null}
       <AsyncButton className="mt-5 w-full" disabled={unavailable || (kind === "initial" && !claimantDisplayName)} pending={form.formState.isSubmitting} pendingText="Joining…" size="lg" type="submit">{kind === "rejoin" ? "Reconnect" : "Join space"}</AsyncButton>
     </OnboardingSurface>

@@ -84,6 +84,19 @@ If you want to add app-specific blocks instead of shared primitives, run the sha
   Vercel Services share project environment variables, but deploys do not upload local `.env` files automatically. Link the project with `vercel link`, then run the env sync command before your first deploy (otherwise the deployment starts with no env vars), or pass one-off envs with `vercel deploy -e KEY=value`.
   Pass Vercel CLI flags to the env sync command directly, for example: `bun run env:production --scope your-team`.
 
+### Preview runtime checklist
+
+Before creating a Preview deployment, configure these Vercel Preview environment variables with deployment-safe values:
+
+- `DATABASE_URL`: a reachable PostgreSQL connection string for the intended Preview database; never a localhost, loopback, or file URL.
+- `BETTER_AUTH_SECRET`: at least 32 characters, scoped consistently with the Preview environment.
+
+`BETTER_AUTH_URL` is intentionally not synchronized by `bun run env:preview`. On Vercel, Closer derives it from that deployment's `VERCEL_URL`, then uses that exact HTTPS origin for Better Auth's base URL and trusted-origin list. This supports each Preview URL without allowing arbitrary origins. For local development, keep `BETTER_AUTH_URL` set to the local app origin.
+
+The current Vercel build applies Drizzle migrations automatically only for Production. Before a Preview needs a newly committed schema migration, apply `bun run db:migrate` once against its intended Preview database from a trusted environment. The PostgreSQL role must be allowed to create the `pgcrypto` extension because migration `0015_together_question_page_hashing.sql` uses `CREATE EXTENSION IF NOT EXISTS pgcrypto`.
+
+The `env:preview` helper warns if a local `.env` value looks like localhost. Treat that as a stop signal: configure the Preview value in Vercel (or use a deployment-safe env file) before deploying.
+
 For more details, see the guide on [Deploying to Vercel](https://www.better-t-stack.dev/docs/guides/vercel).
 
 ## Project Structure

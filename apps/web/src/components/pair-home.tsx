@@ -99,7 +99,7 @@ function ConversationCard({ pairId, conversation }: { pairId: string; conversati
     ? `/pair/${pairId}/private/round/${conversation.currentRound.id}`
     : `/pair/${pairId}/private/conversation/${conversation.id}`;
   return (
-    <Link className="group grid grid-cols-[12px_1fr_auto] items-center gap-2.5 rounded-[1.05rem] bg-white/85 px-3 py-3 text-closer-navy no-underline shadow-closer-soft transition-transform duration-200 hover:translate-x-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-closer-navy focus-visible:ring-offset-2 focus-visible:ring-offset-closer-cream" href={href as never}>
+    <Link className="group grid grid-cols-[12px_1fr_auto] items-center gap-2.5 rounded-[1.05rem] bg-white/85 px-3 py-3 text-closer-navy no-underline shadow-closer-soft transition-transform duration-200 hover:translate-x-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-closer-navy focus-visible:ring-offset-2 focus-visible:ring-offset-closer-cream" href={href as never} prefetch>
       <span aria-hidden="true" className={cn("size-2.5 rounded-full", stateDotClasses[conversation.state])} />
       <span className="min-w-0">
         <strong className="block text-sm font-extrabold">{categoryTitle(conversation.category)}</strong>
@@ -222,7 +222,7 @@ export default function PairHome({
   return (
     <CloserPageShell>
       <CloserTopbar
-        action={hasMultipleSpaces ? <Link className="text-sm font-extrabold text-closer-muted underline-offset-4 hover:text-closer-navy hover:underline" href="/">Your spaces</Link> : undefined}
+        action={hasMultipleSpaces ? <Link className="text-sm font-extrabold text-closer-muted underline-offset-4 hover:text-closer-navy hover:underline" href="/" prefetch>Your spaces</Link> : undefined}
         href={`/pair/${pairId}`}
       />
       <section className="pb-7 pt-8 text-center">
@@ -235,7 +235,7 @@ export default function PairHome({
         <CloserModeCard href={`/pair/${pairId}/private`} kind="private" icon={<LockKeyhole aria-hidden="true" />} title="Answer Privately" description={isComplete ? "Answer separately, reveal together" : "Invite them to answer separately"} />
       </section>
       {!isComplete ? <UnclaimedPersonName initialName={intendedPersonName} pairId={pairId} /> : null}
-      {!isComplete ? <Link className="mx-auto mt-5 block w-fit text-xs text-closer-muted underline-offset-4 hover:text-closer-navy hover:underline" href={`/pair/${pairId}/invite` as never}>Invite them to Closer</Link> : null}
+      {!isComplete ? <Link className="mx-auto mt-5 block w-fit text-xs text-closer-muted underline-offset-4 hover:text-closer-navy hover:underline" href={`/pair/${pairId}/invite` as never} prefetch>Invite them to Closer</Link> : null}
       {activeConversations.length > 0 ? (
         <section className="mt-8" aria-labelledby="private-conversations-heading">
           <h2 className="mb-3 text-[1.15rem] font-extrabold tracking-[-.025em]" id="private-conversations-heading">Your conversations</h2>
@@ -252,8 +252,8 @@ export default function PairHome({
           </EmptyHeader>
         </Empty>
       )}
-      <Link className="mx-auto mt-6 block w-fit text-xs font-bold text-closer-muted underline-offset-4 hover:text-closer-navy hover:underline" href={`/pair/${pairId}/history` as never}>Look back</Link>
-      {isComplete ? <Link className="mx-auto mt-6 block w-fit text-xs text-closer-muted underline-offset-4 hover:text-closer-navy hover:underline" href={`/pair/${pairId}/rejoin` as never}>Need to reconnect your person?</Link> : null}
+      <Link className="mx-auto mt-6 block w-fit text-xs font-bold text-closer-muted underline-offset-4 hover:text-closer-navy hover:underline" href={`/pair/${pairId}/history` as never} prefetch>Look back</Link>
+      {isComplete ? <Link className="mx-auto mt-6 block w-fit text-xs text-closer-muted underline-offset-4 hover:text-closer-navy hover:underline" href={`/pair/${pairId}/rejoin` as never} prefetch>Need to reconnect your person?</Link> : null}
       <PairTerminationControl isComplete={isComplete} pairId={pairId} />
     </CloserPageShell>
   );

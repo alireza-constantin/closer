@@ -13,7 +13,7 @@ function BackLinkStatus({ label }: { label: string }) {
   return (
     <>
       <ArrowLeft aria-hidden="true" className={pending ? "animate-pulse" : undefined} data-icon="inline-start" />
-      <span className={label === "Back" || pending ? undefined : "sr-only"}>{pending ? "Opening…" : label}</span>
+      <span className={label === "Back" ? undefined : "sr-only"}>{label}</span>
     </>
   );
 }
@@ -22,8 +22,9 @@ export function CloserBackLink({ href, label = "Back" }: { href: string; label?:
   return (
     <Link
       aria-label={label === "Back" ? undefined : label}
-      className={cn(buttonVariants({ size: "sm", variant: "ghost" }), "w-fit px-2")}
+      className={cn(buttonVariants({ size: "sm", variant: "ghost" }), "min-h-10 w-fit rounded-full bg-white/70 px-3 shadow-[0_4px_12px_rgba(27,33,78,0.07)] transition-[transform,background-color,opacity] duration-150 hover:-translate-x-0.5 hover:bg-white active:translate-y-px")}
       href={href as never}
+      prefetch
     >
       <BackLinkStatus label={label} />
     </Link>
@@ -37,7 +38,7 @@ export function CloserModeCard({
   title,
   description,
   className,
-  prefetch,
+  prefetch = true,
 }: {
   href: string;
   kind: "together" | "private";

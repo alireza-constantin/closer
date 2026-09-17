@@ -1,9 +1,9 @@
-import Link from "next/link";
 import type { ComponentProps } from "react";
 
 import type { getFormerEraHistoryForParticipant } from "@Closer/auth/closer";
 
 import { CategoryBadge, type CloserCategory } from "@/components/closer/category";
+import { CloserBackLink } from "@/components/closer/navigation";
 import { CloserPageShell, CloserTopbar } from "@/components/closer/page-shell";
 
 type HistoryView = Awaited<ReturnType<typeof getFormerEraHistoryForParticipant>>;
@@ -86,7 +86,7 @@ export function HistoryScreen({ history, pairId }: { history: HistoryView; pairI
     || history.preClaimTogetherSessions.length > 0;
   return (
     <CloserPageShell>
-      <CloserTopbar action={history.formerPair.terminatedAt ? undefined : <Link className="text-sm font-extrabold text-closer-muted underline-offset-4 hover:text-closer-navy hover:underline" href={`/pair/${pairId}` as never}>Back to space</Link>} href={history.formerPair.terminatedAt ? "/" : `/pair/${pairId}`} />
+      <CloserTopbar action={history.formerPair.terminatedAt ? undefined : <CloserBackLink href={`/pair/${pairId}`} label="Back to space" />} href={history.formerPair.terminatedAt ? "/" : `/pair/${pairId}`} />
       <section className="pb-7 pt-8">
         <p className="text-sm font-extrabold uppercase tracking-[.16em] text-closer-coral">{history.formerPair.terminatedAt ? "Former space" : "Look back"}</p>
         <h1 className="mt-3 max-w-[12ch] text-balance text-[2.35rem] font-extrabold leading-tight tracking-[-.055em]">Shared moments, saved here.</h1>

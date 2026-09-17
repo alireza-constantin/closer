@@ -23,7 +23,7 @@ export default function UserMenu() {
   }
 
   if (!session) {
-    return <Button render={<Link href="/login" />} variant="outline">Sign In</Button>;
+    return <Button render={<Link href="/login" prefetch />} variant="outline">Sign In</Button>;
   }
 
   return (

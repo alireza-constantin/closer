@@ -41,7 +41,8 @@ describe("App Router navigation feedback", () => {
     expect(friendLoadingSource).toContain("return null;");
     expect(modeCardSource).toContain("prefetch={prefetch}");
     expect(pairHomeSource).toContain("prefetch title=\"Talk Together\"");
-    expect(createPairSource).toContain("prefetch title=\"Together\"");
+    expect(createPairSource).toContain("prefetch");
+    expect(createPairSource).toContain('title="Together"');
     expect(frameSource).toContain("CloserWordmark");
     expect(frameSource).toContain('<ModeBadge mode="together" />');
     expect(frameSource).toContain("CloserPageTitle");
@@ -67,11 +68,54 @@ describe("App Router navigation feedback", () => {
     "components/private-picker.tsx",
     "components/private-conversation-screen.tsx",
     "components/private-round-screen.tsx",
+    "components/history-screen.tsx",
     "components/together-session-screen.tsx",
   ])("uses the shared Next Link-backed back control in %s", async (componentFile) => {
     const source = await Bun.file(join(appDirectory, "..", componentFile)).text();
 
     expect(source).toContain("CloserBackLink");
     expect(source).not.toContain("CloserBackButton");
+  });
+
+  test("makes the shared Back control a deterministic, prefetched product route", async () => {
+    const source = await Bun.file(join(appDirectory, "..", "components/closer/navigation.tsx")).text();
+
+    expect(source).toContain("prefetch");
+    expect(source).toContain("useLinkStatus");
+    expect(source).not.toContain("router.back");
+  });
+
+  test.each([
+    "components/zero-space-home.tsx",
+    "components/your-spaces.tsx",
+    "components/pair-home.tsx",
+    "components/private-conversation-screen.tsx",
+    "components/private-round-screen.tsx",
+    "components/create-pair-form.tsx",
+    "components/join-pair-form.tsx",
+    "components/closer/page-shell.tsx",
+  ])("explicitly prefetches known internal destinations in %s", async (componentFile) => {
+    const source = await Bun.file(join(appDirectory, "..", componentFile)).text();
+
+    expect(source).toContain("prefetch");
+  });
+
+  test("has no browser-history or full-page internal navigation in product code", async () => {
+    const componentFiles = [
+      "components/connect-person.tsx",
+      "components/private-picker.tsx",
+      "components/private-conversation-screen.tsx",
+      "components/private-round-screen.tsx",
+      "components/together-picker.tsx",
+      "components/together-session-screen.tsx",
+      "components/pair-termination-control.tsx",
+    ];
+
+    for (const componentFile of componentFiles) {
+      const source = await Bun.file(join(appDirectory, "..", componentFile)).text();
+      expect(source).not.toContain("router.back(");
+      expect(source).not.toContain("window.location.href");
+      expect(source).not.toContain("location.href");
+    }
   });
 });

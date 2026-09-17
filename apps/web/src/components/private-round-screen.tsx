@@ -52,6 +52,8 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
   const [round, setRound] = useState(initialRound);
   const [isPassing, setIsPassing] = useState(false);
   const [isRevealing, setIsRevealing] = useState(false);
+  const [isRemovingReply, setIsRemovingReply] = useState(false);
+  const [optimisticReaction, setOptimisticReaction] = useState<ReactionValue | null | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const answerForm = useForm<PrivateAnswerValues>({
     defaultValues: { body: initialRound.yourAnswer ?? "" },
@@ -64,6 +66,16 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
     resolver: zodResolver(privateReplySchema),
   });
   const baseUrl = `/api/pairs/${encodeURIComponent(round.pairId)}/private-rounds/${encodeURIComponent(round.id)}`;
+
+  async function reconcileRound(fallback: RoundView) {
+    try {
+      const response = await fetch(baseUrl, { cache: "no-store" });
+      const next = response.ok ? parseRound(await response.json()) : null;
+      setRound(next ?? fallback);
+    } catch {
+      setRound(fallback);
+    }
+  }
 
   useVisiblePolling({
     enabled: round.state === "WAITING",
@@ -96,12 +108,17 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
   async function submitAnswer(values: PrivateAnswerValues) {
     setError(null);
     answerForm.clearErrors("root.server");
+    const previousRound = round;
+    // Waiting is safe to show before the server responds: it contains only the
+    // answer this participant just entered and no state about the other answer.
+    setRound({ ...round, state: "WAITING", yourAnswer: values.body });
     try {
       const response = await fetch(`${baseUrl}/answer`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ body: values.body }) });
       const next = parseRound(await response.json());
       if (!response.ok || !next) throw new Error();
       setRound(next);
     } catch {
+      await reconcileRound(previousRound);
       answerForm.setError("root.server", { message: "Your answer needs 1–2,000 characters. Nothing was saved—please try again." });
     }
   }
@@ -123,13 +140,16 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
 
   async function passQuestion() {
     setError(null);
+    const previousRound = round;
     setIsPassing(true);
+    setRound({ ...round, state: "DECLINED" });
     try {
       const response = await fetch(`${baseUrl}/decline`, { method: "POST" });
       const next = parseRound(await response.json());
       if (!response.ok || !next) throw new Error();
       setRound(next);
     } catch {
+      await reconcileRound(previousRound);
       setError("We couldn’t pass this question. Please try again.");
     } finally {
       setIsPassing(false);
@@ -139,13 +159,18 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
   async function updateReaction(value: ReactionValue) {
     setError(null);
     const selected = round.reactions?.find((item) => item.participantId !== round.otherParticipant.id)?.value;
+    const nextReaction = selected === value ? null : value;
+    setOptimisticReaction(nextReaction);
     try {
       const response = await fetch(`${baseUrl}/reaction`, selected === value ? { method: "DELETE" } : { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ value }) });
       const next = parseRound(await response.json());
       if (!response.ok || !next) throw new Error();
       setRound(next);
     } catch {
+      setOptimisticReaction(undefined);
       setError("We couldn’t save that reaction. Please try again.");
+    } finally {
+      setOptimisticReaction(undefined);
     }
   }
 
@@ -165,6 +190,7 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
 
   async function removeReply() {
     setError(null);
+    setIsRemovingReply(true);
     try {
       const response = await fetch(`${baseUrl}/reply`, { method: "DELETE" });
       const next = parseRound(await response.json());
@@ -173,6 +199,8 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
       replyForm.reset({ body: "" });
     } catch {
       setError("We couldn’t remove that reply. Please try again.");
+    } finally {
+      setIsRemovingReply(false);
     }
   }
 
@@ -222,8 +250,8 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
           <h2 className="mt-1 text-[1.35rem] font-extrabold">Waiting for {round.otherParticipant.displayName}</h2>
           <p className="mx-auto my-6 max-w-[27ch] leading-relaxed text-closer-muted">You’ll both see your answers when {round.otherParticipant.displayName} responds.</p>
           <div className="grid justify-items-center gap-3">
-            <Link className={buttonVariants({ size: "sm", variant: "ghost" })} href={`/pair/${round.pairId}` as never}>Back to Closer</Link>
-            <Link className={buttonVariants({ size: "sm", variant: "ghost" })} href={`/pair/${round.pairId}/private` as never}>Choose another topic</Link>
+            <Link className={buttonVariants({ size: "sm", variant: "ghost" })} href={`/pair/${round.pairId}` as never} prefetch>Back to Closer</Link>
+            <Link className={buttonVariants({ size: "sm", variant: "ghost" })} href={`/pair/${round.pairId}/private` as never} prefetch>Choose another topic</Link>
           </div>
         </section>
       </CloserPageShell>
@@ -255,17 +283,19 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
           <h1 className="text-[2.25rem] font-extrabold leading-tight tracking-[-.048em]">Question passed</h1>
           <p className="mx-auto my-6 max-w-[27ch] leading-relaxed text-closer-muted">This question is complete without a reveal.</p>
           {round.conversation.isCreator ? (
-            <Link className={buttonVariants({ size: "lg" })} href={`/pair/${round.pairId}/private` as never}>Choose next question</Link>
+            <Link className={buttonVariants({ size: "lg" })} href={`/pair/${round.pairId}/private` as never} prefetch>Choose next question</Link>
           ) : (
             <p className="text-sm leading-relaxed text-closer-muted">Waiting for {round.otherParticipant.displayName} to choose a question.</p>
           )}
-          <Link className={cn(buttonVariants({ size: "sm", variant: "ghost" }), "mt-3")} href={`/pair/${round.pairId}` as never}>Back to Closer</Link>
+          <Link className={cn(buttonVariants({ size: "sm", variant: "ghost" }), "mt-3")} href={`/pair/${round.pairId}` as never} prefetch>Back to Closer</Link>
         </section>
       </CloserPageShell>
     );
   }
 
-  const selectedReaction = round.reactions?.find((item) => item.participantId !== round.otherParticipant.id)?.value;
+  const selectedReaction = optimisticReaction === undefined
+    ? round.reactions?.find((item) => item.participantId !== round.otherParticipant.id)?.value
+    : optimisticReaction;
   const ownReply = round.replies?.find((item) => item.isOwner);
   return (
     <CloserPageShell className="pt-5">
@@ -290,7 +320,7 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
           })}
         </div>
         <div aria-label={`Choose your reaction to ${round.otherParticipant.displayName}'s answer`} className="my-6 grid grid-cols-4 gap-2.5">
-          {reactions.map((reaction) => <button aria-label={reaction.label} aria-pressed={selectedReaction === reaction.value} className={cn("grid min-h-[55px] place-items-center rounded-[1.2rem] border-2 border-transparent bg-white text-[1.45rem] shadow-closer-soft transition-[transform,border-color] duration-200 hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-closer-navy", selectedReaction === reaction.value && "border-closer-lavender bg-closer-lavender-soft")} key={reaction.value} onClick={() => void updateReaction(reaction.value)} type="button">{reaction.glyph}</button>)}
+          {reactions.map((reaction) => <button aria-label={reaction.label} aria-pressed={selectedReaction === reaction.value} className={cn("grid min-h-[55px] place-items-center rounded-[1.2rem] border-2 border-transparent bg-white text-[1.45rem] shadow-closer-soft transition-[transform,border-color] duration-200 hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-closer-navy disabled:cursor-wait disabled:opacity-70", selectedReaction === reaction.value && "border-closer-lavender bg-closer-lavender-soft")} disabled={optimisticReaction !== undefined} key={reaction.value} onClick={() => void updateReaction(reaction.value)} type="button">{reaction.glyph}</button>)}
         </div>
         <form className="rounded-[1.375rem] bg-white/75 p-[17px]" onSubmit={replyForm.handleSubmit(saveReply)}>
           <FieldGroup>
@@ -303,12 +333,12 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
           {replyForm.formState.errors.root?.server?.message ? <ActionError>{replyForm.formState.errors.root.server.message}</ActionError> : null}
           <div className="mt-3 flex items-center justify-between gap-2.5">
             <AsyncButton disabled={!replyForm.formState.isValid} pending={replyForm.formState.isSubmitting} pendingText={<><Send aria-hidden="true" data-icon="inline-start" />Saving…</>} size="sm" type="submit"><Send aria-hidden="true" data-icon="inline-start" />{ownReply ? "Save reply" : "Add reply"}</AsyncButton>
-            {ownReply ? <Button onClick={() => void removeReply()} size="sm" type="button" variant="ghost">Remove</Button> : null}
+            {ownReply ? <AsyncButton onClick={() => void removeReply()} pending={isRemovingReply} pendingText="Removing…" size="sm" type="button" variant="ghost">Remove</AsyncButton> : null}
           </div>
         </form>
         {round.replies?.filter((item) => !item.isOwner).map((item) => <p className="px-1.5 py-3 text-[.9rem] leading-relaxed text-closer-muted" key={item.participantId}><strong className="text-closer-navy">{item.displayName}</strong> {item.body}</p>)}
-        {round.conversation.isCreator && round.otherRevealViewed ? <Link className={cn(buttonVariants({ size: "lg", variant: "secondary" }), "mt-2.5 w-full")} href={`/pair/${round.pairId}/private` as never}>Choose next question</Link> : null}
-        <Link className={cn(buttonVariants({ size: "sm", variant: "ghost" }), "mx-auto mt-2 flex w-fit")} href={`/pair/${round.pairId}` as never}>Back to Closer</Link>
+        {round.conversation.isCreator && round.otherRevealViewed ? <Link className={cn(buttonVariants({ size: "lg", variant: "secondary" }), "mt-2.5 w-full")} href={`/pair/${round.pairId}/private` as never} prefetch>Choose next question</Link> : null}
+        <Link className={cn(buttonVariants({ size: "sm", variant: "ghost" }), "mx-auto mt-2 flex w-fit")} href={`/pair/${round.pairId}` as never} prefetch>Back to Closer</Link>
         {error ? <ActionError>{error}</ActionError> : null}
       </section>
     </CloserPageShell>

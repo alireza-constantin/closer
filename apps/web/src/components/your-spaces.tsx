@@ -28,6 +28,7 @@ function SpaceCard({ space }: { space: SpaceSummary }) {
       aria-label={isWaiting ? `Open not connected ${relationship} space` : `Open ${space.otherParticipantDisplayName} ${relationship} space`}
       className="group grid min-h-[92px] grid-cols-[48px_1fr_auto] items-center gap-3 rounded-[1.35rem] bg-white/85 px-4 py-3.5 text-closer-navy no-underline shadow-closer-soft transition-[transform,box-shadow] duration-200 hover:-translate-y-0.5 hover:shadow-[0_16px_29px_rgba(27,33,78,0.11)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-closer-navy focus-visible:ring-offset-2 focus-visible:ring-offset-closer-cream"
       href={`/pair/${space.pairId}` as never}
+      prefetch
     >
       <span aria-hidden="true" className={cn("grid size-12 place-items-center rounded-[1.15rem] text-closer-navy", isWaiting ? "bg-closer-peach" : "bg-closer-lavender-soft")}>
         <Sparkles className="size-5" />
@@ -56,7 +57,7 @@ export default function YourSpaces({ spaces }: { spaces: SpaceSummary[] }) {
       <section aria-label="Your Closer spaces" className="grid gap-2.5">
         {spaces.map((space) => <SpaceCard key={space.pairId} space={space} />)}
       </section>
-      <Link className={cn(buttonVariants({ size: "lg", variant: "default" }), "mt-5 w-full")} href={"/create" as never}>
+      <Link className={cn(buttonVariants({ size: "lg", variant: "default" }), "mt-5 w-full")} href={"/create" as never} prefetch>
         <Plus aria-hidden="true" data-icon="inline-start" />
         Create another space
       </Link>

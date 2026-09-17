@@ -27,7 +27,7 @@ export function CloserWordmark({ href }: { href?: string }) {
   );
 
   if (href) {
-    return <Link className="font-sans text-[1.78rem] font-extrabold tracking-[-.055em] text-closer-navy no-underline" href={href as never}>{content}</Link>;
+    return <Link className="font-sans text-[1.78rem] font-extrabold tracking-[-.055em] text-closer-navy no-underline" href={href as never} prefetch>{content}</Link>;
   }
 
   return <span className="font-sans text-[1.78rem] font-extrabold tracking-[-.055em] text-closer-navy">{content}</span>;

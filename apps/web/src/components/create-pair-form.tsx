@@ -19,17 +19,27 @@ import { cn } from "@Closer/ui/lib/utils";
 
 import { AsyncButton } from "@/components/closer/async-button";
 import { CloserModeCard } from "@/components/closer/navigation";
-import { OnboardingIcon, OnboardingSurface } from "@/components/closer/onboarding-surface";
+import {
+  OnboardingIcon,
+  OnboardingSurface,
+} from "@/components/closer/onboarding-surface";
 import { FormServerError } from "@/components/closer/feedback";
 import { CloserEyebrow } from "@/components/closer/typography";
-import { togetherPickerPath, type PairRelationshipType } from "@/lib/together-picker-path";
+import {
+  togetherPickerPath,
+  type PairRelationshipType,
+} from "@/lib/together-picker-path";
 import { createPairSchema, type CreatePairValues } from "@/lib/validation";
 
 import { Input } from "@Closer/ui/components/input";
 
 type PairCreation = { pairId: string; relationshipType: PairRelationshipType };
 
-export default function CreatePairForm({ isFirstSpace = true }: { isFirstSpace?: boolean }) {
+export default function CreatePairForm({
+  isFirstSpace = true,
+}: {
+  isFirstSpace?: boolean;
+}) {
   const [result, setResult] = useState<PairCreation | null>(null);
   const creationRequestIdRef = useRef<string | null>(null);
   const form = useForm<CreatePairValues>({
@@ -49,56 +59,131 @@ export default function CreatePairForm({ isFirstSpace = true }: { isFirstSpace?:
         body: JSON.stringify({ ...values, clientRequestId }),
       });
       const body: unknown = await response.json();
-      if (!response.ok || !body || typeof body !== "object" || !("pairId" in body) || typeof body.pairId !== "string") {
-        const message = body && typeof body === "object" && "error" in body ? body.error : null;
-        form.setError("root.server", { message: typeof message === "string" ? message : "We could not create your space." });
+      if (
+        !response.ok ||
+        !body ||
+        typeof body !== "object" ||
+        !("pairId" in body) ||
+        typeof body.pairId !== "string"
+      ) {
+        const message =
+          body && typeof body === "object" && "error" in body
+            ? body.error
+            : null;
+        form.setError("root.server", {
+          message:
+            typeof message === "string"
+              ? message
+              : "We could not create your space.",
+        });
         return;
       }
-      setResult({ pairId: body.pairId as string, relationshipType: values.relationshipType });
+      setResult({
+        pairId: body.pairId as string,
+        relationshipType: values.relationshipType,
+      });
     } catch {
-      form.setError("root.server", { message: "We could not create your space." });
+      form.setError("root.server", {
+        message: "We could not create your space.",
+      });
     }
   }
 
   if (result) {
     return (
       <OnboardingSurface className="items-center text-center">
-        <OnboardingIcon tone="coral"><Sparkles aria-hidden="true" /></OnboardingIcon>
+        <OnboardingIcon tone="coral">
+          <Sparkles aria-hidden="true" />
+        </OnboardingIcon>
         <CloserEyebrow className="mt-4">Your space is ready</CloserEyebrow>
-        <h1 className="mt-3 max-w-[12ch] text-balance text-[clamp(2rem,8.8vw,2.55rem)] font-extrabold leading-[1.03] tracking-[-.055em]">How do you want to connect?</h1>
-        <p className="mt-3 max-w-[31ch] text-[.98rem] leading-relaxed text-closer-muted">Choose the kind of moment you want right now. You can bring your person in when you’re ready.</p>
+        <h1 className="mt-3 max-w-[12ch] text-balance text-[clamp(2rem,8.8vw,2.55rem)] font-extrabold leading-[1.03] tracking-[-.055em]">
+          How do you want to connect?
+        </h1>
+        <p className="mt-3 max-w-[31ch] text-[.98rem] leading-relaxed text-closer-muted">
+          Choose the kind of moment you want right now. You can bring your
+          person in when you’re ready.
+        </p>
         <div className="mt-6 flex w-full flex-col gap-3 text-left">
-          <CloserModeCard href={togetherPickerPath(result.pairId, result.relationshipType)} kind="together" icon={<MessageCircleMore aria-hidden="true" />} prefetch title="Together" description="Use this phone and talk face-to-face." />
-          <CloserModeCard href={`/pair/${result.pairId}/private`} kind="private" icon={<LockKeyhole aria-hidden="true" />} title="Private" description="Answer separately on your own phones." />
+          <CloserModeCard
+            href={togetherPickerPath(result.pairId, result.relationshipType)}
+            kind="together"
+            icon={<MessageCircleMore aria-hidden="true" />}
+            prefetch
+            title="Together"
+            description="Use this phone and talk face-to-face."
+          />
+          <CloserModeCard
+            href={`/pair/${result.pairId}/private`}
+            kind="private"
+            icon={<LockKeyhole aria-hidden="true" />}
+            prefetch
+            title="Private"
+            description="Answer separately on your own phones."
+          />
         </div>
-        <Link className="mt-5 text-sm font-bold text-closer-muted underline-offset-4 hover:text-closer-navy hover:underline" href={`/pair/${result.pairId}` as never}>I’ll choose later</Link>
-        {form.formState.errors.root?.server?.message ? <FormServerError>{form.formState.errors.root.server.message}</FormServerError> : null}
+        <Link
+          className="mt-5 text-sm font-bold text-closer-muted underline-offset-4 hover:text-closer-navy hover:underline"
+          href={`/pair/${result.pairId}` as never}
+          prefetch
+        >
+          I’ll choose later
+        </Link>
+        {form.formState.errors.root?.server?.message ? (
+          <FormServerError>
+            {form.formState.errors.root.server.message}
+          </FormServerError>
+        ) : null}
       </OnboardingSurface>
     );
   }
 
   return (
     <OnboardingSurface as="form" onSubmit={form.handleSubmit(createPair)}>
-      <OnboardingIcon tone="coral"><Sparkles aria-hidden="true" /></OnboardingIcon>
-      <CloserEyebrow className="mt-4">{isFirstSpace ? "A space for two" : "Make room for another connection"}</CloserEyebrow>
-      <h1 className="mt-3 max-w-[12ch] text-balance text-4xl font-extrabold leading-[1.03] tracking-[-.055em]">{isFirstSpace ? "Let’s create your space" : "Create another space"}</h1>
-      <p className="mt-3 max-w-[31ch] text-[.98rem] leading-relaxed text-closer-muted">{isFirstSpace ? "A gentle place for the conversations that matter." : "A separate little place for another person who matters."}</p>
+      <OnboardingIcon tone="coral">
+        <Sparkles aria-hidden="true" />
+      </OnboardingIcon>
+      <CloserEyebrow className="mt-4">
+        {isFirstSpace ? "A space for two" : "Make room for another connection"}
+      </CloserEyebrow>
+      <h1 className="mt-3 max-w-[12ch] text-balance text-4xl font-extrabold leading-[1.03] tracking-[-.055em]">
+        {isFirstSpace ? "Let’s create your space" : "Create another space"}
+      </h1>
+      <p className="mt-3 max-w-[31ch] text-[.98rem] leading-relaxed text-closer-muted">
+        {isFirstSpace
+          ? "A gentle place for the conversations that matter."
+          : "A separate little place for another person who matters."}
+      </p>
       <FieldGroup className="mt-6 gap-4">
         <Field data-invalid={!!form.formState.errors.intendedPersonName}>
-          <FieldLabel htmlFor="intended-person-name">Who is this space for?</FieldLabel>
+          <FieldLabel htmlFor="intended-person-name">
+            Who is this space for?
+          </FieldLabel>
           <Input
             {...form.register("intendedPersonName")}
-            aria-describedby={form.formState.errors.intendedPersonName ? "intended-person-name-error" : undefined}
+            aria-describedby={
+              form.formState.errors.intendedPersonName
+                ? "intended-person-name-error"
+                : undefined
+            }
             aria-invalid={!!form.formState.errors.intendedPersonName}
             autoComplete="off"
             id="intended-person-name"
             maxLength={40}
             placeholder="Their name"
           />
-          <FieldError errors={form.formState.errors.intendedPersonName ? [form.formState.errors.intendedPersonName] : undefined} id="intended-person-name-error" />
+          <FieldError
+            errors={
+              form.formState.errors.intendedPersonName
+                ? [form.formState.errors.intendedPersonName]
+                : undefined
+            }
+            id="intended-person-name-error"
+          />
         </Field>
         <FieldSet data-invalid={!!form.formState.errors.relationshipType}>
-          <FieldLegend variant="label">Who are you creating this with?</FieldLegend>
+          <FieldLegend variant="label">
+            Who are you creating this with?
+          </FieldLegend>
           <Controller
             control={form.control}
             name="relationshipType"
@@ -117,21 +202,59 @@ export default function CreatePairForm({ isFirstSpace = true }: { isFirstSpace?:
               >
                 {(["partner", "friend"] as const).map((value) => (
                   <Field key={value}>
-                    <FieldLabel className={cn("min-h-[88px] w-full cursor-pointer flex-col justify-center rounded-[1.25rem] border-2 border-transparent p-3 px-1 transition-[transform,border-color] hover:-translate-y-0.5 focus-within:ring-2 focus-within:ring-closer-lavender focus-within:ring-offset-2 focus-within:ring-offset-closer-cream", value === "partner" ? "bg-closer-peach" : "bg-closer-lavender-soft", field.value === value && "border-closer-navy")}>
-                      <RadioGroupItem aria-label={value === "partner" ? "Partner" : "Friend"} className="sr-only" value={value} />
-                      <span className="font-extrabold">{value === "partner" ? "Partner" : "Friend"}</span>
-                      <small className="text-xs text-closer-navy/70 text-center">{value === "partner" ? "For the two of you" : "For close friends"}</small>
+                    <FieldLabel
+                      className={cn(
+                        "min-h-22 w-full cursor-pointer flex-col justify-center rounded-4xl border-2 border-transparent p-3 px-1 transition-[transform,border-color] hover:-translate-y-0.5 focus-within:ring-2 focus-within:ring-closer-lavender focus-within:ring-offset-2 focus-within:ring-offset-closer-cream",
+                        value === "partner"
+                          ? "bg-closer-peach"
+                          : "bg-closer-lavender-soft",
+                        field.value === value && "border-closer-navy",
+                      )}
+                    >
+                      <RadioGroupItem
+                        aria-label={value === "partner" ? "Partner" : "Friend"}
+                        className="sr-only"
+                        value={value}
+                      />
+                      <span className="font-extrabold">
+                        {value === "partner" ? "Partner" : "Friend"}
+                      </span>
+                      <small className="text-xs text-closer-navy/70 text-center">
+                        {value === "partner"
+                          ? "For the two of you"
+                          : "For close friends"}
+                      </small>
                     </FieldLabel>
                   </Field>
                 ))}
               </RadioGroup>
             )}
           />
-          <FieldError errors={form.formState.errors.relationshipType ? [form.formState.errors.relationshipType] : undefined} />
+          <FieldError
+            errors={
+              form.formState.errors.relationshipType
+                ? [form.formState.errors.relationshipType]
+                : undefined
+            }
+          />
         </FieldSet>
       </FieldGroup>
-      {form.formState.errors.root?.server?.message ? <FormServerError>{form.formState.errors.root.server.message}</FormServerError> : null}
-      <AsyncButton className="mt-5 w-full" pending={form.formState.isSubmitting} pendingText={isFirstSpace ? "Creating your space…" : "Creating another space…"} size="lg" type="submit">{isFirstSpace ? "Create our space" : "Create space"}</AsyncButton>
+      {form.formState.errors.root?.server?.message ? (
+        <FormServerError>
+          {form.formState.errors.root.server.message}
+        </FormServerError>
+      ) : null}
+      <AsyncButton
+        className="mt-5 w-full"
+        pending={form.formState.isSubmitting}
+        pendingText={
+          isFirstSpace ? "Creating your space…" : "Creating another space…"
+        }
+        size="lg"
+        type="submit"
+      >
+        {isFirstSpace ? "Create our space" : "Create space"}
+      </AsyncButton>
     </OnboardingSurface>
   );
 }
