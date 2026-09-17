@@ -232,7 +232,7 @@ export default function PairHome({
       </section>
       <section className="grid gap-3" aria-label="Choose a way to connect">
         <CloserModeCard href={togetherPickerPath(pairId, relationshipType)} kind="together" icon={<MessageCircleMore aria-hidden="true" />} prefetch title="Talk Together" description="Use this phone and talk face-to-face" />
-        <CloserModeCard href={`/pair/${pairId}/private`} kind="private" icon={<LockKeyhole aria-hidden="true" />} title="Answer Privately" description={isComplete ? "Answer separately, reveal together" : "Invite them to answer separately"} />
+        <CloserModeCard href={isComplete ? `/pair/${pairId}/private` : `/pair/${pairId}/invite?reason=private`} kind="private" icon={<LockKeyhole aria-hidden="true" />} title="Answer Privately" description={isComplete ? "Answer separately, reveal together" : "Invite them to answer separately"} />
       </section>
       {!isComplete ? <UnclaimedPersonName initialName={intendedPersonName} pairId={pairId} /> : null}
       {!isComplete ? <Link className="mx-auto mt-5 block w-fit text-xs text-closer-muted underline-offset-4 hover:text-closer-navy hover:underline" href={`/pair/${pairId}/invite` as never} prefetch>Invite them to Closer</Link> : null}

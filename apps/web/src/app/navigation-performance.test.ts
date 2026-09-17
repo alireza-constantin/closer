@@ -62,7 +62,7 @@ describe("App Router navigation feedback", () => {
   });
 
   test.each([
-    "components/connect-person.tsx",
+    "components/connect-page-frame.tsx",
     "components/rejoin-controls.tsx",
     "components/together-picker-frame.tsx",
     "components/private-picker.tsx",
@@ -92,7 +92,6 @@ describe("App Router navigation feedback", () => {
     "components/private-conversation-screen.tsx",
     "components/private-round-screen.tsx",
     "components/create-pair-form.tsx",
-    "components/join-pair-form.tsx",
     "components/closer/page-shell.tsx",
   ])("explicitly prefetches known internal destinations in %s", async (componentFile) => {
     const source = await Bun.file(join(appDirectory, "..", componentFile)).text();

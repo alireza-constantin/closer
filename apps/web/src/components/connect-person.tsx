@@ -1,13 +1,9 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import type { ReactNode } from "react";
 import { useState } from "react";
 
-import InviteControls from "@/components/invite-controls";
-import { CloserBackLink } from "@/components/closer/navigation";
-import { ModeBadge } from "@/components/closer/mode-badge";
-import { CloserPageShell } from "@/components/closer/page-shell";
-import { CloserEyebrow, CloserPageTitle, CloserSubtitle } from "@/components/closer/typography";
 import { useVisiblePolling } from "@/hooks/use-visible-polling";
 
 const PAIR_STATUS_POLL_INTERVAL_MS = 5_000;
@@ -23,7 +19,7 @@ function isConnectedPairStatus(value: unknown): value is { state: "connected"; o
   );
 }
 
-export default function ConnectPerson({ pairId, issueOnEntry = false }: { pairId: string; issueOnEntry?: boolean }) {
+export default function ConnectPerson({ children, pairId }: { children: ReactNode; pairId: string }) {
   const router = useRouter();
   const [joinedDisplayName, setJoinedDisplayName] = useState<string | null>(null);
   const [isRedirecting, setIsRedirecting] = useState(false);
@@ -48,16 +44,9 @@ export default function ConnectPerson({ pairId, issueOnEntry = false }: { pairId
   });
 
   return (
-    <CloserPageShell className="pb-[max(28px,env(safe-area-inset-bottom))] pt-5">
-      <CloserBackLink href={`/pair/${pairId}`} label="Back to space" />
-      <section className="mx-auto max-w-[34rem] px-1 pt-4 text-center">
-        <ModeBadge mode="private" />
-        <CloserEyebrow className="mt-4">Separate phones, one shared reveal</CloserEyebrow>
-        <CloserPageTitle>Connect your person</CloserPageTitle>
-        <CloserSubtitle>Private questions work when you can each answer on your own phone. Send them the link below, then come back here together.</CloserSubtitle>
-      </section>
+    <>
       {joinedDisplayName ? <p className="mx-auto mt-4 inline-flex items-center rounded-full bg-closer-mint px-3 py-2 text-sm text-closer-success-foreground" role="status"><strong>{joinedDisplayName}</strong> joined. Opening your space…</p> : null}
-      {isRedirecting ? <p className="text-center text-sm text-closer-muted" role="status">Opening your shared space…</p> : <InviteControls autoGenerate={issueOnEntry} kind="initial" pairId={pairId} />}
-    </CloserPageShell>
+      {isRedirecting ? <p className="mt-5 text-center text-sm text-closer-muted" role="status">Opening your shared space…</p> : children}
+    </>
   );
 }

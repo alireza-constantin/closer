@@ -1,0 +1,70 @@
+import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
+
+const appDirectory = import.meta.dir;
+const source = (path: string) => Bun.file(join(appDirectory, path)).text();
+
+describe("Connect and invitation-join streaming boundaries", () => {
+  test("keeps the unclaimed Private route read-only and redirects it to Connect", async () => {
+    const privatePage = await source("pair/[pairId]/private/page.tsx");
+    const pairHome = await source("../components/pair-home.tsx");
+
+    expect(privatePage).toContain('redirect(`/pair/${pairId}/invite?reason=private` as never)');
+    expect(privatePage).not.toContain("startOrResumePrivateConversation");
+    expect(privatePage).not.toContain("createPrivateQuestionCandidate");
+    expect(pairHome).toContain('isComplete ? `/pair/${pairId}/private` : `/pair/${pairId}/invite?reason=private`');
+  });
+
+  test("streams only authorized invitation controls beneath the immediate Connect frame", async () => {
+    const invitePage = await source("pair/[pairId]/invite/page.tsx");
+    const frame = await source("../components/connect-page-frame.tsx");
+
+    expect(invitePage).toContain("<ConnectPageFrame pairId={pairId}>");
+    expect(invitePage).toContain("<Suspense fallback={<InviteControlsSkeleton />}>");
+    expect(invitePage).toContain("async function AuthorizedInviteControls");
+    expect(invitePage.split("export default", 2)[1]).not.toContain("getPairForParticipant");
+    expect(frame).toContain("Connect your person");
+    expect(frame).toContain("Private questions work when you can each answer");
+  });
+
+  test("uses a Connect-shaped fallback instead of Private category copy", async () => {
+    const privateLoading = await source("pair/[pairId]/private/loading.tsx");
+    const connectLoading = await source("../components/connect-route-loading.tsx");
+    const inviteSkeleton = await source("../components/invite-controls.tsx");
+
+    expect(privateLoading).toContain("ConnectRouteLoading");
+    expect(privateLoading).not.toContain("private-picker");
+    expect(connectLoading).toContain("ConnectPageFrame");
+    expect(inviteSkeleton).toContain("InviteControlsSkeleton");
+    expect(inviteSkeleton).toContain("size-[min(224px,62vw)]");
+    expect(inviteSkeleton).toContain("grid-cols-2");
+    expect(inviteSkeleton).toContain("h-10 w-full");
+  });
+
+  test("keeps the invite lookup inert and limits issue/reuse to mounted Connect interaction", async () => {
+    const controls = await source("../components/invite-controls.tsx");
+    const inviteRoute = await source("api/pairs/[pairId]/invite/route.ts");
+
+    expect(controls).toContain("if (autoGenerate) void reuseOrGenerateInvite()");
+    expect(inviteRoute.split("export async function GET", 2)[1].split("export async function POST", 1)[0]).not.toContain("issueOrReuseInitialInvite");
+  });
+
+  test("renders a cohesive initial-claim card and makes intended context a fresh-user prefill only", async () => {
+    const joinPage = await source("join/[token]/page.tsx");
+    const form = await source("../components/join-pair-form.tsx");
+    const redeemRoute = await source("api/invites/[token]/redeem/route.ts");
+
+    expect(joinPage).toContain("<JoinInvitationFrame>");
+    expect(joinPage).toContain("<Suspense fallback={<JoinInvitationDetailsSkeleton />}>");
+    expect(form).toContain("initialInvite?.intendedPersonName ?? \"\"");
+    expect(form).toContain("claimantDisplayName ??");
+    expect(form).toContain("readOnly={kind === \"initial\" && isExistingParticipant}");
+    expect(form).not.toContain("Choose your name before joining");
+    expect(form).not.toContain("<strong>For:</strong>");
+    expect(redeemRoute).toContain("export async function POST");
+    expect(redeemRoute).toContain("joinPairSchema.safeParse(body)");
+    expect(redeemRoute).toContain("resolveOrCreateParticipant");
+    expect(redeemRoute).toContain("redeemInitialInvite");
+    expect(redeemRoute).toContain("if (!claimant)");
+  });
+});

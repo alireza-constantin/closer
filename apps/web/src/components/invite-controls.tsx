@@ -6,11 +6,38 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@Closer/ui/components/button";
 import { Field, FieldLabel } from "@Closer/ui/components/field";
 import { Input } from "@Closer/ui/components/input";
+import { Skeleton } from "@Closer/ui/components/skeleton";
 
 import InviteQrCode from "@/components/invite-qr-code";
 import { AsyncButton } from "@/components/closer/async-button";
 
 type InviteKind = "initial" | "rejoin";
+
+/**
+ * This is intentionally the same QR/link/action footprint as a local invite.
+ * It is used both by the server Suspense boundary and the auto-issue client
+ * state, so a Private → Connect transition does not collapse into a generic
+ * card before the raw credential resolves.
+ */
+export function InviteControlsSkeleton() {
+  return (
+    <div aria-busy="true" aria-live="polite">
+      <span className="sr-only">Preparing the invitation…</span>
+      <div aria-hidden="true" className="mx-auto grid justify-items-center gap-2.5 rounded-4xl bg-white px-3 py-4">
+        <Skeleton className="size-[min(224px,62vw)] rounded-lg bg-[repeating-linear-gradient(45deg,#f2f0f5_0_8px,#e9e6ed_8px_16px)]" />
+      </div>
+      <div aria-hidden="true" className="mt-5 text-left">
+        <Skeleton className="h-4 w-24 rounded-full bg-closer-navy/10" />
+        <Skeleton className="mt-2 h-10 w-full rounded-[1.05rem] bg-white/90" />
+      </div>
+      <div aria-hidden="true" className="mt-4 grid grid-cols-2 gap-2">
+        <Skeleton className="h-10 rounded-[.9rem] bg-white/90" />
+        <Skeleton className="h-10 rounded-[.9rem] bg-white/90" />
+      </div>
+      <Skeleton aria-hidden="true" className="mx-auto mt-4 h-3 w-44 rounded-full bg-closer-navy/10" />
+    </div>
+  );
+}
 
 export default function InviteControls({
   pairId,
@@ -25,6 +52,7 @@ export default function InviteControls({
   const [activeExpiresAt, setActiveExpiresAt] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [isWorking, setIsWorking] = useState(false);
+  const [isPreparingAutoInvite, setIsPreparingAutoInvite] = useState(autoGenerate);
   const [didCopy, setDidCopy] = useState(false);
   const [canShare, setCanShare] = useState(false);
   const reuseRequestRef = useRef<Promise<void> | null>(null);
@@ -137,6 +165,7 @@ export default function InviteControls({
       await request;
     } finally {
       if (reuseRequestRef.current === request) reuseRequestRef.current = null;
+      setIsPreparingAutoInvite(false);
     }
   }
 
@@ -230,25 +259,11 @@ export default function InviteControls({
     ? `Expires ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(activeExpiresAt))}.`
     : null;
 
-  return (
-    <section className="relative mx-auto mt-5 w-full max-w-136 overflow-hidden rounded-[1.625rem] border border-closer-navy/10 bg-white/70 px-5 pb-5 pt-6 text-center shadow-closer-soft">
-      <span
-        aria-hidden="true"
-        className="pointer-events-none absolute -right-6 -top-6 size-24 rounded-full bg-closer-peach/65"
-      />
-      <div className="relative z-10">
-        <span className="mx-auto grid size-13.5 place-items-center rounded-4xl bg-closer-peach text-closer-navy [&_svg]:size-[26px]">
-          <LinkIcon aria-hidden="true" />
-        </span>
-        <h2 className="mt-4 text-[1.35rem] font-extrabold tracking-[-.035em]">
-          {isRejoin ? "Reconnect your person" : "Bring them into your space"}
-        </h2>
-        <p className="mx-auto mt-2 max-w-[34ch] leading-relaxed text-closer-muted">
-          {isRejoin
-            ? "If they’ve lost their guest session, create a fresh link for their place in your space."
-            : "Share a private link, or let them scan the code from their phone."}
-        </p>
-        {inviteUrl ? (
+  if (isPreparingAutoInvite) return <InviteControlsSkeleton />;
+
+  const controls = (
+    <div>
+      {inviteUrl ? (
           <>
             <div className="mx-auto my-5 grid justify-items-center gap-2.5 rounded-4xl bg-white px-3 py-4">
               <InviteQrCode value={inviteUrl} />
@@ -267,12 +282,12 @@ export default function InviteControls({
             </Field>
           </>
         ) : null}
-        {isRejoin || !activeExpiresAt ? null : (
+      {isRejoin || !activeExpiresAt ? null : (
           <p className="mt-3 text-[.88rem] leading-relaxed text-closer-muted" role="status">
             {inviteUrl ? `This invitation is active. ${expirationCopy}` : `An invitation is already active. ${expirationCopy} Its link is only available in the browser that created it.`}
           </p>
         )}
-        {message ? (
+      {message ? (
           <p
             className="mt-3 text-[.88rem] leading-relaxed text-closer-navy"
             role="status"
@@ -280,7 +295,7 @@ export default function InviteControls({
             {message}
           </p>
         ) : null}
-        <div className="mt-4 grid gap-2.5">
+      <div className="mt-4 grid gap-2.5">
           <AsyncButton
             onClick={() => void (isRejoin ? generateInvite() : reuseOrGenerateInvite())}
             pending={isWorking}
@@ -348,7 +363,20 @@ export default function InviteControls({
               Replace invitation
             </Button>
           ) : null}
-        </div>
+      </div>
+    </div>
+  );
+
+  if (!isRejoin) return controls;
+
+  return (
+    <section className="relative mx-auto mt-5 w-full max-w-136 overflow-hidden rounded-[1.625rem] border border-closer-navy/10 bg-white/70 px-5 pb-5 pt-6 text-center shadow-closer-soft">
+      <span aria-hidden="true" className="pointer-events-none absolute -right-6 -top-6 size-24 rounded-full bg-closer-peach/65" />
+      <div className="relative z-10">
+        <span className="mx-auto grid size-13.5 place-items-center rounded-4xl bg-closer-peach text-closer-navy [&_svg]:size-[26px]"><LinkIcon aria-hidden="true" /></span>
+        <h2 className="mt-4 text-[1.35rem] font-extrabold tracking-[-.035em]">Reconnect your person</h2>
+        <p className="mx-auto mt-2 max-w-[34ch] leading-relaxed text-closer-muted">If they’ve lost their guest session, create a fresh link for their place in your space.</p>
+        {controls}
       </div>
     </section>
   );

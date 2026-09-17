@@ -1,24 +1,40 @@
+import { Suspense } from "react";
 import { db, getPairForParticipant } from "@Closer/auth/closer";
 import { notFound, redirect, unstable_rethrow } from "next/navigation";
 
+import { ConnectPageFrame } from "@/components/connect-page-frame";
 import ConnectPerson from "@/components/connect-person";
+import InviteControls, { InviteControlsSkeleton } from "@/components/invite-controls";
 import { getCurrentParticipant } from "@/lib/closer-server";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-export default async function InvitePage({ params, searchParams }: { params: Promise<{ pairId: string }>; searchParams: Promise<{ reason?: string }> }) {
-  const { pairId } = await params;
-  const { reason } = await searchParams;
+async function AuthorizedInviteControls({ issueOnEntry, pairId }: { issueOnEntry: boolean; pairId: string }) {
   const currentParticipant = await getCurrentParticipant();
   if (!currentParticipant) notFound();
 
   try {
     const pairView = await getPairForParticipant(db, currentParticipant.id, pairId);
     if (pairView.members.length === 2) redirect(`/pair/${pairId}`);
-    return <ConnectPerson issueOnEntry={reason === "private"} pairId={pairId} />;
+    return <InviteControls autoGenerate={issueOnEntry} kind="initial" pairId={pairId} />;
   } catch (error) {
     unstable_rethrow(error);
     notFound();
   }
+}
+
+export default async function InvitePage({ params, searchParams }: { params: Promise<{ pairId: string }>; searchParams: Promise<{ reason?: string }> }) {
+  const { pairId } = await params;
+  const { reason } = await searchParams;
+
+  return (
+    <ConnectPageFrame pairId={pairId}>
+      <ConnectPerson pairId={pairId}>
+        <Suspense fallback={<InviteControlsSkeleton />}>
+          <AuthorizedInviteControls issueOnEntry={reason === "private"} pairId={pairId} />
+        </Suspense>
+      </ConnectPerson>
+    </ConnectPageFrame>
+  );
 }

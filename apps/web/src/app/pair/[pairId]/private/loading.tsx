@@ -1,5 +1,5 @@
-import { CloserRouteLoading } from "@/components/closer/route-loading";
+import { ConnectRouteLoading } from "@/components/connect-route-loading";
 
 export default function Loading() {
-  return <CloserRouteLoading variant="private-picker" />;
+  return <ConnectRouteLoading />;
 }

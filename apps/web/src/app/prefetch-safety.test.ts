@@ -11,6 +11,7 @@ const renderTimeMutationCommands = [
   "issueRejoinInvite",
   "redeemInitialInvite",
   "redeemRejoinInvite",
+  "resolveOrCreateParticipant",
   "markPrivateRevealViewed",
   "terminatePair",
   "endTogetherSession",

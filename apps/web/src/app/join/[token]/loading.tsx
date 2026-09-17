@@ -1,5 +1,13 @@
-import { CloserRouteLoading } from "@/components/closer/route-loading";
+import { JoinInvitationDetailsSkeleton, JoinInvitationFrame } from "@/components/join-invitation-frame";
+import { CloserPageShell, CloserTopbar } from "@/components/closer/page-shell";
 
 export default function Loading() {
-  return <CloserRouteLoading variant="form" />;
+  return (
+    <CloserPageShell className="flex flex-col">
+      <CloserTopbar />
+      <div className="flex flex-1 items-center py-10">
+        <JoinInvitationFrame><JoinInvitationDetailsSkeleton /></JoinInvitationFrame>
+      </div>
+    </CloserPageShell>
+  );
 }

@@ -7,10 +7,12 @@ import { Input } from "@Closer/ui/components/input";
 export function DisplayNameField({
   error,
   errorId,
+  readOnly = false,
   registration,
 }: {
   error?: FieldError;
   errorId: string;
+  readOnly?: boolean;
   registration: UseFormRegisterReturn;
 }) {
   return (
@@ -24,6 +26,7 @@ export function DisplayNameField({
         id="display-name"
         maxLength={40}
         placeholder="What should they call you?"
+        readOnly={readOnly}
       />
       <FieldErrorMessage errors={error ? [error] : undefined} id={errorId} />
     </Field>

@@ -1,4 +1,5 @@
 import AnonymousSession from "@/components/anonymous-session";
+import { JoinInvitationFrame } from "@/components/join-invitation-frame";
 import { CloserPageShell, CloserTopbar } from "@/components/closer/page-shell";
 import JoinPairForm from "@/components/join-pair-form";
 import { db, getRejoinInviteLanding } from "@Closer/auth/closer";
@@ -13,9 +14,13 @@ export default async function RejoinPage({ params }: { params: Promise<{ token: 
   return (
     <CloserPageShell className="flex flex-col">
       <CloserTopbar />
-      <AnonymousSession>
-        <JoinPairForm inviterDisplayName={null} kind="rejoin" token={token} unavailable={!invite} />
-      </AnonymousSession>
+      <div className="flex flex-1 items-center py-10">
+        <JoinInvitationFrame kind="rejoin">
+          <AnonymousSession>
+            <JoinPairForm kind="rejoin" token={token} unavailable={!invite} />
+          </AnonymousSession>
+        </JoinInvitationFrame>
+      </div>
     </CloserPageShell>
   );
 }
