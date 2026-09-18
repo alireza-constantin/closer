@@ -148,6 +148,7 @@ export default function CreatePairForm({ isFirstSpace = true }: { isFirstSpace?:
             }
             aria-invalid={!!form.formState.errors.intendedPersonName}
             autoComplete="off"
+            autoFocus
             id="intended-person-name"
             maxLength={40}
             placeholder="Their name"
@@ -183,17 +184,13 @@ export default function CreatePairForm({ isFirstSpace = true }: { isFirstSpace?:
                   <Field key={value}>
                     <FieldLabel
                       className={cn(
-                        "focus-within:ring-closer-lavender focus-within:ring-offset-closer-cream min-h-24 w-full cursor-pointer items-center rounded-4xl border-2 p-3 text-left transition-[transform,border-color,box-shadow] focus-within:ring-2 focus-within:ring-offset-2 hover:-translate-y-0.5 active:translate-y-px",
-                        value === "partner"
-                          ? "border-closer-peach bg-closer-peach/65"
-                          : "border-closer-lavender-soft bg-closer-lavender-soft/65",
-                        field.value === value &&
-                          "border-closer-navy bg-white/75 shadow-[0_7px_16px_rgba(27,33,78,0.11)]",
+                        "min-h-24 w-full cursor-pointer items-center rounded-md border-2 border-[#d4d4d433] bg-white/70 p-3 text-left transition-[transform,border-color,box-shadow] hover:-translate-y-0.5 active:translate-y-px",
+                        "has-data-checked:border-closer-lavender! has-data-checked:bg-closer-lavender/10!",
                       )}
                     >
                       <RadioGroupItem
                         aria-describedby={`${value}-relationship-description`}
-                        className="border-closer-navy text-closer-navy data-checked:bg-closer-coral data-checked:text-closer-navy relative"
+                        className="hidden"
                         value={value}
                       />
                       <span className="ml-2 min-w-0">

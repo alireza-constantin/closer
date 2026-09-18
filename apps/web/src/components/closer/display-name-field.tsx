@@ -25,6 +25,7 @@ export function DisplayNameField({
         autoComplete="name"
         id="display-name"
         maxLength={40}
+        autoFocus
         placeholder="What should they call you?"
         readOnly={readOnly}
       />
