@@ -1,4 +1,4 @@
-import { db, endTogetherSession } from "@Closer/auth/closer";
+import { db, endTogetherSession, publishRealtimeEvent } from "@Closer/auth/closer";
 
 import {
   togetherDomainErrorResponse,
@@ -11,8 +11,10 @@ export async function POST(request: Request, context: { params: Promise<{ pairId
   if (!participant) return Response.json({ error: "Sign in is required." }, { status: 401, headers: togetherNoStoreHeaders });
   const { pairId, sessionId } = await context.params;
   try {
+    const result = await endTogetherSession(db, { participantId: participant.id, pairId, sessionId });
+    await publishRealtimeEvent(pairId, "together.changed");
     return Response.json(
-      await endTogetherSession(db, { participantId: participant.id, pairId, sessionId }),
+      result,
       { headers: togetherNoStoreHeaders },
     );
   } catch (error) {

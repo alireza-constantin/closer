@@ -1,4 +1,4 @@
-import { db, removePrivateReply, setPrivateReply } from "@Closer/auth/closer";
+import { db, publishRealtimeEvent, removePrivateReply, setPrivateReply } from "@Closer/auth/closer";
 
 import { privateDomainErrorResponse, requireRequestParticipant, noStoreHeaders } from "@/lib/private-api";
 
@@ -10,8 +10,10 @@ export async function PUT(request: Request, context: { params: Promise<{ pairId:
   if (typeof reply !== "string") return Response.json({ error: "Invalid request." }, { status: 400, headers: noStoreHeaders });
   const { pairId, roundId } = await context.params;
   try {
+    const result = await setPrivateReply(db, { participantId: participant.id, pairId, roundId, body: reply });
+    await publishRealtimeEvent(pairId, "private.changed");
     return Response.json(
-      await setPrivateReply(db, { participantId: participant.id, pairId, roundId, body: reply }),
+      result,
       { headers: noStoreHeaders },
     );
   } catch (error) {
@@ -24,7 +26,9 @@ export async function DELETE(request: Request, context: { params: Promise<{ pair
   if (!participant) return Response.json({ error: "Sign in is required." }, { status: 401, headers: noStoreHeaders });
   const { pairId, roundId } = await context.params;
   try {
-    return Response.json(await removePrivateReply(db, { participantId: participant.id, pairId, roundId }), {
+    const result = await removePrivateReply(db, { participantId: participant.id, pairId, roundId });
+    await publishRealtimeEvent(pairId, "private.changed");
+    return Response.json(result, {
       headers: noStoreHeaders,
     });
   } catch (error) {

@@ -90,12 +90,21 @@ Before creating a Preview deployment, configure these Vercel Preview environment
 
 - `DATABASE_URL`: a reachable PostgreSQL connection string for the intended Preview database; never a localhost, loopback, or file URL.
 - `BETTER_AUTH_SECRET`: at least 32 characters, scoped consistently with the Preview environment.
+- `REALTIME_DATABASE_URL` (when `DATABASE_URL` is transaction-pooled): a direct, session-capable PostgreSQL URL for the server-side `LISTEN` connection. This is never sent to browsers or logged. If `DATABASE_URL` is already a direct PostgreSQL connection, the realtime listener reuses it.
 
 `BETTER_AUTH_URL` is intentionally not synchronized by `bun run env:preview`. On Vercel, Closer derives it from that deployment's `VERCEL_URL`, then uses that exact HTTPS origin for Better Auth's base URL and trusted-origin list. This supports each Preview URL without allowing arbitrary origins. For local development, keep `BETTER_AUTH_URL` set to the local app origin.
 
 The current Vercel build applies Drizzle migrations automatically only for Production. Before a Preview needs a newly committed schema migration, apply `bun run db:migrate` once against its intended Preview database from a trusted environment. The PostgreSQL role must be allowed to create the `pgcrypto` extension because migration `0015_together_question_page_hashing.sql` uses `CREATE EXTENSION IF NOT EXISTS pgcrypto`.
 
 The `env:preview` helper warns if a local `.env` value looks like localhost. Treat that as a stop signal: configure the Preview value in Vercel (or use a deployment-safe env file) before deploying.
+
+### Realtime invalidation
+
+Closer uses one same-origin Server-Sent Events stream for each active Pair route tree. The stream carries only a version, Pair ID, and an invalidation type (`pair.changed`, `private.changed`, `together.changed`, or `pair.terminated`). It never carries answers, candidates, credentials, or other Pair content.
+
+PostgreSQL `NOTIFY` publishes those invalidations across Vercel instances. Each warm Node process keeps at most one lazy `LISTEN closer_realtime` connection and fans matching notifications out to its local SSE clients. The SSE route reauthenticates and authorizes the current Participant before subscribing. If an instance or connection is recycled, the browser EventSource reconnects and the active TanStack Query projections are invalidated and fetched again.
+
+For Preview debugging, inspect the EventStream request for `GET /api/pairs/:pairId/events` and the subsequent authorized projection GET. Do not log or paste database URLs, cookies, invitation tokens, answers, or candidate text. A missing direct PostgreSQL connection is a deployment blocker for cross-instance realtime; do not substitute an in-memory event bus.
 
 For more details, see the guide on [Deploying to Vercel](https://www.better-t-stack.dev/docs/guides/vercel).
 

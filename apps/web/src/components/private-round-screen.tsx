@@ -1,9 +1,10 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useQuery } from "@tanstack/react-query";
 import { Heart, LockKeyhole, MessageCircle, Send } from "lucide-react";
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 
 import { Button, buttonVariants } from "@Closer/ui/components/button";
@@ -17,7 +18,7 @@ import { ActionError } from "@/components/closer/feedback";
 import { CloserBackLink } from "@/components/closer/navigation";
 import { ModeBadge } from "@/components/closer/mode-badge";
 import { CloserCompanions, CloserPageShell, CloserRoundHeader } from "@/components/closer/page-shell";
-import { useVisiblePolling } from "@/hooks/use-visible-polling";
+import { closerKeys } from "@/lib/closer-query-keys";
 import { privateAnswerSchema, privateReplySchema, type PrivateAnswerValues, type PrivateReplyValues } from "@/lib/validation";
 
 type ReactionValue = "heart" | "laugh" | "tender" | "surprised";
@@ -66,6 +67,18 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
     resolver: zodResolver(privateReplySchema),
   });
   const baseUrl = `/api/pairs/${encodeURIComponent(round.pairId)}/private-rounds/${encodeURIComponent(round.id)}`;
+  const roundQuery = useQuery({
+    queryKey: closerKeys.privateRound(initialRound.pairId, initialRound.id),
+    queryFn: async ({ signal }) => {
+      const response = await fetch(`/api/pairs/${encodeURIComponent(initialRound.pairId)}/private-rounds/${encodeURIComponent(initialRound.id)}`, { cache: "no-store", signal });
+      const next = response.ok ? parseRound(await response.json()) : null;
+      if (!next) throw new Error("Unable to refresh Private Round.");
+      return next;
+    },
+    initialData: initialRound,
+    refetchInterval: 30_000,
+  });
+  useEffect(() => { if (roundQuery.data) setRound(roundQuery.data); }, [roundQuery.data]);
 
   async function reconcileRound(fallback: RoundView) {
     try {
@@ -77,33 +90,6 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
     }
   }
 
-  useVisiblePolling({
-    enabled: round.state === "WAITING",
-    intervalMs: 4_000,
-    onPoll: async (signal) => {
-      try {
-        const response = await fetch(`${baseUrl}/status`, { cache: "no-store", signal });
-        const next = parseRound(await response.json());
-        if (next?.state === "REVEAL_READY") setRound((current) => ({ ...current, state: "REVEAL_READY" }));
-      } catch {
-        // A transient status failure leaves the calm waiting state intact until the next visible poll.
-      }
-    },
-  });
-
-  useVisiblePolling({
-    enabled: round.state === "REVEAL_VIEWED" && !round.otherRevealViewed,
-    intervalMs: 4_000,
-    onPoll: async (signal) => {
-      try {
-        const response = await fetch(baseUrl, { cache: "no-store", signal });
-        const next = response.ok ? parseRound(await response.json()) : null;
-        if (next?.state === "REVEAL_VIEWED" && next.answers) setRound(next);
-      } catch {
-        // Keep the revealed conversation calm through a transient foreground refresh.
-      }
-    },
-  });
 
   async function submitAnswer(values: PrivateAnswerValues) {
     setError(null);

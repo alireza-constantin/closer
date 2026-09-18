@@ -21,6 +21,9 @@ const runtimeEnv = {
 export const env = createEnv({
   server: {
     DATABASE_URL: z.string().min(1),
+    // LISTEN needs a session-capable connection. Configure this separately when
+    // DATABASE_URL points at a transaction pooler.
+    REALTIME_DATABASE_URL: z.string().min(1).optional(),
     BETTER_AUTH_SECRET: z.string().min(32),
     BETTER_AUTH_URL: z.url(),
     NODE_ENV: z.enum(["development", "production", "test"]).default("development"),

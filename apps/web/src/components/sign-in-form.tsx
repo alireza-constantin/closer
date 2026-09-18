@@ -2,6 +2,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 
@@ -14,10 +15,12 @@ import { FormServerError } from "@/components/closer/feedback";
 import { CloserEyebrow } from "@/components/closer/typography";
 import Loader from "@/components/loader";
 import { authClient } from "@/lib/auth-client";
+import { clearCloserQueryCache } from "@/lib/closer-query-cache";
 import { signInSchema, type SignInValues } from "@/lib/validation";
 
 export default function SignInForm({ onSwitchToSignUp }: { onSwitchToSignUp: () => void }) {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const { isPending } = authClient.useSession();
   const form = useForm<SignInValues>({ defaultValues: { email: "", password: "" }, mode: "onChange", resolver: zodResolver(signInSchema) });
 
@@ -26,6 +29,7 @@ export default function SignInForm({ onSwitchToSignUp }: { onSwitchToSignUp: () 
     try {
       await authClient.signIn.email(values, {
         onSuccess: () => {
+          clearCloserQueryCache(queryClient);
           router.push("/dashboard");
           toast.success("Sign in successful");
         },

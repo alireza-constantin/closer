@@ -8,3 +8,6 @@ export function createDb() {
 }
 
 export const db = createDb();
+
+export { getRealtimeBus, parseRealtimeEvent, publishRealtimeEvent, REALTIME_CHANNEL, RealtimeBus } from "./realtime";
+export type { RealtimeEvent, RealtimeEventType } from "./realtime";

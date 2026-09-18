@@ -44,14 +44,15 @@ describe("Private interaction performance boundaries", () => {
     expect(screen).not.toContain("router.refresh()");
   });
 
-  test("uses the authorized Reveal response and focused polling without fabricating answers", async () => {
+  test("uses the authorized Reveal response and query recovery without fabricating answers", async () => {
     const screen = await source("private-round-screen.tsx");
     const revealRoute = await source("../app/api/pairs/[pairId]/private-rounds/[roundId]/reveal/route.ts");
     const roundRoute = await source("../app/api/pairs/[pairId]/private-rounds/[roundId]/route.ts");
 
     expect(screen).toContain('fetch(`${baseUrl}/reveal`, { method: "POST" })');
     expect(screen).toContain("!next || !next.answers");
-    expect(screen).toContain('fetch(`${baseUrl}/status`, { cache: "no-store", signal })');
+    expect(screen).toContain("queryKey: closerKeys.privateRound(initialRound.pairId, initialRound.id)");
+    expect(screen).toContain("refetchInterval: 30_000");
     expect(revealRoute).toContain("markPrivateRevealViewed");
     expect(roundRoute).toContain("hideUnviewedReveal");
   });

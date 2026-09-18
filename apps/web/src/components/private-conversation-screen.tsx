@@ -1,6 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { Heart } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -14,6 +15,7 @@ import { ActionError } from "@/components/closer/feedback";
 import { CloserBackLink } from "@/components/closer/navigation";
 import { CloserPageShell } from "@/components/closer/page-shell";
 import { ModeBadge } from "@/components/closer/mode-badge";
+import { closerKeys } from "@/lib/closer-query-keys";
 
 type ConversationProjection = {
   id: string;
@@ -50,6 +52,18 @@ export default function PrivateConversationScreen({ view }: { view: Conversation
     ? `/api/pairs/${encodeURIComponent(conversation.pairId)}/private-conversations/${encodeURIComponent(conversation.id)}/candidates/${encodeURIComponent(conversation.candidate.id)}`
     : null;
   const conversationUrl = `/api/pairs/${encodeURIComponent(conversation.pairId)}/private-conversations/${encodeURIComponent(conversation.id)}`;
+  const conversationQuery = useQuery({
+    queryKey: closerKeys.privateConversation(view.pairId, view.id),
+    queryFn: async ({ signal }) => {
+      const response = await fetch(`/api/pairs/${encodeURIComponent(view.pairId)}/private-conversations/${encodeURIComponent(view.id)}`, { cache: "no-store", signal });
+      const next = response.ok ? parseConversation(await response.json()) : null;
+      if (!next) throw new Error("Unable to refresh Private conversation.");
+      return next;
+    },
+    initialData: view,
+    refetchInterval: 30_000,
+  });
+  useEffect(() => { if (conversationQuery.data) setConversation(conversationQuery.data); }, [conversationQuery.data]);
 
   async function reconcileConversation() {
     try {

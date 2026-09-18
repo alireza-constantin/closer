@@ -1,4 +1,4 @@
-import { CloserDomainError, db, redeemRejoinInvite } from "@Closer/auth/closer";
+import { CloserDomainError, db, publishRealtimeEvent, redeemRejoinInvite } from "@Closer/auth/closer";
 
 import { getAuthUserIdFromRequest } from "@/lib/closer-server";
 
@@ -12,7 +12,9 @@ export async function POST(request: Request, context: { params: Promise<{ token:
 
   const { token } = await context.params;
   try {
-    return Response.json(await redeemRejoinInvite(db, { token, authUserId, displayName }));
+    const result = await redeemRejoinInvite(db, { token, authUserId, displayName });
+    await publishRealtimeEvent(result.pairId, "pair.changed");
+    return Response.json(result);
   } catch (error) {
     if (error instanceof CloserDomainError && error.code === "DISPLAY_NAME_INVALID") {
       return Response.json({ error: error.code }, { status: 400 });

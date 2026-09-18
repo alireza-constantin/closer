@@ -58,17 +58,19 @@ describe("Connect and invitation-join streaming boundaries", () => {
     expect(invitePage).not.toContain("startOrResumePrivateConversation");
   });
 
-  test("uses the minimal Pair-status projection to transition Pair Home and stops that polling after claim", async () => {
+  test("uses the minimal Pair-status projection through the shared query cache", async () => {
     const pairHome = await source("../components/pair-home.tsx");
     const statusRoute = await source("api/pairs/[pairId]/status/route.ts");
+    const pairLayout = await source("pair/[pairId]/layout.tsx");
 
-    expect(pairHome).toContain('PAIR_HOME_CLAIM_STATUS_POLL_INTERVAL_MS = 4_000');
-    expect(pairHome).toContain('enabled: !isCurrentlyComplete');
-    expect(pairHome).toContain("forceOnForeground: true");
+    expect(pairHome).toContain('PAIR_HOME_STATUS_REFETCH_INTERVAL_MS = 30_000');
+    expect(pairHome).toContain("useQuery({");
     expect(pairHome).toContain('`/api/pairs/${encodeURIComponent(pairId)}/status`');
-    expect(pairHome).toContain("setClaimedParticipantDisplayName(status.otherParticipantDisplayName)");
-    const claimPoll = pairHome.slice(pairHome.indexOf("enabled: !isCurrentlyComplete"), pairHome.indexOf("enabled: hasWaitingConversation"));
-    expect(claimPoll).not.toContain("private-conversations");
+    expect(pairHome).toContain("closerKeys.pairStatus(pairId)");
+    expect(pairHome).toContain("refetchInterval: PAIR_HOME_STATUS_REFETCH_INTERVAL_MS");
+    expect(pairHome).toContain("refetchIntervalInBackground: false");
+    expect(pairHome).toContain("enabled: isCurrentlyComplete");
+    expect(pairLayout).toContain("<PairRealtimeProvider pairId={pairId}>");
     expect(statusRoute).toContain("getPairStatusForParticipant");
     expect(statusRoute).not.toContain("listActivePrivateConversations");
     expect(statusRoute).not.toContain("listEligibleTogetherQuestions");

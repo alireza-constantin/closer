@@ -1,4 +1,4 @@
-import { db, getParticipantByAuthUserId, terminatePair } from "@Closer/auth/closer";
+import { db, getParticipantByAuthUserId, publishRealtimeEvent, terminatePair } from "@Closer/auth/closer";
 
 import { getAuthUserIdFromRequest } from "@/lib/closer-server";
 
@@ -14,6 +14,7 @@ export async function POST(request: Request, context: { params: Promise<{ pairId
   try {
     const { pairId } = await context.params;
     const result = await terminatePair(db, { pairId, participantId: participant.id });
+    await publishRealtimeEvent(pairId, "pair.terminated");
     return Response.json({ pairId: result.pairId, state: result.state, terminatedAt: result.terminatedAt.toISOString() }, { headers: noStoreHeaders });
   } catch {
     return Response.json({ error: "Not found." }, { status: 404, headers: noStoreHeaders });

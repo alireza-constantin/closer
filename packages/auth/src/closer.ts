@@ -1,4 +1,6 @@
 export { db } from "@Closer/db";
+export { getRealtimeBus, publishRealtimeEvent } from "@Closer/db";
+export type { RealtimeEvent, RealtimeEventType } from "@Closer/db";
 export {
   CloserDomainError,
   declinePrivateRound,

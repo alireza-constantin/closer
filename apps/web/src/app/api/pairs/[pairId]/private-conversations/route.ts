@@ -1,4 +1,4 @@
-import { db, listActivePrivateConversations, startOrResumePrivateConversation } from "@Closer/auth/closer";
+import { db, listActivePrivateConversations, publishRealtimeEvent, startOrResumePrivateConversation } from "@Closer/auth/closer";
 
 import { noStoreHeaders, privateDomainErrorResponse, requireRequestParticipant } from "@/lib/private-api";
 
@@ -28,8 +28,10 @@ export async function POST(request: Request, context: { params: Promise<{ pairId
   }
   const { pairId } = await context.params;
   try {
+    const result = await startOrResumePrivateConversation(db, { participantId: participant.id, pairId, category, clientRequestId });
+    await publishRealtimeEvent(pairId, "private.changed");
     return Response.json(
-      await startOrResumePrivateConversation(db, { participantId: participant.id, pairId, category, clientRequestId }),
+      result,
       { status: 201, headers: noStoreHeaders },
     );
   } catch (error) {

@@ -1,4 +1,4 @@
-import { db, startTogetherSession } from "@Closer/auth/closer";
+import { db, publishRealtimeEvent, startTogetherSession } from "@Closer/auth/closer";
 
 import {
   togetherDomainErrorResponse,
@@ -22,8 +22,10 @@ export async function POST(request: Request, context: { params: Promise<{ pairId
 
   const { pairId } = await context.params;
   try {
+    const result = await startTogetherSession(db, { participantId: participant.id, pairId, category, clientRequestId });
+    await publishRealtimeEvent(pairId, "together.changed");
     return Response.json(
-      await startTogetherSession(db, { participantId: participant.id, pairId, category, clientRequestId }),
+      result,
       { status: 201, headers: togetherNoStoreHeaders },
     );
   } catch (error) {

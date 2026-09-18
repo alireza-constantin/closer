@@ -1,4 +1,4 @@
-import { db, submitPrivateAnswer } from "@Closer/auth/closer";
+import { db, publishRealtimeEvent, submitPrivateAnswer } from "@Closer/auth/closer";
 
 import { hideUnviewedReveal, privateDomainErrorResponse, requireRequestParticipant, noStoreHeaders } from "@/lib/private-api";
 
@@ -10,8 +10,10 @@ export async function POST(request: Request, context: { params: Promise<{ pairId
   if (typeof answer !== "string") return Response.json({ error: "Invalid request." }, { status: 400, headers: noStoreHeaders });
   const { pairId, roundId } = await context.params;
   try {
+    const result = await submitPrivateAnswer(db, { participantId: participant.id, pairId, roundId, body: answer });
+    await publishRealtimeEvent(pairId, "private.changed");
     return Response.json(
-      hideUnviewedReveal(await submitPrivateAnswer(db, { participantId: participant.id, pairId, roundId, body: answer })),
+      hideUnviewedReveal(result),
       { headers: noStoreHeaders },
     );
   } catch (error) {

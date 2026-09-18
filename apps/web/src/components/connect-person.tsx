@@ -1,37 +1,33 @@
 "use client";
 
+import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import type { ReactNode } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
-import { useVisiblePolling } from "@/hooks/use-visible-polling";
+import { closerKeys } from "@/lib/closer-query-keys";
 import { isConnectedPairStatus } from "@/lib/pair-status";
 
-const PAIR_STATUS_POLL_INTERVAL_MS = 5_000;
+const PAIR_STATUS_REFETCH_INTERVAL_MS = 30_000;
 
 export default function ConnectPerson({ children, pairId }: { children: ReactNode; pairId: string }) {
   const router = useRouter();
-  const [joinedDisplayName, setJoinedDisplayName] = useState<string | null>(null);
   const [isRedirecting, setIsRedirecting] = useState(false);
-
-  useVisiblePolling({
-    enabled: joinedDisplayName === null && !isRedirecting,
-    forceOnForeground: true,
-    intervalMs: PAIR_STATUS_POLL_INTERVAL_MS,
-    onPoll: async (signal) => {
-      try {
-        const response = await fetch(`/api/pairs/${encodeURIComponent(pairId)}/status`, { cache: "no-store", signal });
-        if (!response.ok) return;
-        const status: unknown = await response.json();
-        if (!isConnectedPairStatus(status)) return;
-        setJoinedDisplayName(status.otherParticipantDisplayName);
-        setIsRedirecting(true);
-        router.replace(`/pair/${pairId}` as never);
-      } catch {
-        // A transient status failure leaves the invite state intact for the next check.
-      }
+  const statusQuery = useQuery({
+    queryKey: closerKeys.pairStatus(pairId),
+    queryFn: async ({ signal }) => {
+      const response = await fetch(`/api/pairs/${encodeURIComponent(pairId)}/status`, { cache: "no-store", signal });
+      if (!response.ok) throw new Error("Unable to refresh Pair status.");
+      return response.json() as Promise<unknown>;
     },
+    refetchInterval: PAIR_STATUS_REFETCH_INTERVAL_MS,
   });
+  const joinedDisplayName = isConnectedPairStatus(statusQuery.data) ? statusQuery.data.otherParticipantDisplayName : null;
+  useEffect(() => {
+    if (!joinedDisplayName || isRedirecting) return;
+    setIsRedirecting(true);
+    router.replace(`/pair/${pairId}` as never);
+  }, [isRedirecting, joinedDisplayName, pairId, router]);
 
   return (
     <>

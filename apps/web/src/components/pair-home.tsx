@@ -1,5 +1,6 @@
 "use client";
 
+import { useQuery } from "@tanstack/react-query";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Check, ChevronRight, LockKeyhole, MessageCircleMore, Pencil, Sparkles, X } from "lucide-react";
 import Link from "next/link";
@@ -18,13 +19,13 @@ import { FormServerError } from "@/components/closer/feedback";
 import { CloserModeCard } from "@/components/closer/navigation";
 import { CloserPageTitle, CloserSubtitle } from "@/components/closer/typography";
 import { PairTerminationControl } from "@/components/pair-termination-control";
-import { useVisiblePolling } from "@/hooks/use-visible-polling";
+import { closerKeys } from "@/lib/closer-query-keys";
 import { isConnectedPairStatus } from "@/lib/pair-status";
 import { togetherPickerPath, type PairRelationshipType } from "@/lib/together-picker-path";
 import { intendedPersonNameSchema, type IntendedPersonNameValues } from "@/lib/validation";
 
-export const ACTIVE_CONVERSATIONS_POLL_INTERVAL_MS = 3_500;
-export const PAIR_HOME_CLAIM_STATUS_POLL_INTERVAL_MS = 4_000;
+export const ACTIVE_CONVERSATIONS_REFETCH_INTERVAL_MS = 30_000;
+export const PAIR_HOME_STATUS_REFETCH_INTERVAL_MS = 30_000;
 
 type ActiveConversation = {
   id: string;
@@ -51,20 +52,6 @@ function parseActiveConversations(value: unknown): ActiveConversation[] | null {
     && "displayName" in conversation.creator && typeof conversation.creator.displayName === "string"
     && "otherParticipantDisplayName" in conversation && typeof conversation.otherParticipantDisplayName === "string"
   )) ? value as ActiveConversation[] : null;
-}
-
-function sameConversations(current: ActiveConversation[], next: ActiveConversation[]) {
-  return current.length === next.length && current.every((conversation, index) => {
-    const candidate = next[index];
-    return candidate
-      && conversation.id === candidate.id
-      && conversation.state === candidate.state
-      && conversation.questionCount === candidate.questionCount
-      && conversation.currentRound?.id === candidate.currentRound?.id
-      && conversation.candidate?.id === candidate.candidate?.id
-      && conversation.currentRound?.question.text === candidate.currentRound?.question.text
-      && conversation.candidate?.question.text === candidate.candidate?.question.text;
-  });
 }
 
 function statusCopy(conversation: ActiveConversation) {
@@ -204,42 +191,33 @@ export default function PairHome({
   relationshipType: PairRelationshipType;
   activeConversations: ActiveConversation[];
 }) {
-  const [activeConversations, setActiveConversations] = useState(initialActiveConversations);
-  const [claimedParticipantDisplayName, setClaimedParticipantDisplayName] = useState<string | null>(isComplete ? memberNames[1] : null);
+  const statusQuery = useQuery({
+    queryKey: closerKeys.pairStatus(pairId),
+    queryFn: async ({ signal }) => {
+      const response = await fetch(`/api/pairs/${encodeURIComponent(pairId)}/status`, { cache: "no-store", signal });
+      if (!response.ok) throw new Error("Unable to refresh Pair status.");
+      return response.json() as Promise<unknown>;
+    },
+    initialData: isComplete && memberNames[1] ? { state: "connected" as const, otherParticipantDisplayName: memberNames[1] } : { state: "waiting" as const },
+    refetchInterval: PAIR_HOME_STATUS_REFETCH_INTERVAL_MS,
+    refetchIntervalInBackground: false,
+  });
+  const claimedParticipantDisplayName = isConnectedPairStatus(statusQuery.data) ? statusQuery.data.otherParticipantDisplayName : null;
   const isCurrentlyComplete = claimedParticipantDisplayName !== null;
-  const hasWaitingConversation = activeConversations.some((conversation) => ["WAITING", "WAITING_FOR_REVEAL", "WAITING_FOR_CREATOR"].includes(conversation.state));
-
-  // This is deliberately a separate, tiny projection: a remote initial claim
-  // must update this home without re-reading Private, Together, or history data.
-  useVisiblePolling({
-    enabled: !isCurrentlyComplete,
-    forceOnForeground: true,
-    intervalMs: PAIR_HOME_CLAIM_STATUS_POLL_INTERVAL_MS,
-    onPoll: async (signal) => {
-      try {
-        const response = await fetch(`/api/pairs/${encodeURIComponent(pairId)}/status`, { cache: "no-store", signal });
-        if (!response.ok) return;
-        const status: unknown = await response.json();
-        if (isConnectedPairStatus(status)) setClaimedParticipantDisplayName(status.otherParticipantDisplayName);
-      } catch {
-        // A transient foreground refresh must not discard the current Pair Home.
-      }
+  const conversationsQuery = useQuery({
+    queryKey: closerKeys.privateConversations(pairId),
+    queryFn: async ({ signal }) => {
+      const response = await fetch(`/api/pairs/${encodeURIComponent(pairId)}/private-conversations`, { cache: "no-store", signal });
+      const next = response.ok ? parseActiveConversations(await response.json()) : null;
+      if (!next) throw new Error("Unable to refresh Private conversations.");
+      return next;
     },
+    initialData: initialActiveConversations,
+    enabled: isCurrentlyComplete,
+    refetchInterval: isCurrentlyComplete ? ACTIVE_CONVERSATIONS_REFETCH_INTERVAL_MS : false,
+    refetchIntervalInBackground: false,
   });
-
-  useVisiblePolling({
-    enabled: hasWaitingConversation,
-    intervalMs: ACTIVE_CONVERSATIONS_POLL_INTERVAL_MS,
-    onPoll: async (signal) => {
-      try {
-        const response = await fetch(`/api/pairs/${encodeURIComponent(pairId)}/private-conversations`, { cache: "no-store", signal });
-        const next = response.ok ? parseActiveConversations(await response.json()) : null;
-        if (next) setActiveConversations((current) => sameConversations(current, next) ? current : next);
-      } catch {
-        // A transient foreground refresh must not remove visible conversations.
-      }
-    },
-  });
+  const activeConversations = conversationsQuery.data;
 
   return (
     <CloserPageShell>

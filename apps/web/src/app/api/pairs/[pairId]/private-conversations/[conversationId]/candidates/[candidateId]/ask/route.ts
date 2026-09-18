@@ -1,4 +1,4 @@
-import { askPrivateQuestionCandidate, db } from "@Closer/auth/closer";
+import { askPrivateQuestionCandidate, db, publishRealtimeEvent } from "@Closer/auth/closer";
 
 import { noStoreHeaders, privateDomainErrorResponse, requireRequestParticipant } from "@/lib/private-api";
 
@@ -15,8 +15,10 @@ export async function POST(
   }
   const { pairId, conversationId, candidateId } = await context.params;
   try {
+    const result = await askPrivateQuestionCandidate(db, { participantId: participant.id, pairId, conversationId, candidateId, clientRequestId });
+    await publishRealtimeEvent(pairId, "private.changed");
     return Response.json(
-      await askPrivateQuestionCandidate(db, { participantId: participant.id, pairId, conversationId, candidateId, clientRequestId }),
+      result,
       { status: 201, headers: noStoreHeaders },
     );
   } catch (error) {
