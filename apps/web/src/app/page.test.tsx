@@ -45,6 +45,11 @@ mock.module("@/server/modules/pairs/pair.service", () => ({
     pair: { relationshipType: "friend", intendedPersonName: "Nima" },
     members: [{ slot: "first", displayName: "Ali" }],
   }),
+  getPairEntry: async () => ({
+    state: "active" as const,
+    pair: { relationshipType: "friend", intendedPersonName: "Nima" },
+    members: [{ slot: "first" as const, displayName: "Ali" }],
+  }),
   listPairPrivateConversations: async () => [],
   listParticipantSpaces: listActivePairsForParticipant,
 }));

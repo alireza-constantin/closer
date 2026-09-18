@@ -10,6 +10,10 @@ export function getAuthorizedPair(participantId: string, pairId: string) {
   return closer.getPairForParticipant(closer.db, participantId, pairId);
 }
 
+export function getPairEntry(participantId: string, pairId: string) {
+  return closer.getPairEntryForParticipant(closer.db, participantId, pairId);
+}
+
 export function getAuthorizedPairStatus(participantId: string, pairId: string) {
   return closer.getPairStatusForParticipant(closer.db, participantId, pairId);
 }

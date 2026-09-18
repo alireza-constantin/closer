@@ -3,6 +3,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { createCloserAuthMock } from "@/test/closer-auth-mock";
 
 let relationshipType: "partner" | "friend" = "friend";
+let entryState: "active" | "terminated" | "unauthorized" = "active";
 
 mock.module("@Closer/auth/closer", () =>
   createCloserAuthMock({
@@ -35,10 +36,15 @@ mock.module("@/server/auth/current-participant", () => ({
   getCurrentParticipant: async () => ({ id: "participant-1" }),
 }));
 mock.module("@/server/modules/pairs/pair.service", () => ({
-  getAuthorizedPair: async () => ({
-    pair: { relationshipType, intendedPersonName: "Nima" },
-    members: [{ slot: "first", displayName: "Ali" }],
-  }),
+  getPairEntry: async () => {
+    if (entryState === "unauthorized") throw new Error("PAIR_NOT_FOUND");
+    if (entryState === "terminated") return { state: "terminated" as const, pairId: "pair-1" };
+    return {
+      state: "active" as const,
+      pair: { relationshipType, intendedPersonName: "Nima" },
+      members: [{ slot: "first" as const, displayName: "Ali" }],
+    };
+  },
   listPairPrivateConversations: async () => [],
   listParticipantSpaces: async () => [{ pairId: "pair-1" }],
 }));
@@ -54,12 +60,16 @@ mock.module("next/navigation", () => ({
 }));
 
 mock.module("@/features/pair/components/pair-home", () => ({ default: "pair-home" }));
+mock.module("@/features/pair/components/terminated-pair-screen", () => ({
+  default: "terminated-pair-screen",
+}));
 const { default: PairPage } = await import("./page");
 
 describe("Pair route entry", () => {
   test.each(["partner", "friend"] as const)(
     "passes an authorized %s Pair type to Pair Home",
     async (type) => {
+      entryState = "active";
       relationshipType = type;
       const element = await PairPage({ params: Promise.resolve({ pairId: "pair-1" }) });
 
@@ -73,4 +83,18 @@ describe("Pair route entry", () => {
       });
     },
   );
+
+  test("renders the ended Space state for a former participant of a terminated Pair", async () => {
+    entryState = "terminated";
+    const element = await PairPage({ params: Promise.resolve({ pairId: "pair-1" }) });
+
+    expect(element.type).toBe("terminated-pair-screen");
+  });
+
+  test("preserves not-found behavior for an unrelated participant", async () => {
+    entryState = "unauthorized";
+    await expect(PairPage({ params: Promise.resolve({ pairId: "pair-1" }) })).rejects.toThrow(
+      "notFound",
+    );
+  });
 });

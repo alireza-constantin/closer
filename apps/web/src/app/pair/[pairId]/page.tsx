@@ -1,9 +1,10 @@
 import { notFound } from "next/navigation";
 
 import PairHome from "@/features/pair/components/pair-home";
+import TerminatedPairScreen from "@/features/pair/components/terminated-pair-screen";
 import { getCurrentParticipant } from "@/server/auth/current-participant";
 import {
-  getAuthorizedPair,
+  getPairEntry,
   listPairPrivateConversations,
   listParticipantSpaces,
 } from "@/server/modules/pairs/pair.service";
@@ -20,10 +21,12 @@ export default async function PairPage({ params }: { params: Promise<{ pairId: s
   if (!currentParticipant) notFound();
 
   try {
-    const [pairView, spaces] = await Promise.all([
-      getAuthorizedPair(currentParticipant.id, pairId),
+    const [entry, spaces] = await Promise.all([
+      getPairEntry(currentParticipant.id, pairId),
       listParticipantSpaces(currentParticipant.id),
     ]);
+    if (entry.state === "terminated") return <TerminatedPairScreen />;
+    const pairView = entry;
     const firstMember = pairView.members.find((member) => member.slot === "first");
     const secondMember = pairView.members.find((member) => member.slot === "second");
 

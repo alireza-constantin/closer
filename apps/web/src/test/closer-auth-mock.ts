@@ -31,6 +31,7 @@ export function createCloserAuthMock(overrides: CloserAuthMock = {}): CloserAuth
     advanceTogetherSession: unexpectedCloserAuthCall("advanceTogetherSession"),
     askPrivateQuestionCandidate: unexpectedCloserAuthCall("askPrivateQuestionCandidate"),
     createPairForParticipant: unexpectedCloserAuthCall("createPairForParticipant"),
+    getPairEntryForParticipant: unexpectedCloserAuthCall("getPairEntryForParticipant"),
     getPairForParticipant: unexpectedCloserAuthCall("getPairForParticipant"),
     getPairStatusForParticipant: unexpectedCloserAuthCall("getPairStatusForParticipant"),
     getInitialInviteStatus: unexpectedCloserAuthCall("getInitialInviteStatus"),

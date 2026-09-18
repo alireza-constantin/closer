@@ -183,22 +183,30 @@ export default function CreatePairForm({ isFirstSpace = true }: { isFirstSpace?:
                   <Field key={value}>
                     <FieldLabel
                       className={cn(
-                        "focus-within:ring-closer-lavender focus-within:ring-offset-closer-cream min-h-22 w-full cursor-pointer flex-col justify-center rounded-4xl border-2 border-transparent p-3 px-1 transition-[transform,border-color] focus-within:ring-2 focus-within:ring-offset-2 hover:-translate-y-0.5",
-                        value === "partner" ? "bg-closer-peach" : "bg-closer-lavender-soft",
-                        field.value === value && "border-closer-navy",
+                        "focus-within:ring-closer-lavender focus-within:ring-offset-closer-cream min-h-24 w-full cursor-pointer items-center rounded-4xl border-2 p-3 text-left transition-[transform,border-color,box-shadow] focus-within:ring-2 focus-within:ring-offset-2 hover:-translate-y-0.5 active:translate-y-px",
+                        value === "partner"
+                          ? "border-closer-peach bg-closer-peach/65"
+                          : "border-closer-lavender-soft bg-closer-lavender-soft/65",
+                        field.value === value &&
+                          "border-closer-navy bg-white/75 shadow-[0_7px_16px_rgba(27,33,78,0.11)]",
                       )}
                     >
                       <RadioGroupItem
-                        aria-label={value === "partner" ? "Partner" : "Friend"}
-                        className="sr-only"
+                        aria-describedby={`${value}-relationship-description`}
+                        className="border-closer-navy text-closer-navy data-checked:bg-closer-coral data-checked:text-closer-navy relative"
                         value={value}
                       />
-                      <span className="font-extrabold">
-                        {value === "partner" ? "Partner" : "Friend"}
+                      <span className="ml-2 min-w-0">
+                        <span className="block font-extrabold">
+                          {value === "partner" ? "Partner" : "Friend"}
+                        </span>
+                        <small
+                          className="text-closer-navy/70 block text-xs"
+                          id={`${value}-relationship-description`}
+                        >
+                          {value === "partner" ? "For the two of you" : "For close friends"}
+                        </small>
                       </span>
-                      <small className="text-closer-navy/70 text-center text-xs">
-                        {value === "partner" ? "For the two of you" : "For close friends"}
-                      </small>
                     </FieldLabel>
                   </Field>
                 ))}

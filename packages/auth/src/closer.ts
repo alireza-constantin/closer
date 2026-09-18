@@ -7,6 +7,7 @@ export {
   advanceTogetherSession,
   askPrivateQuestionCandidate,
   createPairForParticipant,
+  getPairEntryForParticipant,
   getPairForParticipant,
   getPairStatusForParticipant,
   getInitialInviteStatus,

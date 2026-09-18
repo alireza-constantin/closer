@@ -589,9 +589,9 @@ describe("Closer Slice 01A", () => {
     );
   });
 
-  test("redeems an opaque initial invite into the empty second slot and authorizes both members", async () => {
-    const created = await createPair();
-    const invitee = await createParticipant("Invitee");
+  test("redeems an opaque initial invite into the empty second slot with distinct member identities", async () => {
+    const created = await createPair("Alireza");
+    const invitee = await createParticipant("Fafa");
 
     const redemption = await redeemInitialInvite(db, {
       token: created.invite.token,
@@ -608,8 +608,13 @@ describe("Closer Slice 01A", () => {
 
     const creatorView = await getPairForParticipant(db, created.creator.id, created.pair.id);
     const inviteeView = await getPairForParticipant(db, invitee.id, created.pair.id);
-    expect(creatorView.members).toHaveLength(2);
-    expect(inviteeView.members).toHaveLength(2);
+    const expectedMembers = [
+      { participantId: created.creator.id, slot: "first", displayName: "Alireza" },
+      { participantId: invitee.id, slot: "second", displayName: "Fafa" },
+    ];
+    expect(created.creator.id).not.toBe(invitee.id);
+    expect(creatorView.members).toEqual(expect.arrayContaining(expectedMembers));
+    expect(inviteeView.members).toEqual(expect.arrayContaining(expectedMembers));
     expect(
       (
         await db

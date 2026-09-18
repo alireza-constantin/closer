@@ -358,6 +358,11 @@ export default function PairHome({
     ? statusQuery.data.otherParticipantDisplayName
     : null;
   const isCurrentlyComplete = claimedParticipantDisplayName !== null;
+  // `pairStatus` names the other participant relative to the viewer. Pair
+  // Home's heading, by contrast, is ordered by Pair slots. Keep the
+  // server-projected second-slot identity once present so the second member
+  // cannot turn “first + second” into “first + first”.
+  const secondMemberDisplayName = memberNames[1] ?? claimedParticipantDisplayName;
   const conversationsQuery = useQuery({
     queryKey: closerKeys.privateConversations(pairId),
     queryFn: async ({ signal }) => {
@@ -396,7 +401,7 @@ export default function PairHome({
         <CloserCompanions />
         <CloserPageTitle>
           {isCurrentlyComplete
-            ? `${memberNames[0]} + ${claimedParticipantDisplayName}`
+            ? `${memberNames[0]} + ${secondMemberDisplayName}`
             : `${memberNames[0]} + your person`}
         </CloserPageTitle>
         <CloserSubtitle>What do you feel like doing?</CloserSubtitle>

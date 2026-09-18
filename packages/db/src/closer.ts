@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 
-import { and, asc, desc, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 
 import { createDb } from "./index";
 import {
@@ -1285,6 +1285,41 @@ export async function getPairForParticipant(
     .where(and(eq(pairMembership.pairId, pairId), isNull(pairMembership.endedAt)));
 
   return { pair: access.pair, members };
+}
+
+/**
+ * Resolves the Pair landing state without disclosing a terminated Pair to a
+ * participant who never belonged to it. Active Pair data remains the existing
+ * active-membership projection; former members receive only the terminal
+ * state, not a second history projection.
+ */
+export async function getPairEntryForParticipant(
+  database: Database,
+  participantId: string,
+  pairId: string,
+) {
+  try {
+    const pairView = await getPairForParticipant(database, participantId, pairId);
+    return { state: "active" as const, ...pairView };
+  } catch (error) {
+    if (!(error instanceof CloserDomainError) || error.code !== "PAIR_NOT_FOUND") throw error;
+  }
+
+  const [formerMembership] = await database
+    .select({ pairId: pairMembership.pairId })
+    .from(pairMembership)
+    .innerJoin(pair, eq(pairMembership.pairId, pair.id))
+    .where(
+      and(
+        eq(pairMembership.pairId, pairId),
+        eq(pairMembership.participantId, participantId),
+        isNotNull(pair.terminatedAt),
+      ),
+    )
+    .limit(1);
+
+  if (!formerMembership) throw new CloserDomainError("PAIR_NOT_FOUND");
+  return { state: "terminated" as const, pairId: formerMembership.pairId };
 }
 
 export async function getPairStatusForParticipant(

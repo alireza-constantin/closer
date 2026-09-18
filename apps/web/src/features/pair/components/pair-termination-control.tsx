@@ -29,7 +29,7 @@ export function PairTerminationControl({
         method: "POST",
       });
       if (!response.ok) throw new Error();
-      router.replace(`/pair/${pairId}/history` as never);
+      router.replace(`/pair/${pairId}` as never);
     } catch {
       setError("We couldn't end this space. Please try again.");
       setPending(false);

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
 import { QueryClient } from "@tanstack/react-query";
 
 import { createPairRealtimeSubscription } from "./pair-realtime-provider";
@@ -91,6 +91,26 @@ describe("PairRealtimeProvider transport subscription", () => {
       JSON.stringify({ version: 1, pairId: "pair-b", type: "pair.changed" }),
     );
     expect(queryClient.getQueryState(closerKeys.pairStatus("pair-a"))?.isInvalidated).toBe(false);
+  });
+
+  test("closes the EventSource and transitions the Pair route when termination reaches an open UI", () => {
+    Object.assign(globalThis, { EventSource: FakeEventSource });
+    const onTerminated = mock(() => {});
+    createPairRealtimeSubscription(client(), "pair-a", onTerminated);
+    const source = FakeEventSource.instances[0]!;
+
+    source.emit(
+      "pair.terminated",
+      JSON.stringify({ version: 1, pairId: "pair-a", type: "pair.terminated" }),
+    );
+
+    expect(source.closed).toBe(true);
+    expect(onTerminated).toHaveBeenCalledTimes(1);
+    source.emit(
+      "pair.terminated",
+      JSON.stringify({ version: 1, pairId: "pair-a", type: "pair.terminated" }),
+    );
+    expect(onTerminated).toHaveBeenCalledTimes(1);
   });
 
   test("changing Pair subscriptions closes the old source and stale old events cannot invalidate the new cache", () => {
