@@ -1,16 +1,19 @@
 import { describe, expect, mock, test } from "bun:test";
 
+import { createCloserAuthMock } from "@/test/closer-auth-mock";
+
 const resolveOrCreateParticipant = mock(async () => ({
   id: "participant-1",
   displayName: "Ari",
 }));
 
-mock.module("@Closer/auth/closer", () => ({
-  db: {},
-  resolveOrCreateParticipant,
-}));
+mock.module("@Closer/auth/closer", () =>
+  createCloserAuthMock({
+    resolveOrCreateParticipant,
+  }),
+);
 
-mock.module("@/lib/closer-server", () => ({
+mock.module("@/server/auth/current-participant", () => ({
   getAuthUserIdFromRequest: async () => "auth-user-1",
 }));
 

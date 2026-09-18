@@ -1,17 +1,19 @@
 import { describe, expect, mock, test } from "bun:test";
 
+import { createCloserAuthMock } from "@/test/closer-auth-mock";
+
 let relationshipType: "partner" | "friend" = "partner";
 const getPairForParticipant = mock(async () => ({ pair: { relationshipType } }));
 
-mock.module("@Closer/auth/closer", () => ({
-  db: {},
-  getPairForParticipant,
-}));
+mock.module("@Closer/auth/closer", () =>
+  createCloserAuthMock({
+    getPairForParticipant,
+  }),
+);
 
-mock.module("@/lib/closer-server", () => ({
+mock.module("@/server/auth/current-participant", () => ({
   getCurrentParticipant: async () => ({ id: "participant-1" }),
 }));
-
 mock.module("next/navigation", () => ({
   notFound: () => {
     throw new Error("notFound");

@@ -1,14 +1,14 @@
 import { Suspense } from "react";
 
-import AnonymousSession from "@/components/anonymous-session";
+import AnonymousSession from "@/features/auth/components/anonymous-session";
 import {
   JoinInvitationDetailsSkeleton,
   JoinInvitationFrame,
-} from "@/components/join-invitation-frame";
+} from "@/features/invite/components/join-invitation-frame";
 import { CloserPageShell, CloserTopbar } from "@/components/closer/page-shell";
-import JoinPairForm from "@/components/join-pair-form";
+import JoinPairForm from "@/features/invite/components/join-pair-form";
 import { db, getInitialInviteLanding } from "@Closer/auth/closer";
-import { getCurrentParticipant } from "@/lib/closer-server";
+import { getCurrentParticipant } from "@/server/auth/current-participant";
 
 async function JoinInvitationDetails({ token }: { token: string }) {
   const [invite, claimant] = await Promise.all([

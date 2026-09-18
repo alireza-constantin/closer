@@ -35,16 +35,16 @@ describe("App Router navigation feedback", () => {
       join(appDirectory, "pair/[pairId]/together/friend/loading.tsx"),
     ).text();
     const frameSource = await Bun.file(
-      join(appDirectory, "..", "components/together-picker-frame.tsx"),
+      join(appDirectory, "..", "features/together-session/components/together-picker-frame.tsx"),
     ).text();
     const modeCardSource = await Bun.file(
       join(appDirectory, "..", "components/closer/navigation.tsx"),
     ).text();
     const pairHomeSource = await Bun.file(
-      join(appDirectory, "..", "components/pair-home.tsx"),
+      join(appDirectory, "..", "features/pair/components/pair-home.tsx"),
     ).text();
     const createPairSource = await Bun.file(
-      join(appDirectory, "..", "components/create-pair-form.tsx"),
+      join(appDirectory, "..", "features/pair/components/create-pair-form.tsx"),
     ).text();
 
     expect(partnerSource).toContain('relationshipType="partner"');
@@ -56,7 +56,8 @@ describe("App Router navigation feedback", () => {
     expect(partnerLoadingSource).toContain("return null;");
     expect(friendLoadingSource).toContain("return null;");
     expect(modeCardSource).toContain("prefetch={prefetch}");
-    expect(pairHomeSource).toContain('prefetch title="Talk Together"');
+    expect(pairHomeSource).toContain('title="Talk Together"');
+    expect(pairHomeSource).toContain("prefetch");
     expect(createPairSource).toContain("prefetch");
     expect(createPairSource).toContain('title="Together"');
     expect(frameSource).toContain("CloserWordmark");
@@ -78,14 +79,14 @@ describe("App Router navigation feedback", () => {
   });
 
   test.each([
-    "components/connect-page-frame.tsx",
-    "components/rejoin-controls.tsx",
-    "components/together-picker-frame.tsx",
-    "components/private-picker.tsx",
-    "components/private-conversation-screen.tsx",
-    "components/private-round-screen.tsx",
-    "components/history-screen.tsx",
-    "components/together-session-screen.tsx",
+    "features/invite/components/connect-page-frame.tsx",
+    "features/invite/components/rejoin-controls.tsx",
+    "features/together-session/components/together-picker-frame.tsx",
+    "features/private-conversation/components/private-picker.tsx",
+    "features/private-conversation/components/private-conversation-screen.tsx",
+    "features/private-conversation/components/private-round-screen.tsx",
+    "app/pair/[pairId]/history/_components/history-screen.tsx",
+    "features/together-session/components/together-session-screen.tsx",
   ])("uses the shared Next Link-backed back control in %s", async (componentFile) => {
     const source = await Bun.file(join(appDirectory, "..", componentFile)).text();
 
@@ -104,12 +105,12 @@ describe("App Router navigation feedback", () => {
   });
 
   test.each([
-    "components/zero-space-home.tsx",
-    "components/your-spaces.tsx",
-    "components/pair-home.tsx",
-    "components/private-conversation-screen.tsx",
-    "components/private-round-screen.tsx",
-    "components/create-pair-form.tsx",
+    "features/pair/components/zero-space-home.tsx",
+    "features/pair/components/your-spaces.tsx",
+    "features/pair/components/pair-home.tsx",
+    "features/private-conversation/components/private-conversation-screen.tsx",
+    "features/private-conversation/components/private-round-screen.tsx",
+    "features/pair/components/create-pair-form.tsx",
     "components/closer/page-shell.tsx",
   ])("explicitly prefetches known internal destinations in %s", async (componentFile) => {
     const source = await Bun.file(join(appDirectory, "..", componentFile)).text();
@@ -119,13 +120,13 @@ describe("App Router navigation feedback", () => {
 
   test("has no browser-history or full-page internal navigation in product code", async () => {
     const componentFiles = [
-      "components/connect-person.tsx",
-      "components/private-picker.tsx",
-      "components/private-conversation-screen.tsx",
-      "components/private-round-screen.tsx",
-      "components/together-picker.tsx",
-      "components/together-session-screen.tsx",
-      "components/pair-termination-control.tsx",
+      "features/invite/components/connect-person.tsx",
+      "features/private-conversation/components/private-picker.tsx",
+      "features/private-conversation/components/private-conversation-screen.tsx",
+      "features/private-conversation/components/private-round-screen.tsx",
+      "features/together-session/components/together-picker.tsx",
+      "features/together-session/components/together-session-screen.tsx",
+      "features/pair/components/pair-termination-control.tsx",
     ];
 
     for (const componentFile of componentFiles) {

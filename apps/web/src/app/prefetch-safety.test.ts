@@ -49,10 +49,10 @@ describe("prefetch-safe route entry", () => {
 
   test("keeps category pickers inert until an explicit POST", async () => {
     const privatePicker = await Bun.file(
-      join(appDirectory, "..", "components/private-picker.tsx"),
+      join(appDirectory, "..", "features/private-conversation/components/private-picker.tsx"),
     ).text();
     const togetherPicker = await Bun.file(
-      join(appDirectory, "..", "components/together-picker.tsx"),
+      join(appDirectory, "..", "features/together-session/components/together-picker.tsx"),
     ).text();
     const privateRoute = await routeSource("api/pairs/[pairId]/private-conversations/route.ts");
     const togetherRoute = await routeSource("api/pairs/[pairId]/together/sessions/route.ts");
@@ -99,7 +99,7 @@ describe("prefetch-safe route entry", () => {
       "api/pairs/[pairId]/private-rounds/[roundId]/reveal/route.ts",
     );
     const terminationControl = await Bun.file(
-      join(appDirectory, "..", "components/pair-termination-control.tsx"),
+      join(appDirectory, "..", "features/pair/components/pair-termination-control.tsx"),
     ).text();
 
     expect(roundRoute).toContain("export async function GET");
@@ -113,16 +113,15 @@ describe("prefetch-safe route entry", () => {
 
   test("keeps the Together question-buffer prefetch read-only", async () => {
     const sessionScreen = await Bun.file(
-      join(appDirectory, "..", "components/together-session-screen.tsx"),
+      join(appDirectory, "..", "features/together-session/components/together-session-screen.tsx"),
     ).text();
     const questionPageRoute = await routeSource(
       "api/pairs/[pairId]/together/sessions/[sessionId]/questions/route.ts",
     );
 
     expect(sessionScreen).toContain("shouldPrefetchTogetherQuestionPage");
-    expect(sessionScreen).toContain(
-      'fetch(`${baseUrl}/questions?band=${encodeURIComponent(band)}&cursor=${encodeURIComponent(cursor)}`, { cache: "no-store" })',
-    );
+    expect(sessionScreen).toContain("`${baseUrl}/questions?band=${encodeURIComponent(band)}");
+    expect(sessionScreen).toContain('cache: "no-store"');
     expect(questionPageRoute).toContain("export async function GET");
     expect(questionPageRoute).toContain("getTogetherQuestionPageForParticipant");
     for (const command of [

@@ -4,7 +4,7 @@ import {
   togetherDomainErrorResponse,
   togetherNoStoreHeaders,
   requireTogetherRequestParticipant,
-} from "@/lib/together-api";
+} from "@/server/http/together-http";
 
 export async function POST(
   request: Request,

@@ -1,13 +1,12 @@
-import {
-  db,
-  getPairForParticipant,
-  listActivePairsForParticipant,
-  listActivePrivateConversations,
-} from "@Closer/auth/closer";
 import { notFound } from "next/navigation";
 
-import PairHome from "@/components/pair-home";
-import { getCurrentParticipant } from "@/lib/closer-server";
+import PairHome from "@/features/pair/components/pair-home";
+import { getCurrentParticipant } from "@/server/auth/current-participant";
+import {
+  getAuthorizedPair,
+  listPairPrivateConversations,
+  listParticipantSpaces,
+} from "@/server/modules/pairs/pair.service";
 
 // Pair membership can change in another browser while this route is open.
 // Always resolve the current participant-relative state on navigation/refresh
@@ -22,15 +21,15 @@ export default async function PairPage({ params }: { params: Promise<{ pairId: s
 
   try {
     const [pairView, spaces] = await Promise.all([
-      getPairForParticipant(db, currentParticipant.id, pairId),
-      listActivePairsForParticipant(db, currentParticipant.id),
+      getAuthorizedPair(currentParticipant.id, pairId),
+      listParticipantSpaces(currentParticipant.id),
     ]);
     const firstMember = pairView.members.find((member) => member.slot === "first");
     const secondMember = pairView.members.find((member) => member.slot === "second");
 
     if (!firstMember) notFound();
     const activeConversations = secondMember
-      ? await listActivePrivateConversations(db, { participantId: currentParticipant.id, pairId })
+      ? await listPairPrivateConversations(currentParticipant.id, pairId)
       : [];
     return (
       <PairHome

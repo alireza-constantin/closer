@@ -1,8 +1,8 @@
 import { db, getFormerEraHistoryForParticipant } from "@Closer/auth/closer";
 import { notFound } from "next/navigation";
 
-import { HistoryScreen } from "@/components/history-screen";
-import { getCurrentParticipant } from "@/lib/closer-server";
+import { HistoryScreen } from "@/app/pair/[pairId]/history/_components/history-screen";
+import { getCurrentParticipant } from "@/server/auth/current-participant";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;

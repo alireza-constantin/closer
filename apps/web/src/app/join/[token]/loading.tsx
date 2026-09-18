@@ -1,7 +1,7 @@
 import {
   JoinInvitationDetailsSkeleton,
   JoinInvitationFrame,
-} from "@/components/join-invitation-frame";
+} from "@/features/invite/components/join-invitation-frame";
 import { CloserPageShell, CloserTopbar } from "@/components/closer/page-shell";
 
 export default function Loading() {

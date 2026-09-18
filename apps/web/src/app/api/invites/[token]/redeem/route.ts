@@ -7,8 +7,8 @@ import {
   resolveOrCreateParticipant,
 } from "@Closer/auth/closer";
 
-import { getAuthUserIdFromRequest } from "@/lib/closer-server";
-import { joinPairSchema } from "@/lib/validation";
+import { getAuthUserIdFromRequest } from "@/server/auth/current-participant";
+import { joinPairSchema } from "@/contracts/invite/invite.schema";
 
 export async function POST(request: Request, context: { params: Promise<{ token: string }> }) {
   const authUserId = await getAuthUserIdFromRequest(request.headers);

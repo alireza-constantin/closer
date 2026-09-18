@@ -4,7 +4,7 @@ import {
   privateDomainErrorResponse,
   requireRequestParticipant,
   noStoreHeaders,
-} from "@/lib/private-api";
+} from "@/server/http/private-http";
 
 export async function PUT(
   request: Request,

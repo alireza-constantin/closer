@@ -1,8 +1,8 @@
-import { db, getTogetherSessionPlaybackForParticipant } from "@Closer/auth/closer";
 import { notFound, redirect } from "next/navigation";
 
-import TogetherSessionScreen from "@/components/together-session-screen";
-import { getCurrentParticipant } from "@/lib/closer-server";
+import TogetherSessionScreen from "@/features/together-session/components/together-session-screen";
+import { getCurrentParticipant } from "@/server/auth/current-participant";
+import { getTogetherSessionPlayback } from "@/server/modules/together-sessions/together-session.service";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -17,7 +17,7 @@ export default async function TogetherSessionPage({
   if (!currentParticipant) notFound();
   let view;
   try {
-    view = await getTogetherSessionPlaybackForParticipant(db, {
+    view = await getTogetherSessionPlayback({
       participantId: currentParticipant.id,
       pairId,
       sessionId,

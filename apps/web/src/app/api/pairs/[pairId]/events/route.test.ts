@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 
+import { createCloserAuthMock } from "@/test/closer-auth-mock";
+
 let authUserId: string | null = "auth-a";
 let participant: { id: string } | null = { id: "participant-a" };
 let membershipAllowed = true;
@@ -16,15 +18,19 @@ const subscribe = mock((pairId: string, callback: typeof subscriber) => {
   };
 });
 
-mock.module("@Closer/auth/closer", () => ({
-  getParticipantByAuthUserId: async () => participant,
-  getPairForParticipant: async () => {
-    if (!membershipAllowed) throw new Error("PAIR_NOT_FOUND");
-    return { pair: { id: "pair-a" } };
-  },
-}));
+mock.module("@Closer/auth/closer", () =>
+  createCloserAuthMock({
+    getParticipantByAuthUserId: async () => participant,
+    getPairForParticipant: async () => {
+      if (!membershipAllowed) throw new Error("PAIR_NOT_FOUND");
+      return { pair: { id: "pair-a" } };
+    },
+  }),
+);
 mock.module("@Closer/db", () => ({ db: {}, getRealtimeBus: () => ({ subscribe }) }));
-mock.module("@/lib/closer-server", () => ({ getAuthUserIdFromRequest: async () => authUserId }));
+mock.module("@/server/auth/current-participant", () => ({
+  getAuthUserIdFromRequest: async () => authUserId,
+}));
 
 const { GET } = await import("./route");
 

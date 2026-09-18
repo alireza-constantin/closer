@@ -5,7 +5,7 @@ import {
   redeemRejoinInvite,
 } from "@Closer/auth/closer";
 
-import { getAuthUserIdFromRequest } from "@/lib/closer-server";
+import { getAuthUserIdFromRequest } from "@/server/auth/current-participant";
 
 export async function POST(request: Request, context: { params: Promise<{ token: string }> }) {
   const authUserId = await getAuthUserIdFromRequest(request.headers);

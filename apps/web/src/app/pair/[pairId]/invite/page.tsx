@@ -2,10 +2,12 @@ import { Suspense } from "react";
 import { db, getPairForParticipant } from "@Closer/auth/closer";
 import { notFound, redirect, unstable_rethrow } from "next/navigation";
 
-import { ConnectPageFrame } from "@/components/connect-page-frame";
-import ConnectPerson from "@/components/connect-person";
-import InviteControls, { InviteControlsSkeleton } from "@/components/invite-controls";
-import { getCurrentParticipant } from "@/lib/closer-server";
+import { ConnectPageFrame } from "@/features/invite/components/connect-page-frame";
+import ConnectPerson from "@/features/invite/components/connect-person";
+import InviteControls, {
+  InviteControlsSkeleton,
+} from "@/features/invite/components/invite-controls";
+import { getCurrentParticipant } from "@/server/auth/current-participant";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;

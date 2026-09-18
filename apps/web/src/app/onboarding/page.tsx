@@ -1,9 +1,9 @@
 import { redirect } from "next/navigation";
 
-import AnonymousSession from "@/components/anonymous-session";
-import ParticipantOnboardingForm from "@/components/participant-onboarding-form";
+import AnonymousSession from "@/features/auth/components/anonymous-session";
+import ParticipantOnboardingForm from "@/features/auth/components/participant-onboarding-form";
 import { CloserPageShell, CloserTopbar } from "@/components/closer/page-shell";
-import { getCurrentParticipant } from "@/lib/closer-server";
+import { getCurrentParticipant } from "@/server/auth/current-participant";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;

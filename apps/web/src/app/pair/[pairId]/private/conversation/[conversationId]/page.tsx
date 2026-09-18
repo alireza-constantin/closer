@@ -1,8 +1,8 @@
-import { db, getPrivateConversationForParticipant } from "@Closer/auth/closer";
 import { notFound, redirect, unstable_rethrow } from "next/navigation";
 
-import PrivateConversationScreen from "@/components/private-conversation-screen";
-import { getCurrentParticipant } from "@/lib/closer-server";
+import PrivateConversationScreen from "@/features/private-conversation/components/private-conversation-screen";
+import { getCurrentParticipant } from "@/server/auth/current-participant";
+import { getPrivateConversation } from "@/server/modules/private-conversations/private-conversation.service";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -16,7 +16,7 @@ export default async function PrivateConversationPage({
   const currentParticipant = await getCurrentParticipant();
   if (!currentParticipant) notFound();
   try {
-    const view = await getPrivateConversationForParticipant(db, {
+    const view = await getPrivateConversation({
       participantId: currentParticipant.id,
       pairId,
       conversationId,

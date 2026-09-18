@@ -1,8 +1,8 @@
-import { db, getPrivateRoundForParticipant } from "@Closer/auth/closer";
 import { notFound } from "next/navigation";
 
-import PrivateRoundScreen from "@/components/private-round-screen";
-import { getCurrentParticipant } from "@/lib/closer-server";
+import PrivateRoundScreen from "@/features/private-conversation/components/private-round-screen";
+import { getCurrentParticipant } from "@/server/auth/current-participant";
+import { getPrivateRound } from "@/server/modules/private-rounds/private-round.service";
 
 export default async function PrivateRoundPage({
   params,
@@ -13,7 +13,7 @@ export default async function PrivateRoundPage({
   const currentParticipant = await getCurrentParticipant();
   if (!currentParticipant) notFound();
   try {
-    const view = await getPrivateRoundForParticipant(db, {
+    const view = await getPrivateRound({
       participantId: currentParticipant.id,
       pairId,
       roundId,

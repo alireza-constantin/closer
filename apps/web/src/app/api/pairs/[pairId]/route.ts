@@ -1,6 +1,6 @@
 import { db, getParticipantByAuthUserId, updateIntendedPersonName } from "@Closer/auth/closer";
 
-import { getAuthUserIdFromRequest } from "@/lib/closer-server";
+import { getAuthUserIdFromRequest } from "@/server/auth/current-participant";
 
 const noStoreHeaders = { "Cache-Control": "private, no-store" };
 

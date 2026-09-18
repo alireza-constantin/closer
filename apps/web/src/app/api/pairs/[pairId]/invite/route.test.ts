@@ -1,5 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 
+import { createCloserAuthMock } from "@/test/closer-auth-mock";
+
 const getInitialInviteStatus = mock(async () => ({
   state: "active" as const,
   expiresAt: new Date("2030-01-01T00:00:00.000Z"),
@@ -10,25 +12,26 @@ const issueOrReuseInitialInvite = mock(async () => ({
   expiresAt: new Date("2030-01-01T00:00:00.000Z"),
 }));
 
-mock.module("@Closer/auth/closer", () => ({
-  db: {},
-  getInitialInviteStatus,
-  getPairForParticipant: async () => ({
-    pair: { relationshipType: "friend" },
-    members: [{ slot: "first", displayName: "Ali" }],
+mock.module("@Closer/auth/closer", () =>
+  createCloserAuthMock({
+    getInitialInviteStatus,
+    getPairForParticipant: async () => ({
+      pair: { relationshipType: "friend" },
+      members: [{ slot: "first", displayName: "Ali" }],
+    }),
+    getParticipantByAuthUserId: async () => ({ id: "participant-1" }),
+    isInitialInviteUsable: async () => true,
+    issueOrReuseInitialInvite,
+    listActivePairsForParticipant: async () => [{ pairId: "pair-1" }],
+    listActivePrivateConversations: async () => [],
+    replaceInitialInvite: async () => ({
+      token: "replacement-token",
+      expiresAt: new Date("2030-01-02T00:00:00.000Z"),
+    }),
   }),
-  getParticipantByAuthUserId: async () => ({ id: "participant-1" }),
-  isInitialInviteUsable: async () => true,
-  issueOrReuseInitialInvite,
-  listActivePairsForParticipant: async () => [{ pairId: "pair-1" }],
-  listActivePrivateConversations: async () => [],
-  replaceInitialInvite: async () => ({
-    token: "replacement-token",
-    expiresAt: new Date("2030-01-02T00:00:00.000Z"),
-  }),
-}));
+);
 
-mock.module("@/lib/closer-server", () => ({
+mock.module("@/server/auth/current-participant", () => ({
   getAuthUserIdFromRequest: async () => "auth-user-1",
   getCurrentParticipant: async () => ({ id: "participant-1" }),
 }));

@@ -1,35 +1,46 @@
 import { describe, expect, mock, test } from "bun:test";
 
+import { createCloserAuthMock } from "@/test/closer-auth-mock";
+
 let relationshipType: "partner" | "friend" = "friend";
 
-mock.module("@Closer/auth/closer", () => ({
-  db: {},
-  getPairForParticipant: async () => ({
+mock.module("@Closer/auth/closer", () =>
+  createCloserAuthMock({
+    getPairForParticipant: async () => ({
+      pair: { relationshipType, intendedPersonName: "Nima" },
+      members: [{ slot: "first", displayName: "Ali" }],
+    }),
+    getInitialInviteStatus: async () => ({
+      state: "active",
+      expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+    }),
+    getParticipantByAuthUserId: async () => ({ id: "participant-1" }),
+    isInitialInviteUsable: async () => true,
+    issueOrReuseInitialInvite: async () => ({
+      state: "issued",
+      token: "fresh-token",
+      expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+    }),
+    listActivePairsForParticipant: async () => [{ pairId: "pair-1" }],
+    listActivePrivateConversations: async () => [],
+    replaceInitialInvite: async () => ({
+      token: "replacement-token",
+      expiresAt: new Date("2030-01-02T00:00:00.000Z"),
+    }),
+  }),
+);
+
+mock.module("@/server/auth/current-participant", () => ({
+  getAuthUserIdFromRequest: async () => "auth-user-1",
+  getCurrentParticipant: async () => ({ id: "participant-1" }),
+}));
+mock.module("@/server/modules/pairs/pair.service", () => ({
+  getAuthorizedPair: async () => ({
     pair: { relationshipType, intendedPersonName: "Nima" },
     members: [{ slot: "first", displayName: "Ali" }],
   }),
-  getInitialInviteStatus: async () => ({
-    state: "active",
-    expiresAt: new Date("2030-01-01T00:00:00.000Z"),
-  }),
-  getParticipantByAuthUserId: async () => ({ id: "participant-1" }),
-  isInitialInviteUsable: async () => true,
-  issueOrReuseInitialInvite: async () => ({
-    state: "issued",
-    token: "fresh-token",
-    expiresAt: new Date("2030-01-01T00:00:00.000Z"),
-  }),
-  listActivePairsForParticipant: async () => [{ pairId: "pair-1" }],
-  listActivePrivateConversations: async () => [],
-  replaceInitialInvite: async () => ({
-    token: "replacement-token",
-    expiresAt: new Date("2030-01-02T00:00:00.000Z"),
-  }),
-}));
-
-mock.module("@/lib/closer-server", () => ({
-  getAuthUserIdFromRequest: async () => "auth-user-1",
-  getCurrentParticipant: async () => ({ id: "participant-1" }),
+  listPairPrivateConversations: async () => [],
+  listParticipantSpaces: async () => [{ pairId: "pair-1" }],
 }));
 
 mock.module("next/navigation", () => ({
@@ -42,7 +53,7 @@ mock.module("next/navigation", () => ({
   unstable_rethrow: () => {},
 }));
 
-mock.module("@/components/pair-home", () => ({ default: "pair-home" }));
+mock.module("@/features/pair/components/pair-home", () => ({ default: "pair-home" }));
 const { default: PairPage } = await import("./page");
 
 describe("Pair route entry", () => {

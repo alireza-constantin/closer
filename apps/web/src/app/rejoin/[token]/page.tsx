@@ -1,7 +1,7 @@
-import AnonymousSession from "@/components/anonymous-session";
-import { JoinInvitationFrame } from "@/components/join-invitation-frame";
+import AnonymousSession from "@/features/auth/components/anonymous-session";
+import { JoinInvitationFrame } from "@/features/invite/components/join-invitation-frame";
 import { CloserPageShell, CloserTopbar } from "@/components/closer/page-shell";
-import JoinPairForm from "@/components/join-pair-form";
+import JoinPairForm from "@/features/invite/components/join-pair-form";
 import { db, getRejoinInviteLanding } from "@Closer/auth/closer";
 
 export const dynamic = "force-dynamic";

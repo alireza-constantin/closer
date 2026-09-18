@@ -1,7 +1,7 @@
 import { db, getRealtimeBus, type RealtimeEvent } from "@Closer/db";
 import { getPairForParticipant, getParticipantByAuthUserId } from "@Closer/auth/closer";
 
-import { getAuthUserIdFromRequest } from "@/lib/closer-server";
+import { getAuthUserIdFromRequest } from "@/server/auth/current-participant";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

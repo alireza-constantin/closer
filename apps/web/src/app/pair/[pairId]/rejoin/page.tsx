@@ -1,8 +1,8 @@
 import { db, getPairForParticipant } from "@Closer/auth/closer";
 import { notFound } from "next/navigation";
 
-import RejoinControls from "@/components/rejoin-controls";
-import { getCurrentParticipant } from "@/lib/closer-server";
+import RejoinControls from "@/features/invite/components/rejoin-controls";
+import { getCurrentParticipant } from "@/server/auth/current-participant";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;

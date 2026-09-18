@@ -7,8 +7,11 @@ import {
   replaceInitialInvite,
 } from "@Closer/auth/closer";
 
-import { getAuthUserIdFromRequest } from "@/lib/closer-server";
-import { getInitialInviteCookie, setInitialInviteCookie } from "@/lib/initial-invite-cookie";
+import { getAuthUserIdFromRequest } from "@/server/auth/current-participant";
+import {
+  getInitialInviteCookie,
+  setInitialInviteCookie,
+} from "@/features/invite/utils/initial-invite-cookie";
 
 export async function GET(request: Request, context: { params: Promise<{ pairId: string }> }) {
   const authUserId = await getAuthUserIdFromRequest(request.headers);

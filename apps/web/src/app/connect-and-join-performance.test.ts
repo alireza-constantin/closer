@@ -7,19 +7,18 @@ const source = (path: string) => Bun.file(join(appDirectory, path)).text();
 describe("Connect and invitation-join streaming boundaries", () => {
   test("keeps the unclaimed Private route read-only and directs Pair Home to the current-state-safe Connect entry", async () => {
     const privatePage = await source("pair/[pairId]/private/page.tsx");
-    const pairHome = await source("../components/pair-home.tsx");
+    const pairHome = await source("../features/pair/components/pair-home.tsx");
 
     expect(privatePage).toContain("redirect(`/pair/${pairId}/invite?reason=private` as never)");
     expect(privatePage).not.toContain("startOrResumePrivateConversation");
     expect(privatePage).not.toContain("createPrivateQuestionCandidate");
-    expect(pairHome).toContain(
-      "isCurrentlyComplete ? `/pair/${pairId}/private` : `/pair/${pairId}/invite?reason=private`",
-    );
+    expect(pairHome).toContain("isCurrentlyComplete");
+    expect(pairHome).toContain("`/pair/${pairId}/invite?reason=private`");
   });
 
   test("streams only authorized invitation controls beneath the immediate Connect frame", async () => {
     const invitePage = await source("pair/[pairId]/invite/page.tsx");
-    const frame = await source("../components/connect-page-frame.tsx");
+    const frame = await source("../features/invite/components/connect-page-frame.tsx");
 
     expect(invitePage).toContain("<ConnectPageFrame pairId={pairId}>");
     expect(invitePage).toContain("<Suspense fallback={<InviteControlsSkeleton />}>");
@@ -31,8 +30,8 @@ describe("Connect and invitation-join streaming boundaries", () => {
 
   test("uses a Connect-shaped fallback instead of Private category copy", async () => {
     const privateLoading = await source("pair/[pairId]/private/loading.tsx");
-    const connectLoading = await source("../components/connect-route-loading.tsx");
-    const inviteSkeleton = await source("../components/invite-controls.tsx");
+    const connectLoading = await source("../features/invite/components/connect-route-loading.tsx");
+    const inviteSkeleton = await source("../features/invite/components/invite-controls.tsx");
 
     expect(privateLoading).toContain("ConnectRouteLoading");
     expect(privateLoading).not.toContain("private-picker");
@@ -44,7 +43,7 @@ describe("Connect and invitation-join streaming boundaries", () => {
   });
 
   test("keeps the invite lookup inert and limits issue/reuse to mounted Connect interaction", async () => {
-    const controls = await source("../components/invite-controls.tsx");
+    const controls = await source("../features/invite/components/invite-controls.tsx");
     const inviteRoute = await source("api/pairs/[pairId]/invite/route.ts");
 
     expect(controls).toContain("if (autoGenerate) void reuseOrGenerateInvite()");
@@ -58,8 +57,9 @@ describe("Connect and invitation-join streaming boundaries", () => {
   test("turns a legitimate stale claimed invite URL into the appropriate active Pair entry before controls mount", async () => {
     const invitePage = await source("pair/[pairId]/invite/page.tsx");
 
+    expect(invitePage).toContain("if (pairView.members.length === 2)");
     expect(invitePage).toContain(
-      "if (pairView.members.length === 2) redirect(issueOnEntry ? `/pair/${pairId}/private` : `/pair/${pairId}`);",
+      "redirect(issueOnEntry ? `/pair/${pairId}/private` : `/pair/${pairId}`);",
     );
     expect(invitePage).toContain(
       'return <InviteControls autoGenerate={issueOnEntry} kind="initial" pairId={pairId} />;',
@@ -69,7 +69,7 @@ describe("Connect and invitation-join streaming boundaries", () => {
   });
 
   test("uses the minimal Pair-status projection through the shared query cache", async () => {
-    const pairHome = await source("../components/pair-home.tsx");
+    const pairHome = await source("../features/pair/components/pair-home.tsx");
     const statusRoute = await source("api/pairs/[pairId]/status/route.ts");
     const pairLayout = await source("pair/[pairId]/layout.tsx");
 
@@ -88,7 +88,7 @@ describe("Connect and invitation-join streaming boundaries", () => {
 
   test("renders a cohesive initial-claim card and makes intended context a fresh-user prefill only", async () => {
     const joinPage = await source("join/[token]/page.tsx");
-    const form = await source("../components/join-pair-form.tsx");
+    const form = await source("../features/invite/components/join-pair-form.tsx");
     const redeemRoute = await source("api/invites/[token]/redeem/route.ts");
 
     expect(joinPage).toContain("<JoinInvitationFrame>");

@@ -1,5 +1,5 @@
-import TogetherPicker from "@/components/together-picker";
-import { TogetherPickerFrame } from "@/components/together-picker-frame";
+import TogetherPicker from "@/features/together-session/components/together-picker";
+import { TogetherPickerFrame } from "@/features/together-session/components/together-picker-frame";
 
 export const dynamic = "force-static";
 

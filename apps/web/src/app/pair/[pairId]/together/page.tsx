@@ -1,8 +1,8 @@
 import { db, getPairForParticipant } from "@Closer/auth/closer";
 import { notFound, redirect } from "next/navigation";
 
-import { getCurrentParticipant } from "@/lib/closer-server";
-import { togetherPickerPath } from "@/lib/together-picker-path";
+import { getCurrentParticipant } from "@/server/auth/current-participant";
+import { togetherPickerPath } from "@/features/together-session/utils/together-picker-path";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;

@@ -1,6 +1,6 @@
 import { db, resolveOrCreateParticipant } from "@Closer/auth/closer";
 
-import { getAuthUserIdFromRequest } from "@/lib/closer-server";
+import { getAuthUserIdFromRequest } from "@/server/auth/current-participant";
 
 function domainErrorResponse(error: unknown) {
   const message = error instanceof Error ? error.message : "Unable to complete onboarding.";
