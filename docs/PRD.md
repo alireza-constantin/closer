@@ -74,10 +74,10 @@ A logical Question never repeats within the same Together Session. If no unused 
 Every Together Session begins with a soft emotional-intensity ramp:
 
 | Completed `Next` transitions | Preferred intensity |
-| --- | --- |
-| 0–1 | Light |
-| 2–3 | Medium |
-| 4 or more | Deep |
+| ---------------------------- | ------------------- |
+| 0–1                          | Light               |
+| 2–3                          | Medium              |
+| 4 or more                    | Deep                |
 
 The deep preference continues for the remainder of the Session; the pattern does not restart. Intensity is a preference, not an eligibility gate. Fallback is Light → Medium → Deep for a Light target, Medium → Light → Deep for a Medium target, and Deep → Medium → Light for a Deep target. A new Together Session starts again at Light.
 
@@ -183,10 +183,10 @@ Selection first applies category, Partner/Friend fit, mode fit, active revision,
 Private Conversations use this soft ramp based only on mutually completed Rounds—Rounds with both answers and both Reveal views:
 
 | Mutually completed Rounds | Preferred intensity |
-| --- | --- |
-| 0–1 | Light |
-| 2–3 | Medium |
-| 4 or more | Deep |
+| ------------------------- | ------------------- |
+| 0–1                       | Light               |
+| 2–3                       | Medium              |
+| 4 or more                 | Deep                |
 
 Candidate selection, Ask, Skip, Decline, one answer, one reveal, question Like, reaction, and reply do not advance the ramp. The deep preference continues without restarting. A new Conversation after guest replacement starts again at Light.
 

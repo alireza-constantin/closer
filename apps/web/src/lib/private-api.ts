@@ -12,7 +12,11 @@ export async function requireRequestParticipant(request: Request) {
 
 export function privateDomainErrorResponse(error: unknown) {
   if (error instanceof CloserDomainError) {
-    if (["ANSWER_INVALID", "REPLY_INVALID", "REACTION_INVALID", "QUESTION_UNAVAILABLE"].includes(error.code)) {
+    if (
+      ["ANSWER_INVALID", "REPLY_INVALID", "REACTION_INVALID", "QUESTION_UNAVAILABLE"].includes(
+        error.code,
+      )
+    ) {
       return Response.json({ error: error.code }, { status: 400, headers: noStoreHeaders });
     }
     if (error.code === "ANSWER_IMMUTABLE") {
@@ -25,7 +29,12 @@ export function privateDomainErrorResponse(error: unknown) {
 
 export function hideUnviewedReveal<T extends { state: string }>(view: T) {
   if (view.state !== "REVEAL_READY") return view;
-  const { answers: _answers, reactions: _reactions, replies: _replies, ...safeView } = view as T & {
+  const {
+    answers: _answers,
+    reactions: _reactions,
+    replies: _replies,
+    ...safeView
+  } = view as T & {
     answers?: unknown;
     reactions?: unknown;
     replies?: unknown;

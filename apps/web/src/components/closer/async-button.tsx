@@ -8,6 +8,16 @@ type AsyncButtonProps = Omit<ComponentProps<typeof Button>, "children"> & {
   pendingText: ReactNode;
 };
 
-export function AsyncButton({ children, pending = false, pendingText, disabled, ...props }: AsyncButtonProps) {
-  return <Button disabled={pending || disabled} {...props}>{pending ? pendingText : children}</Button>;
+export function AsyncButton({
+  children,
+  pending = false,
+  pendingText,
+  disabled,
+  ...props
+}: AsyncButtonProps) {
+  return (
+    <Button disabled={pending || disabled} {...props}>
+      {pending ? pendingText : children}
+    </Button>
+  );
 }

@@ -10,7 +10,13 @@ import { getCurrentParticipant } from "@/lib/closer-server";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-async function AuthorizedInviteControls({ issueOnEntry, pairId }: { issueOnEntry: boolean; pairId: string }) {
+async function AuthorizedInviteControls({
+  issueOnEntry,
+  pairId,
+}: {
+  issueOnEntry: boolean;
+  pairId: string;
+}) {
   const currentParticipant = await getCurrentParticipant();
   if (!currentParticipant) notFound();
 
@@ -18,7 +24,8 @@ async function AuthorizedInviteControls({ issueOnEntry, pairId }: { issueOnEntry
     const pairView = await getPairForParticipant(db, currentParticipant.id, pairId);
     // A stale unclaimed URL remains legitimate for an active member after a
     // remote claim. Preserve its intent without issuing or rotating an invite.
-    if (pairView.members.length === 2) redirect(issueOnEntry ? `/pair/${pairId}/private` : `/pair/${pairId}`);
+    if (pairView.members.length === 2)
+      redirect(issueOnEntry ? `/pair/${pairId}/private` : `/pair/${pairId}`);
     return <InviteControls autoGenerate={issueOnEntry} kind="initial" pairId={pairId} />;
   } catch (error) {
     unstable_rethrow(error);
@@ -26,7 +33,13 @@ async function AuthorizedInviteControls({ issueOnEntry, pairId }: { issueOnEntry
   }
 }
 
-export default async function InvitePage({ params, searchParams }: { params: Promise<{ pairId: string }>; searchParams: Promise<{ reason?: string }> }) {
+export default async function InvitePage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ pairId: string }>;
+  searchParams: Promise<{ reason?: string }>;
+}) {
   const { pairId } = await params;
   const { reason } = await searchParams;
 

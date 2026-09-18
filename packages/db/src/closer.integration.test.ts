@@ -25,7 +25,8 @@ const {
   replaceInitialInvite,
   updateIntendedPersonName,
 } = await import("./closer");
-const { initialInvite, pair, pairMembership, pairMembershipEra, participant, rejoinInvite } = await import("./schema/closer");
+const { initialInvite, pair, pairMembership, pairMembershipEra, participant, rejoinInvite } =
+  await import("./schema/closer");
 const { user } = await import("./schema/auth");
 const { and, eq, inArray, isNull } = await import("drizzle-orm");
 
@@ -50,11 +51,21 @@ async function createParticipant(displayName: string) {
   return resolveOrCreateParticipant(db, { authUserId, displayName });
 }
 
-async function createPair(displayName = "Creator", relationshipType: "partner" | "friend" = "partner") {
+async function createPair(
+  displayName = "Creator",
+  relationshipType: "partner" | "friend" = "partner",
+) {
   const creator = await createParticipant(displayName);
-  const result = await createPairForParticipant(db, { participantId: creator.id, intendedPersonName: "Their person", relationshipType });
+  const result = await createPairForParticipant(db, {
+    participantId: creator.id,
+    intendedPersonName: "Their person",
+    relationshipType,
+  });
   createdPairIds.push(result.pair.id);
-  const invite = await issueOrReuseInitialInvite(db, { participantId: creator.id, pairId: result.pair.id });
+  const invite = await issueOrReuseInitialInvite(db, {
+    participantId: creator.id,
+    pairId: result.pair.id,
+  });
   if (invite.state !== "issued") throw new Error("Fresh pair unexpectedly had an invitation.");
   return { creator, ...result, invite };
 }
@@ -91,7 +102,10 @@ describe("Closer Slice 01A", () => {
     const authUserId = await createAnonymousAuthUser();
 
     const first = await resolveOrCreateParticipant(db, { authUserId, displayName: "  Ari  " });
-    const second = await resolveOrCreateParticipant(db, { authUserId, displayName: "Other value is ignored" });
+    const second = await resolveOrCreateParticipant(db, {
+      authUserId,
+      displayName: "Other value is ignored",
+    });
 
     expect(first.id).toBe(second.id);
     expect(first.id).not.toBe(authUserId);
@@ -107,14 +121,22 @@ describe("Closer Slice 01A", () => {
     expect(second.displayName).toBe("Sam");
     expect(second.id).not.toBe(first.id);
     expect(await listActivePairsForParticipant(db, first.id)).toEqual([]);
-    expect(await captureError(resolveOrCreateParticipant(db, {
-      authUserId: first.authUserId,
-      displayName: "   ",
-    }))).toMatchObject({ code: "DISPLAY_NAME_INVALID" });
-    expect(await captureError(resolveOrCreateParticipant(db, {
-      authUserId: second.authUserId,
-      displayName: "x".repeat(41),
-    }))).toMatchObject({ code: "DISPLAY_NAME_INVALID" });
+    expect(
+      await captureError(
+        resolveOrCreateParticipant(db, {
+          authUserId: first.authUserId,
+          displayName: "   ",
+        }),
+      ),
+    ).toMatchObject({ code: "DISPLAY_NAME_INVALID" });
+    expect(
+      await captureError(
+        resolveOrCreateParticipant(db, {
+          authUserId: second.authUserId,
+          displayName: "x".repeat(41),
+        }),
+      ),
+    ).toMatchObject({ code: "DISPLAY_NAME_INVALID" });
   });
 
   test("creates partner and friend pairs with their creator in the first logical slot", async () => {
@@ -124,11 +146,24 @@ describe("Closer Slice 01A", () => {
     expect(partnerPair.pair.relationshipType).toBe("partner");
     expect(friendPair.pair.relationshipType).toBe("friend");
 
-    const memberships = await db.select().from(pairMembership).where(inArray(pairMembership.pairId, [partnerPair.pair.id, friendPair.pair.id]));
+    const memberships = await db
+      .select()
+      .from(pairMembership)
+      .where(inArray(pairMembership.pairId, [partnerPair.pair.id, friendPair.pair.id]));
     expect(memberships).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ pairId: partnerPair.pair.id, participantId: partnerPair.creator.id, slot: "first", endedAt: null }),
-        expect.objectContaining({ pairId: friendPair.pair.id, participantId: friendPair.creator.id, slot: "first", endedAt: null }),
+        expect.objectContaining({
+          pairId: partnerPair.pair.id,
+          participantId: partnerPair.creator.id,
+          slot: "first",
+          endedAt: null,
+        }),
+        expect.objectContaining({
+          pairId: friendPair.pair.id,
+          participantId: friendPair.creator.id,
+          slot: "first",
+          endedAt: null,
+        }),
       ]),
     );
   });
@@ -136,9 +171,19 @@ describe("Closer Slice 01A", () => {
   test("retries the same pair-creation request without creating a duplicate pair", async () => {
     const creator = await createParticipant("Retry creator");
     const clientRequestId = randomUUID();
-    const first = await createPairForParticipant(db, { participantId: creator.id, intendedPersonName: "Retry person", relationshipType: "partner", clientRequestId });
+    const first = await createPairForParticipant(db, {
+      participantId: creator.id,
+      intendedPersonName: "Retry person",
+      relationshipType: "partner",
+      clientRequestId,
+    });
     createdPairIds.push(first.pair.id);
-    const second = await createPairForParticipant(db, { participantId: creator.id, intendedPersonName: "Retry person", relationshipType: "partner", clientRequestId });
+    const second = await createPairForParticipant(db, {
+      participantId: creator.id,
+      intendedPersonName: "Retry person",
+      relationshipType: "partner",
+      clientRequestId,
+    });
 
     expect(second.pair.id).toBe(first.pair.id);
     expect(await db.select().from(pair).where(eq(pair.id, first.pair.id))).toHaveLength(1);
@@ -180,7 +225,9 @@ describe("Closer Slice 01A", () => {
     createdPairIds.push(created.pair.id);
 
     expect(created.pair.intendedPersonName).toBe("Nima");
-    expect(await db.select().from(initialInvite).where(eq(initialInvite.pairId, created.pair.id))).toEqual([]);
+    expect(
+      await db.select().from(initialInvite).where(eq(initialInvite.pairId, created.pair.id)),
+    ).toEqual([]);
     expect(await listActivePairsForParticipant(db, creator.id)).toEqual([
       expect.objectContaining({
         pairId: created.pair.id,
@@ -199,28 +246,49 @@ describe("Closer Slice 01A", () => {
     expect(await listActivePairsForParticipant(db, creator.id)).toEqual([
       expect.objectContaining({ intendedPersonName: "Leila", state: "waiting" }),
     ]);
-    expect(await captureError(updateIntendedPersonName(db, {
-      participantId: creator.id,
-      pairId: created.pair.id,
-      intendedPersonName: "   ",
-    }))).toMatchObject({ code: "INTENDED_PERSON_NAME_INVALID" });
+    expect(
+      await captureError(
+        updateIntendedPersonName(db, {
+          participantId: creator.id,
+          pairId: created.pair.id,
+          intendedPersonName: "   ",
+        }),
+      ),
+    ).toMatchObject({ code: "INTENDED_PERSON_NAME_INVALID" });
   });
 
   test("issues only on explicit connection, reuses it safely, and stores only its hash", async () => {
     const creator = await createParticipant("Connection creator");
-    const created = await createPairForParticipant(db, { participantId: creator.id, intendedPersonName: "Connection person", relationshipType: "partner" });
+    const created = await createPairForParticipant(db, {
+      participantId: creator.id,
+      intendedPersonName: "Connection person",
+      relationshipType: "partner",
+    });
     createdPairIds.push(created.pair.id);
 
-    expect(await db.select().from(initialInvite).where(eq(initialInvite.pairId, created.pair.id))).toHaveLength(0);
-    expect(await getInitialInviteStatus(db, { participantId: creator.id, pairId: created.pair.id })).toEqual({ state: "none" });
+    expect(
+      await db.select().from(initialInvite).where(eq(initialInvite.pairId, created.pair.id)),
+    ).toHaveLength(0);
+    expect(
+      await getInitialInviteStatus(db, { participantId: creator.id, pairId: created.pair.id }),
+    ).toEqual({ state: "none" });
 
-    const first = await issueOrReuseInitialInvite(db, { participantId: creator.id, pairId: created.pair.id });
+    const first = await issueOrReuseInitialInvite(db, {
+      participantId: creator.id,
+      pairId: created.pair.id,
+    });
     expect(first.state).toBe("issued");
     if (first.state !== "issued") throw new Error("Expected a newly issued invitation.");
-    const second = await issueOrReuseInitialInvite(db, { participantId: creator.id, pairId: created.pair.id });
+    const second = await issueOrReuseInitialInvite(db, {
+      participantId: creator.id,
+      pairId: created.pair.id,
+    });
     expect(second).toEqual({ state: "active", expiresAt: first.expiresAt });
 
-    const rows = await db.select().from(initialInvite).where(eq(initialInvite.pairId, created.pair.id));
+    const rows = await db
+      .select()
+      .from(initialInvite)
+      .where(eq(initialInvite.pairId, created.pair.id));
     expect(rows).toHaveLength(1);
     expect(rows[0]?.tokenHash).not.toBe(first.token);
     expect(rows[0]?.tokenHash).not.toContain(first.token);
@@ -228,7 +296,12 @@ describe("Closer Slice 01A", () => {
 
   test("projects active invitation expiry without exposing a raw credential to another device", async () => {
     const created = await createPair();
-    expect(await getInitialInviteStatus(db, { participantId: created.creator.id, pairId: created.pair.id })).toEqual({
+    expect(
+      await getInitialInviteStatus(db, {
+        participantId: created.creator.id,
+        pairId: created.pair.id,
+      }),
+    ).toEqual({
       state: "active",
       expiresAt: created.invite.expiresAt,
     });
@@ -236,28 +309,55 @@ describe("Closer Slice 01A", () => {
 
   test("explicit connection replaces an expired invitation without silently rotating a valid one", async () => {
     const created = await createPair();
-    await db.update(initialInvite).set({ expiresAt: new Date(Date.now() - 1) }).where(eq(initialInvite.pairId, created.pair.id));
+    await db
+      .update(initialInvite)
+      .set({ expiresAt: new Date(Date.now() - 1) })
+      .where(eq(initialInvite.pairId, created.pair.id));
 
-    const refreshed = await issueOrReuseInitialInvite(db, { participantId: created.creator.id, pairId: created.pair.id });
+    const refreshed = await issueOrReuseInitialInvite(db, {
+      participantId: created.creator.id,
+      pairId: created.pair.id,
+    });
     expect(refreshed.state).toBe("issued");
-    if (refreshed.state !== "issued") throw new Error("Expected an expired invitation to be replaced on connection entry.");
+    if (refreshed.state !== "issued")
+      throw new Error("Expected an expired invitation to be replaced on connection entry.");
     expect(refreshed.token).not.toBe(created.invite.token);
-    const rows = await db.select().from(initialInvite).where(eq(initialInvite.pairId, created.pair.id));
-    expect(rows.filter((row) => row.revokedAt === null && row.redeemedAt === null && row.expiresAt > new Date())).toHaveLength(1);
+    const rows = await db
+      .select()
+      .from(initialInvite)
+      .where(eq(initialInvite.pairId, created.pair.id));
+    expect(
+      rows.filter(
+        (row) => row.revokedAt === null && row.redeemedAt === null && row.expiresAt > new Date(),
+      ),
+    ).toHaveLength(1);
   });
 
   test("does not treat explicit replacement as first-time issuance", async () => {
     const creator = await createParticipant("No invite replacement");
-    const created = await createPairForParticipant(db, { participantId: creator.id, intendedPersonName: "No invite person", relationshipType: "partner" });
+    const created = await createPairForParticipant(db, {
+      participantId: creator.id,
+      intendedPersonName: "No invite person",
+      relationshipType: "partner",
+    });
     createdPairIds.push(created.pair.id);
 
-    expect(await captureError(replaceInitialInvite(db, { participantId: creator.id, pairId: created.pair.id }))).toMatchObject({ code: "INVITE_UNAVAILABLE" });
-    expect(await db.select().from(initialInvite).where(eq(initialInvite.pairId, created.pair.id))).toHaveLength(0);
+    expect(
+      await captureError(
+        replaceInitialInvite(db, { participantId: creator.id, pairId: created.pair.id }),
+      ),
+    ).toMatchObject({ code: "INVITE_UNAVAILABLE" });
+    expect(
+      await db.select().from(initialInvite).where(eq(initialInvite.pairId, created.pair.id)),
+    ).toHaveLength(0);
   });
 
   test("explicit replacement revokes the old credential, preserves one usable invite, and keeps landing read-only", async () => {
     const created = await createPair();
-    const replacement = await replaceInitialInvite(db, { participantId: created.creator.id, pairId: created.pair.id });
+    const replacement = await replaceInitialInvite(db, {
+      participantId: created.creator.id,
+      pairId: created.pair.id,
+    });
     const oldLinkUser = await createParticipant("Old link user");
 
     expect(await getInitialInviteLanding(db, created.invite.token)).toBeNull();
@@ -266,9 +366,20 @@ describe("Closer Slice 01A", () => {
       relationshipType: "partner",
       intendedPersonName: "Their person",
     });
-    const rows = await db.select().from(initialInvite).where(eq(initialInvite.pairId, created.pair.id));
-    expect(rows.filter((row) => row.revokedAt === null && row.redeemedAt === null && row.expiresAt > new Date())).toHaveLength(1);
-    expect(await captureError(redeemInitialInvite(db, { token: created.invite.token, participantId: oldLinkUser.id }))).toMatchObject({ code: "INVITE_UNAVAILABLE" });
+    const rows = await db
+      .select()
+      .from(initialInvite)
+      .where(eq(initialInvite.pairId, created.pair.id));
+    expect(
+      rows.filter(
+        (row) => row.revokedAt === null && row.redeemedAt === null && row.expiresAt > new Date(),
+      ),
+    ).toHaveLength(1);
+    expect(
+      await captureError(
+        redeemInitialInvite(db, { token: created.invite.token, participantId: oldLinkUser.id }),
+      ),
+    ).toMatchObject({ code: "INVITE_UNAVAILABLE" });
     expect(await getInitialInviteLanding(db, replacement.token)).toEqual({
       inviterDisplayName: "Creator",
       relationshipType: "partner",
@@ -279,17 +390,36 @@ describe("Closer Slice 01A", () => {
   test("does not issue an invitation for an unrelated or claimed pair", async () => {
     const created = await createPair();
     const unrelated = await createParticipant("Unrelated issuer");
-    expect(await captureError(issueOrReuseInitialInvite(db, { participantId: unrelated.id, pairId: created.pair.id }))).toMatchObject({ code: "PAIR_NOT_FOUND" });
+    expect(
+      await captureError(
+        issueOrReuseInitialInvite(db, { participantId: unrelated.id, pairId: created.pair.id }),
+      ),
+    ).toMatchObject({ code: "PAIR_NOT_FOUND" });
 
     const invitee = await createParticipant("Claimed invitee");
     await redeemInitialInvite(db, { token: created.invite.token, participantId: invitee.id });
-    expect(await captureError(issueOrReuseInitialInvite(db, { participantId: created.creator.id, pairId: created.pair.id }))).toMatchObject({ code: "INVITE_UNAVAILABLE" });
-    expect(await captureError(replaceInitialInvite(db, { participantId: created.creator.id, pairId: created.pair.id }))).toMatchObject({ code: "INVITE_UNAVAILABLE" });
+    expect(
+      await captureError(
+        issueOrReuseInitialInvite(db, {
+          participantId: created.creator.id,
+          pairId: created.pair.id,
+        }),
+      ),
+    ).toMatchObject({ code: "INVITE_UNAVAILABLE" });
+    expect(
+      await captureError(
+        replaceInitialInvite(db, { participantId: created.creator.id, pairId: created.pair.id }),
+      ),
+    ).toMatchObject({ code: "INVITE_UNAVAILABLE" });
   });
 
   test("serializes concurrent issue-or-reuse requests to exactly one usable invitation", async () => {
     const creator = await createParticipant("Concurrent issuer");
-    const created = await createPairForParticipant(db, { participantId: creator.id, intendedPersonName: "Concurrent person", relationshipType: "friend" });
+    const created = await createPairForParticipant(db, {
+      participantId: creator.id,
+      intendedPersonName: "Concurrent person",
+      relationshipType: "friend",
+    });
     createdPairIds.push(created.pair.id);
 
     const results = await Promise.all([
@@ -298,8 +428,15 @@ describe("Closer Slice 01A", () => {
     ]);
     expect(results.filter((result) => result.state === "issued")).toHaveLength(1);
     expect(results.filter((result) => result.state === "active")).toHaveLength(1);
-    const rows = await db.select().from(initialInvite).where(eq(initialInvite.pairId, created.pair.id));
-    expect(rows.filter((row) => row.revokedAt === null && row.redeemedAt === null && row.expiresAt > new Date())).toHaveLength(1);
+    const rows = await db
+      .select()
+      .from(initialInvite)
+      .where(eq(initialInvite.pairId, created.pair.id));
+    expect(
+      rows.filter(
+        (row) => row.revokedAt === null && row.redeemedAt === null && row.expiresAt > new Date(),
+      ),
+    ).toHaveLength(1);
   });
 
   test("serializes concurrent explicit replacements to one usable credential", async () => {
@@ -309,9 +446,18 @@ describe("Closer Slice 01A", () => {
       replaceInitialInvite(db, { participantId: created.creator.id, pairId: created.pair.id }),
     ]);
 
-    const rows = await db.select().from(initialInvite).where(eq(initialInvite.pairId, created.pair.id));
-    expect(rows.filter((row) => row.revokedAt === null && row.redeemedAt === null && row.expiresAt > new Date())).toHaveLength(1);
-    const landingResults = await Promise.all(replacements.map((replacement) => getInitialInviteLanding(db, replacement.token)));
+    const rows = await db
+      .select()
+      .from(initialInvite)
+      .where(eq(initialInvite.pairId, created.pair.id));
+    expect(
+      rows.filter(
+        (row) => row.revokedAt === null && row.redeemedAt === null && row.expiresAt > new Date(),
+      ),
+    ).toHaveLength(1);
+    const landingResults = await Promise.all(
+      replacements.map((replacement) => getInitialInviteLanding(db, replacement.token)),
+    );
     expect(landingResults.filter((landing) => landing === null)).toHaveLength(1);
     expect(landingResults.filter((landing) => landing !== null)).toHaveLength(1);
   });
@@ -321,27 +467,57 @@ describe("Closer Slice 01A", () => {
     const invitee = await createParticipant("Invitee");
     await redeemInitialInvite(db, { token: created.invite.token, participantId: invitee.id });
 
-    expect(await captureError(updateIntendedPersonName(db, {
-      participantId: created.creator.id,
-      pairId: created.pair.id,
-      intendedPersonName: "Changed label",
-    }))).toMatchObject({ code: "PAIR_ALREADY_CLAIMED" });
+    expect(
+      await captureError(
+        updateIntendedPersonName(db, {
+          participantId: created.creator.id,
+          pairId: created.pair.id,
+          intendedPersonName: "Changed label",
+        }),
+      ),
+    ).toMatchObject({ code: "PAIR_ALREADY_CLAIMED" });
   });
 
   test("one participant can keep Partner, Friend, and multiple Friend spaces active", async () => {
     const creator = await createParticipant("Ali");
-    const partner = await createPairForParticipant(db, { participantId: creator.id, intendedPersonName: "Partner person", relationshipType: "partner" });
-    const friend = await createPairForParticipant(db, { participantId: creator.id, intendedPersonName: "Friend person", relationshipType: "friend" });
-    const anotherFriend = await createPairForParticipant(db, { participantId: creator.id, intendedPersonName: "Another friend", relationshipType: "friend" });
+    const partner = await createPairForParticipant(db, {
+      participantId: creator.id,
+      intendedPersonName: "Partner person",
+      relationshipType: "partner",
+    });
+    const friend = await createPairForParticipant(db, {
+      participantId: creator.id,
+      intendedPersonName: "Friend person",
+      relationshipType: "friend",
+    });
+    const anotherFriend = await createPairForParticipant(db, {
+      participantId: creator.id,
+      intendedPersonName: "Another friend",
+      relationshipType: "friend",
+    });
     createdPairIds.push(partner.pair.id, friend.pair.id, anotherFriend.pair.id);
 
     const friendSpaces = await listActivePairsForParticipant(db, creator.id);
     expect(friendSpaces).toHaveLength(3);
-    expect(friendSpaces).toEqual(expect.arrayContaining([
-      expect.objectContaining({ pairId: partner.pair.id, relationshipType: "partner", state: "waiting" }),
-      expect.objectContaining({ pairId: friend.pair.id, relationshipType: "friend", state: "waiting" }),
-      expect.objectContaining({ pairId: anotherFriend.pair.id, relationshipType: "friend", state: "waiting" }),
-    ]));
+    expect(friendSpaces).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pairId: partner.pair.id,
+          relationshipType: "partner",
+          state: "waiting",
+        }),
+        expect.objectContaining({
+          pairId: friend.pair.id,
+          relationshipType: "friend",
+          state: "waiting",
+        }),
+        expect.objectContaining({
+          pairId: anotherFriend.pair.id,
+          relationshipType: "friend",
+          state: "waiting",
+        }),
+      ]),
+    );
 
     const membershipRows = await db
       .select()
@@ -353,41 +529,80 @@ describe("Closer Slice 01A", () => {
   test("an existing participant can redeem a new invite without losing another space", async () => {
     const existingSpace = await createPair("Existing creator", "partner");
     const existingParticipant = await createParticipant("Ali");
-    await redeemInitialInvite(db, { token: existingSpace.invite.token, participantId: existingParticipant.id });
+    await redeemInitialInvite(db, {
+      token: existingSpace.invite.token,
+      participantId: existingParticipant.id,
+    });
 
     const newSpaceOwner = await createPair("New friend", "friend");
-    await redeemInitialInvite(db, { token: newSpaceOwner.invite.token, participantId: existingParticipant.id });
+    await redeemInitialInvite(db, {
+      token: newSpaceOwner.invite.token,
+      participantId: existingParticipant.id,
+    });
 
     const spaces = await listActivePairsForParticipant(db, existingParticipant.id);
     expect(spaces).toHaveLength(2);
-    expect(spaces).toEqual(expect.arrayContaining([
-      expect.objectContaining({ pairId: existingSpace.pair.id, relationshipType: "partner", otherParticipantDisplayName: "Existing creator" }),
-      expect.objectContaining({ pairId: newSpaceOwner.pair.id, relationshipType: "friend", otherParticipantDisplayName: "New friend" }),
-    ]));
+    expect(spaces).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pairId: existingSpace.pair.id,
+          relationshipType: "partner",
+          otherParticipantDisplayName: "Existing creator",
+        }),
+        expect.objectContaining({
+          pairId: newSpaceOwner.pair.id,
+          relationshipType: "friend",
+          otherParticipantDisplayName: "New friend",
+        }),
+      ]),
+    );
   });
 
   test("a pending space coexists with a completed space", async () => {
     const completedSpace = await createPair("Partner owner", "partner");
     const participant = await createParticipant("Ali");
-    await redeemInitialInvite(db, { token: completedSpace.invite.token, participantId: participant.id });
+    await redeemInitialInvite(db, {
+      token: completedSpace.invite.token,
+      participantId: participant.id,
+    });
 
-    const pendingSpace = await createPairForParticipant(db, { participantId: participant.id, intendedPersonName: "Pending friend", relationshipType: "friend" });
+    const pendingSpace = await createPairForParticipant(db, {
+      participantId: participant.id,
+      intendedPersonName: "Pending friend",
+      relationshipType: "friend",
+    });
     createdPairIds.push(pendingSpace.pair.id);
 
-    expect(await listActivePairsForParticipant(db, participant.id)).toEqual(expect.arrayContaining([
-      expect.objectContaining({ pairId: completedSpace.pair.id, state: "connected", otherParticipantDisplayName: "Partner owner" }),
-      expect.objectContaining({ pairId: pendingSpace.pair.id, state: "waiting", otherParticipantDisplayName: null }),
-    ]));
+    expect(await listActivePairsForParticipant(db, participant.id)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pairId: completedSpace.pair.id,
+          state: "connected",
+          otherParticipantDisplayName: "Partner owner",
+        }),
+        expect.objectContaining({
+          pairId: pendingSpace.pair.id,
+          state: "waiting",
+          otherParticipantDisplayName: null,
+        }),
+      ]),
+    );
   });
 
   test("redeems an opaque initial invite into the empty second slot and authorizes both members", async () => {
     const created = await createPair();
     const invitee = await createParticipant("Invitee");
 
-    const redemption = await redeemInitialInvite(db, { token: created.invite.token, participantId: invitee.id });
+    const redemption = await redeemInitialInvite(db, {
+      token: created.invite.token,
+      participantId: invitee.id,
+    });
     expect(redemption.pairId).toBe(created.pair.id);
 
-    const storedInvite = await db.select().from(initialInvite).where(eq(initialInvite.pairId, created.pair.id));
+    const storedInvite = await db
+      .select()
+      .from(initialInvite)
+      .where(eq(initialInvite.pairId, created.pair.id));
     expect(storedInvite[0]?.tokenHash).not.toBe(created.invite.token);
     expect(storedInvite[0]?.redeemedByParticipantId).toBe(invitee.id);
 
@@ -395,28 +610,61 @@ describe("Closer Slice 01A", () => {
     const inviteeView = await getPairForParticipant(db, invitee.id, created.pair.id);
     expect(creatorView.members).toHaveLength(2);
     expect(inviteeView.members).toHaveLength(2);
-    expect((await db.select().from(pairMembershipEra).where(eq(pairMembershipEra.pairId, created.pair.id))).filter((era) => era.endedAt === null)).toHaveLength(1);
+    expect(
+      (
+        await db
+          .select()
+          .from(pairMembershipEra)
+          .where(eq(pairMembershipEra.pairId, created.pair.id))
+      ).filter((era) => era.endedAt === null),
+    ).toHaveLength(1);
     expect(creatorView.pair.intendedPersonName).toBeNull();
   });
 
   test("rejects a duplicate active Pair across relationship types without consuming the invitation", async () => {
     const creator = await createParticipant("Ali");
     const claimant = await createParticipant("Fafa");
-    const existing = await createPairForParticipant(db, { participantId: creator.id, intendedPersonName: "Fafa", relationshipType: "partner" });
-    const existingInvite = await issueOrReuseInitialInvite(db, { participantId: creator.id, pairId: existing.pair.id });
+    const existing = await createPairForParticipant(db, {
+      participantId: creator.id,
+      intendedPersonName: "Fafa",
+      relationshipType: "partner",
+    });
+    const existingInvite = await issueOrReuseInitialInvite(db, {
+      participantId: creator.id,
+      pairId: existing.pair.id,
+    });
     if (existingInvite.state !== "issued") throw new Error("Expected initial invitation.");
     createdPairIds.push(existing.pair.id);
     await redeemInitialInvite(db, { token: existingInvite.token, participantId: claimant.id });
 
-    const candidate = await createPairForParticipant(db, { participantId: creator.id, intendedPersonName: "Fafa", relationshipType: "friend" });
-    const candidateInvite = await issueOrReuseInitialInvite(db, { participantId: creator.id, pairId: candidate.pair.id });
+    const candidate = await createPairForParticipant(db, {
+      participantId: creator.id,
+      intendedPersonName: "Fafa",
+      relationshipType: "friend",
+    });
+    const candidateInvite = await issueOrReuseInitialInvite(db, {
+      participantId: creator.id,
+      pairId: candidate.pair.id,
+    });
     if (candidateInvite.state !== "issued") throw new Error("Expected initial invitation.");
     createdPairIds.push(candidate.pair.id);
 
-    expect(await captureError(redeemInitialInvite(db, { token: candidateInvite.token, participantId: claimant.id }))).toMatchObject({ code: "INVITE_UNAVAILABLE" });
-    const candidateState = await db.select().from(initialInvite).where(eq(initialInvite.pairId, candidate.pair.id));
+    expect(
+      await captureError(
+        redeemInitialInvite(db, { token: candidateInvite.token, participantId: claimant.id }),
+      ),
+    ).toMatchObject({ code: "INVITE_UNAVAILABLE" });
+    const candidateState = await db
+      .select()
+      .from(initialInvite)
+      .where(eq(initialInvite.pairId, candidate.pair.id));
     expect(candidateState[0]?.redeemedAt).toBeNull();
-    expect((await db.select().from(pairMembership).where(and(eq(pairMembership.pairId, candidate.pair.id), isNull(pairMembership.endedAt))))).toHaveLength(1);
+    expect(
+      await db
+        .select()
+        .from(pairMembership)
+        .where(and(eq(pairMembership.pairId, candidate.pair.id), isNull(pairMembership.endedAt))),
+    ).toHaveLength(1);
   });
 
   test("does not redeem an initial invitation twice", async () => {
@@ -430,7 +678,12 @@ describe("Closer Slice 01A", () => {
     );
     expect(replayError).toMatchObject({ code: "INVITE_UNAVAILABLE" });
     expect(
-      await captureError(issueOrReuseInitialInvite(db, { participantId: created.creator.id, pairId: created.pair.id })),
+      await captureError(
+        issueOrReuseInitialInvite(db, {
+          participantId: created.creator.id,
+          pairId: created.pair.id,
+        }),
+      ),
     ).toMatchObject({ code: "INVITE_UNAVAILABLE" });
   });
 
@@ -475,7 +728,10 @@ describe("Closer Slice 01A", () => {
     expect(inviteAfterSelfRedemption[0]?.revokedAt).toBeNull();
 
     const legitimateInvitee = await createParticipant("Legitimate invitee");
-    await redeemInitialInvite(db, { token: created.invite.token, participantId: legitimateInvitee.id });
+    await redeemInitialInvite(db, {
+      token: created.invite.token,
+      participantId: legitimateInvitee.id,
+    });
 
     const allActiveMemberships = await db
       .select()
@@ -498,14 +754,18 @@ describe("Closer Slice 01A", () => {
       .set({ expiresAt: new Date(Date.now() - 1) })
       .where(eq(initialInvite.pairId, expired.pair.id));
     expect(
-      await captureError(redeemInitialInvite(db, { token: expired.invite.token, participantId: expiredInvitee.id })),
+      await captureError(
+        redeemInitialInvite(db, { token: expired.invite.token, participantId: expiredInvitee.id }),
+      ),
     ).toMatchObject({ code: "INVITE_UNAVAILABLE" });
 
     const revoked = await createPair();
     const revokedInvitee = await createParticipant("Revoked invitee");
     await revokeInitialInvites(db, { participantId: revoked.creator.id, pairId: revoked.pair.id });
     expect(
-      await captureError(redeemInitialInvite(db, { token: revoked.invite.token, participantId: revokedInvitee.id })),
+      await captureError(
+        redeemInitialInvite(db, { token: revoked.invite.token, participantId: revokedInvitee.id }),
+      ),
     ).toMatchObject({ code: "INVITE_UNAVAILABLE" });
   });
 
@@ -533,14 +793,18 @@ describe("Closer Slice 01A", () => {
     const created = await createPair();
     const unrelated = await createParticipant("Unrelated");
 
-    expect(await captureError(getPairForParticipant(db, unrelated.id, created.pair.id))).toBeInstanceOf(CloserDomainError);
+    expect(
+      await captureError(getPairForParticipant(db, unrelated.id, created.pair.id)),
+    ).toBeInstanceOf(CloserDomainError);
   });
 
   test("returns an authorized minimal status with the claimant's actual name after the second slot is occupied", async () => {
     const created = await createPair();
     const invitee = await createParticipant("Fafa");
 
-    expect(await getPairStatusForParticipant(db, created.creator.id, created.pair.id)).toEqual({ state: "waiting" });
+    expect(await getPairStatusForParticipant(db, created.creator.id, created.pair.id)).toEqual({
+      state: "waiting",
+    });
 
     await redeemInitialInvite(db, { token: created.invite.token, participantId: invitee.id });
 
@@ -555,14 +819,19 @@ describe("Closer Slice 01A", () => {
     // The status projection is deliberately no more than current claim state
     // and the current participant presentation. It cannot retain the intended
     // label or disclose Private, Together, invite, or history data.
-    expect((await getPairForParticipant(db, created.creator.id, created.pair.id)).pair.intendedPersonName).toBeNull();
+    expect(
+      (await getPairForParticipant(db, created.creator.id, created.pair.id)).pair
+        .intendedPersonName,
+    ).toBeNull();
   });
 
   test("does not disclose pair status to an unrelated participant", async () => {
     const created = await createPair();
     const unrelated = await createParticipant("Unrelated");
 
-    expect(await captureError(getPairStatusForParticipant(db, unrelated.id, created.pair.id))).toBeInstanceOf(CloserDomainError);
+    expect(
+      await captureError(getPairStatusForParticipant(db, unrelated.id, created.pair.id)),
+    ).toBeInstanceOf(CloserDomainError);
   });
 
   test("rejoin links are slot-bound, single-use, and symmetric for guest members", async () => {
@@ -571,23 +840,45 @@ describe("Closer Slice 01A", () => {
     await redeemInitialInvite(db, { token: created.invite.token, participantId: invitee.id });
 
     const replacementAuthUserId = await createAnonymousAuthUser("Replacement");
-    const rejoin = await issueRejoinInvite(db, { participantId: created.creator.id, pairId: created.pair.id });
+    const rejoin = await issueRejoinInvite(db, {
+      participantId: created.creator.id,
+      pairId: created.pair.id,
+    });
     expect(rejoin.targetSlot).toBe("second");
     expect((await getRejoinInviteLanding(db, rejoin.token))?.targetSlot).toBe("second");
 
-    const redeemed = await redeemRejoinInvite(db, { token: rejoin.token, authUserId: replacementAuthUserId, displayName: "Replacement" });
+    const redeemed = await redeemRejoinInvite(db, {
+      token: rejoin.token,
+      authUserId: replacementAuthUserId,
+      displayName: "Replacement",
+    });
     const activeMembers = await db
       .select()
       .from(pairMembership)
       .where(and(eq(pairMembership.pairId, created.pair.id), isNull(pairMembership.endedAt)));
-    expect(activeMembers).toEqual(expect.arrayContaining([
-      expect.objectContaining({ participantId: created.creator.id, slot: "first" }),
-      expect.objectContaining({ participantId: redeemed.participantId, slot: "second" }),
-    ]));
-    expect(activeMembers).not.toEqual(expect.arrayContaining([expect.objectContaining({ participantId: invitee.id })]));
-    expect(await captureError(redeemRejoinInvite(db, { token: rejoin.token, authUserId: await createAnonymousAuthUser("Second replacement"), displayName: "Second replacement" }))).toMatchObject({ code: "REJOIN_UNAVAILABLE" });
+    expect(activeMembers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ participantId: created.creator.id, slot: "first" }),
+        expect.objectContaining({ participantId: redeemed.participantId, slot: "second" }),
+      ]),
+    );
+    expect(activeMembers).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ participantId: invitee.id })]),
+    );
+    expect(
+      await captureError(
+        redeemRejoinInvite(db, {
+          token: rejoin.token,
+          authUserId: await createAnonymousAuthUser("Second replacement"),
+          displayName: "Second replacement",
+        }),
+      ),
+    ).toMatchObject({ code: "REJOIN_UNAVAILABLE" });
 
-    const reverse = await issueRejoinInvite(db, { participantId: redeemed.participantId, pairId: created.pair.id });
+    const reverse = await issueRejoinInvite(db, {
+      participantId: redeemed.participantId,
+      pairId: created.pair.id,
+    });
     expect(reverse.targetSlot).toBe("first");
   });
 

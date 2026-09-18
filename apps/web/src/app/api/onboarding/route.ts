@@ -15,7 +15,11 @@ export async function POST(request: Request) {
   if (!authUserId) return Response.json({ error: "Sign in is required." }, { status: 401 });
 
   const body: unknown = await request.json().catch(() => null);
-  if (!body || typeof body !== "object" || typeof (body as Record<string, unknown>).displayName !== "string") {
+  if (
+    !body ||
+    typeof body !== "object" ||
+    typeof (body as Record<string, unknown>).displayName !== "string"
+  ) {
     return Response.json({ error: "Invalid request." }, { status: 400 });
   }
 

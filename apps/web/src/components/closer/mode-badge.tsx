@@ -9,5 +9,15 @@ const modeBadgeClasses = {
 
 export function ModeBadge({ mode }: { mode: "private" | "together" }) {
   const Icon = mode === "private" ? LockKeyhole : UsersRound;
-  return <span className={cn("inline-flex items-center gap-1.5 rounded-full px-3 py-2 text-[.82rem] font-extrabold", modeBadgeClasses[mode])}><Icon aria-hidden="true" className="size-4" />{mode === "private" ? "Private" : "Together"}</span>;
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-full px-3 py-2 text-[.82rem] font-extrabold",
+        modeBadgeClasses[mode],
+      )}
+    >
+      <Icon aria-hidden="true" className="size-4" />
+      {mode === "private" ? "Private" : "Together"}
+    </span>
+  );
 }

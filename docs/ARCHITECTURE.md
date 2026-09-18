@@ -10,14 +10,14 @@ The repository implementation predates parts of this contract. [`IMPLEMENTATION-
 
 Closer is a Bun workspace whose Next.js App Router application is the full-stack application and server boundary.
 
-| Concern | Current choice |
-| --- | --- |
-| Web application | Next.js App Router with React |
-| Language | TypeScript |
-| Authentication | Better Auth |
-| Database | PostgreSQL |
-| ORM and schema tooling | Drizzle ORM and Drizzle Kit |
-| Later deployment | Vercel |
+| Concern                | Current choice                |
+| ---------------------- | ----------------------------- |
+| Web application        | Next.js App Router with React |
+| Language               | TypeScript                    |
+| Authentication         | Better Auth                   |
+| Database               | PostgreSQL                    |
+| ORM and schema tooling | Drizzle ORM and Drizzle Kit   |
+| Later deployment       | Vercel                        |
 
 V1 does not require a separate backend service, microservices, tRPC/oRPC, WebSockets, or a generalized group platform. Route handlers and server-rendered pages are adapters around server/domain behavior; they must not become independent sources of product rules.
 
@@ -364,25 +364,25 @@ Initial claim, guest replacement, and Pair termination serialize against Togethe
 
 ## 11. Server-side authorization matrix
 
-| Operation | Required authority and state |
-| --- | --- |
-| Read active Pair | Current Participant has an active membership in that Pair |
-| Read Former-Pair history | Current Participant has an ended membership and the requested content lies within that membership's authorization boundary |
-| Issue/reuse initial invitation | Current Participant is the sole active member; slot 2 is unclaimed; Pair is active |
-| Replace initial invitation | Same as issue, plus explicit replacement intent |
-| Claim initial invitation | Valid credential, active Pair, empty slot 2, claimant not slot 1, no duplicate active fully claimed Pair |
-| Issue rejoin link | Actor is the other active member; target is an eligible active guest membership |
-| Redeem rejoin link | Valid target-bound credential and unchanged target membership |
-| Start/mutate Together | Actor has active Pair membership; Session belongs to the current configuration and remains active |
-| Start/resume Private category | Both slots active; return/create Conversation in current era |
-| View candidate | Actor is immutable Conversation creator and candidate/era is active |
-| Like/Ask/Skip candidate | Actor is creator; candidate unresolved; Pair and era active |
-| Submit answer | Actor is a Round Participant, has not answered or Declined, and Pair/era/Round are mutable |
-| Decline Round | Actor is a Round Participant who has not answered; fewer than two answers; Round mutable |
-| View/record Reveal | Actor is a Round Participant; both answers exist; active Pair/era for mutation |
-| React/reply | Actor viewed Reveal; Round reveal-ready; Pair/era mutable; actor owns mutation |
-| Progress Conversation | Actor is creator; current Round Declined or both answers and both Reveal Views exist |
-| Terminate Pair | Actor has an active membership; confirmation is a UI requirement; operation is idempotent |
+| Operation                      | Required authority and state                                                                                               |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| Read active Pair               | Current Participant has an active membership in that Pair                                                                  |
+| Read Former-Pair history       | Current Participant has an ended membership and the requested content lies within that membership's authorization boundary |
+| Issue/reuse initial invitation | Current Participant is the sole active member; slot 2 is unclaimed; Pair is active                                         |
+| Replace initial invitation     | Same as issue, plus explicit replacement intent                                                                            |
+| Claim initial invitation       | Valid credential, active Pair, empty slot 2, claimant not slot 1, no duplicate active fully claimed Pair                   |
+| Issue rejoin link              | Actor is the other active member; target is an eligible active guest membership                                            |
+| Redeem rejoin link             | Valid target-bound credential and unchanged target membership                                                              |
+| Start/mutate Together          | Actor has active Pair membership; Session belongs to the current configuration and remains active                          |
+| Start/resume Private category  | Both slots active; return/create Conversation in current era                                                               |
+| View candidate                 | Actor is immutable Conversation creator and candidate/era is active                                                        |
+| Like/Ask/Skip candidate        | Actor is creator; candidate unresolved; Pair and era active                                                                |
+| Submit answer                  | Actor is a Round Participant, has not answered or Declined, and Pair/era/Round are mutable                                 |
+| Decline Round                  | Actor is a Round Participant who has not answered; fewer than two answers; Round mutable                                   |
+| View/record Reveal             | Actor is a Round Participant; both answers exist; active Pair/era for mutation                                             |
+| React/reply                    | Actor viewed Reveal; Round reveal-ready; Pair/era mutable; actor owns mutation                                             |
+| Progress Conversation          | Actor is creator; current Round Declined or both answers and both Reveal Views exist                                       |
+| Terminate Pair                 | Actor has an active membership; confirmation is a UI requirement; operation is idempotent                                  |
 
 Authorization failures should not disclose whether unrelated Pair, membership, credential, Conversation, candidate, Round, answer, or Participant identifiers exist.
 

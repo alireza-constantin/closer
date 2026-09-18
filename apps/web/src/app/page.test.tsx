@@ -13,14 +13,24 @@ mock.module("@Closer/auth/closer", () => ({
     pair: { relationshipType: "friend" },
     members: [{ slot: "first", displayName: "Ali" }],
   }),
-  getInitialInviteStatus: async () => ({ state: "active", expiresAt: new Date("2030-01-01T00:00:00.000Z") }),
+  getInitialInviteStatus: async () => ({
+    state: "active",
+    expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+  }),
   getParticipantByAuthUserId: async () => ({ id: "participant-1" }),
   isInitialInviteUsable: async () => true,
-  issueOrReuseInitialInvite: async () => ({ state: "issued", token: "fresh-token", expiresAt: new Date("2030-01-01T00:00:00.000Z") }),
+  issueOrReuseInitialInvite: async () => ({
+    state: "issued",
+    token: "fresh-token",
+    expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+  }),
   listActivePairsForParticipant,
   listActivePrivateConversations: async () => [],
   resolveOrCreateParticipant: mock(async () => ({ id: "participant-1", displayName: "Ari" })),
-  replaceInitialInvite: async () => ({ token: "replacement-token", expiresAt: new Date("2030-01-02T00:00:00.000Z") }),
+  replaceInitialInvite: async () => ({
+    token: "replacement-token",
+    expiresAt: new Date("2030-01-02T00:00:00.000Z"),
+  }),
 }));
 
 mock.module("@/lib/closer-server", () => ({
@@ -66,8 +76,20 @@ describe("root entry", () => {
 
   test("shows every active Space when a Participant has multiple Spaces", async () => {
     const spaces = [
-      { pairId: "pair-1", relationshipType: "partner", state: "waiting", otherParticipantDisplayName: null, intendedPersonName: "Nima" },
-      { pairId: "pair-2", relationshipType: "friend", state: "connected", otherParticipantDisplayName: "Sara", intendedPersonName: null },
+      {
+        pairId: "pair-1",
+        relationshipType: "partner",
+        state: "waiting",
+        otherParticipantDisplayName: null,
+        intendedPersonName: "Nima",
+      },
+      {
+        pairId: "pair-2",
+        relationshipType: "friend",
+        state: "connected",
+        otherParticipantDisplayName: "Sara",
+        intendedPersonName: null,
+      },
     ];
     getCurrentParticipant.mockResolvedValueOnce({ id: "participant-1", displayName: "Ari" });
     listActivePairsForParticipant.mockResolvedValueOnce(spaces);

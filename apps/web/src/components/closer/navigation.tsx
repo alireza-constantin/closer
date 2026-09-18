@@ -12,7 +12,11 @@ function BackLinkStatus({ label }: { label: string }) {
 
   return (
     <>
-      <ArrowLeft aria-hidden="true" className={pending ? "animate-pulse" : undefined} data-icon="inline-start" />
+      <ArrowLeft
+        aria-hidden="true"
+        className={pending ? "animate-pulse" : undefined}
+        data-icon="inline-start"
+      />
       <span className={label === "Back" ? undefined : "sr-only"}>{label}</span>
     </>
   );
@@ -22,7 +26,10 @@ export function CloserBackLink({ href, label = "Back" }: { href: string; label?:
   return (
     <Link
       aria-label={label === "Back" ? undefined : label}
-      className={cn(buttonVariants({ size: "sm", variant: "ghost" }), "min-h-10 w-fit rounded-full bg-white/70 px-3 shadow-[0_4px_12px_rgba(27,33,78,0.07)] transition-[transform,background-color,opacity] duration-150 hover:-translate-x-0.5 hover:bg-white active:translate-y-px")}
+      className={cn(
+        buttonVariants({ size: "sm", variant: "ghost" }),
+        "min-h-10 w-fit rounded-full bg-white/70 px-3 shadow-[0_4px_12px_rgba(27,33,78,0.07)] transition-[transform,background-color,opacity] duration-150 hover:-translate-x-0.5 hover:bg-white active:translate-y-px",
+      )}
       href={href as never}
       prefetch
     >
@@ -51,16 +58,26 @@ export function CloserModeCard({
   return (
     <Link
       className={cn(
-        "group grid min-h-[88px] grid-cols-[58px_1fr_auto] items-center gap-[13px] rounded-3xl px-4 py-3.5 text-closer-navy no-underline shadow-closer-card transition-[transform,box-shadow] duration-200 hover:-translate-y-0.5 hover:shadow-[0_16px_29px_rgba(27,33,78,0.11)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-closer-navy focus-visible:ring-offset-2 focus-visible:ring-offset-closer-cream",
+        "group text-closer-navy shadow-closer-card focus-visible:ring-closer-navy focus-visible:ring-offset-closer-cream grid min-h-[88px] grid-cols-[58px_1fr_auto] items-center gap-[13px] rounded-3xl px-4 py-3.5 no-underline transition-[transform,box-shadow] duration-200 hover:-translate-y-0.5 hover:shadow-[0_16px_29px_rgba(27,33,78,0.11)] focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none",
         kind === "together" ? "bg-closer-peach" : "bg-closer-lavender-soft",
         className,
       )}
       href={href as never}
       prefetch={prefetch}
     >
-      <span className="grid size-14 place-items-center rounded-[1.25rem] bg-white/60 [&_svg]:size-7">{icon}</span>
-      <span className="min-w-0"><strong className="block text-[1.05rem] font-extrabold tracking-[-.025em]">{title}</strong><small className="mt-0.5 block max-w-[22ch] text-[.82rem] leading-tight text-closer-navy/75">{description}</small></span>
-      <ChevronRight aria-hidden="true" className="size-5 transition-transform duration-200 group-hover:translate-x-0.5" />
+      <span className="grid size-14 place-items-center rounded-[1.25rem] bg-white/60 [&_svg]:size-7">
+        {icon}
+      </span>
+      <span className="min-w-0">
+        <strong className="block text-[1.05rem] font-extrabold tracking-[-.025em]">{title}</strong>
+        <small className="text-closer-navy/75 mt-0.5 block max-w-[22ch] text-[.82rem] leading-tight">
+          {description}
+        </small>
+      </span>
+      <ChevronRight
+        aria-hidden="true"
+        className="size-5 transition-transform duration-200 group-hover:translate-x-0.5"
+      />
     </Link>
   );
 }

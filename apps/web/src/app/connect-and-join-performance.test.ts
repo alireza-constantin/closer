@@ -9,10 +9,12 @@ describe("Connect and invitation-join streaming boundaries", () => {
     const privatePage = await source("pair/[pairId]/private/page.tsx");
     const pairHome = await source("../components/pair-home.tsx");
 
-    expect(privatePage).toContain('redirect(`/pair/${pairId}/invite?reason=private` as never)');
+    expect(privatePage).toContain("redirect(`/pair/${pairId}/invite?reason=private` as never)");
     expect(privatePage).not.toContain("startOrResumePrivateConversation");
     expect(privatePage).not.toContain("createPrivateQuestionCandidate");
-    expect(pairHome).toContain('isCurrentlyComplete ? `/pair/${pairId}/private` : `/pair/${pairId}/invite?reason=private`');
+    expect(pairHome).toContain(
+      "isCurrentlyComplete ? `/pair/${pairId}/private` : `/pair/${pairId}/invite?reason=private`",
+    );
   });
 
   test("streams only authorized invitation controls beneath the immediate Connect frame", async () => {
@@ -46,14 +48,22 @@ describe("Connect and invitation-join streaming boundaries", () => {
     const inviteRoute = await source("api/pairs/[pairId]/invite/route.ts");
 
     expect(controls).toContain("if (autoGenerate) void reuseOrGenerateInvite()");
-    expect(inviteRoute.split("export async function GET", 2)[1].split("export async function POST", 1)[0]).not.toContain("issueOrReuseInitialInvite");
+    expect(
+      inviteRoute
+        .split("export async function GET", 2)[1]
+        .split("export async function POST", 1)[0],
+    ).not.toContain("issueOrReuseInitialInvite");
   });
 
   test("turns a legitimate stale claimed invite URL into the appropriate active Pair entry before controls mount", async () => {
     const invitePage = await source("pair/[pairId]/invite/page.tsx");
 
-    expect(invitePage).toContain('if (pairView.members.length === 2) redirect(issueOnEntry ? `/pair/${pairId}/private` : `/pair/${pairId}`);');
-    expect(invitePage).toContain('return <InviteControls autoGenerate={issueOnEntry} kind="initial" pairId={pairId} />;');
+    expect(invitePage).toContain(
+      "if (pairView.members.length === 2) redirect(issueOnEntry ? `/pair/${pairId}/private` : `/pair/${pairId}`);",
+    );
+    expect(invitePage).toContain(
+      'return <InviteControls autoGenerate={issueOnEntry} kind="initial" pairId={pairId} />;',
+    );
     expect(invitePage).not.toContain("issueOrReuseInitialInvite");
     expect(invitePage).not.toContain("startOrResumePrivateConversation");
   });
@@ -63,9 +73,9 @@ describe("Connect and invitation-join streaming boundaries", () => {
     const statusRoute = await source("api/pairs/[pairId]/status/route.ts");
     const pairLayout = await source("pair/[pairId]/layout.tsx");
 
-    expect(pairHome).toContain('PAIR_HOME_STATUS_REFETCH_INTERVAL_MS = 30_000');
+    expect(pairHome).toContain("PAIR_HOME_STATUS_REFETCH_INTERVAL_MS = 30_000");
     expect(pairHome).toContain("useQuery({");
-    expect(pairHome).toContain('`/api/pairs/${encodeURIComponent(pairId)}/status`');
+    expect(pairHome).toContain("`/api/pairs/${encodeURIComponent(pairId)}/status`");
     expect(pairHome).toContain("closerKeys.pairStatus(pairId)");
     expect(pairHome).toContain("refetchInterval: PAIR_HOME_STATUS_REFETCH_INTERVAL_MS");
     expect(pairHome).toContain("refetchIntervalInBackground: false");
@@ -83,9 +93,9 @@ describe("Connect and invitation-join streaming boundaries", () => {
 
     expect(joinPage).toContain("<JoinInvitationFrame>");
     expect(joinPage).toContain("<Suspense fallback={<JoinInvitationDetailsSkeleton />}>");
-    expect(form).toContain("initialInvite?.intendedPersonName ?? \"\"");
+    expect(form).toContain('initialInvite?.intendedPersonName ?? ""');
     expect(form).toContain("claimantDisplayName ??");
-    expect(form).toContain("readOnly={kind === \"initial\" && isExistingParticipant}");
+    expect(form).toContain('readOnly={kind === "initial" && isExistingParticipant}');
     expect(form).not.toContain("Choose your name before joining");
     expect(form).not.toContain("<strong>For:</strong>");
     expect(redeemRoute).toContain("export async function POST");

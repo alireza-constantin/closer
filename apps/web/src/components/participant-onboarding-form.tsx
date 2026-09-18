@@ -34,9 +34,10 @@ export default function ParticipantOnboardingForm({ returnTo }: { returnTo?: str
       if (!response.ok) {
         const message = body && typeof body === "object" && "error" in body ? body.error : null;
         form.setError("root.server", {
-          message: typeof message === "string" && message === "DISPLAY_NAME_INVALID"
-            ? "Enter a name between 1 and 40 characters."
-            : "We could not save your name.",
+          message:
+            typeof message === "string" && message === "DISPLAY_NAME_INVALID"
+              ? "Enter a name between 1 and 40 characters."
+              : "We could not save your name.",
         });
         return;
       }
@@ -49,15 +50,35 @@ export default function ParticipantOnboardingForm({ returnTo }: { returnTo?: str
   const nameError = form.formState.errors.displayName;
   return (
     <OnboardingSurface as="form" onSubmit={form.handleSubmit(completeOnboarding)}>
-      <OnboardingIcon tone="lavender"><Sparkles aria-hidden="true" /></OnboardingIcon>
+      <OnboardingIcon tone="lavender">
+        <Sparkles aria-hidden="true" />
+      </OnboardingIcon>
       <CloserEyebrow className="mt-4">A little closer</CloserEyebrow>
-      <h1 className="mt-3 max-w-[12ch] text-balance text-[clamp(2rem,8.8vw,2.55rem)] font-extrabold leading-[1.03] tracking-[-.055em]">What should we call you?</h1>
-      <p className="mt-3 max-w-[31ch] text-[.98rem] leading-relaxed text-closer-muted">Choose the name your people will see. You can create a space whenever you’re ready.</p>
+      <h1 className="mt-3 max-w-[12ch] text-[clamp(2rem,8.8vw,2.55rem)] leading-[1.03] font-extrabold tracking-[-.055em] text-balance">
+        What should we call you?
+      </h1>
+      <p className="text-closer-muted mt-3 max-w-[31ch] text-[.98rem] leading-relaxed">
+        Choose the name your people will see. You can create a space whenever you’re ready.
+      </p>
       <FieldGroup className="mt-6">
-        <DisplayNameField error={nameError} errorId="onboarding-display-name-error" registration={form.register("displayName")} />
+        <DisplayNameField
+          error={nameError}
+          errorId="onboarding-display-name-error"
+          registration={form.register("displayName")}
+        />
       </FieldGroup>
-      {form.formState.errors.root?.server?.message ? <FormServerError>{form.formState.errors.root.server.message}</FormServerError> : null}
-      <AsyncButton className="mt-5 w-full" pending={form.formState.isSubmitting} pendingText="Saving your name…" size="lg" type="submit">Continue</AsyncButton>
+      {form.formState.errors.root?.server?.message ? (
+        <FormServerError>{form.formState.errors.root.server.message}</FormServerError>
+      ) : null}
+      <AsyncButton
+        className="mt-5 w-full"
+        pending={form.formState.isSubmitting}
+        pendingText="Saving your name…"
+        size="lg"
+        type="submit"
+      >
+        Continue
+      </AsyncButton>
     </OnboardingSurface>
   );
 }

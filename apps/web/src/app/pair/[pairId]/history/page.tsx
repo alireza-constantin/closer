@@ -12,7 +12,10 @@ export default async function PairHistoryPage({ params }: { params: Promise<{ pa
   const currentParticipant = await getCurrentParticipant();
   if (!currentParticipant) notFound();
   try {
-    const history = await getFormerEraHistoryForParticipant(db, { participantId: currentParticipant.id, pairId });
+    const history = await getFormerEraHistoryForParticipant(db, {
+      participantId: currentParticipant.id,
+      pairId,
+    });
     return <HistoryScreen history={history} pairId={pairId} />;
   } catch {
     notFound();

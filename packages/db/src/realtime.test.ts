@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 
-import { REALTIME_CHANNEL, RealtimeBus, parseRealtimeEvent, publishRealtimeEvent } from "./realtime";
+import {
+  REALTIME_CHANNEL,
+  RealtimeBus,
+  parseRealtimeEvent,
+  publishRealtimeEvent,
+} from "./realtime";
 
 type Handler = (value: any) => void;
 
@@ -10,14 +15,22 @@ class FakeListener {
   connected = 0;
   ended = 0;
 
-  async connect() { this.connected += 1; }
-  async query(...args: unknown[]) { this.queries.push(args); }
+  async connect() {
+    this.connected += 1;
+  }
+  async query(...args: unknown[]) {
+    this.queries.push(args);
+  }
   on(event: string, handler: Handler) {
     this.handlers.set(event, [...(this.handlers.get(event) ?? []), handler]);
     return this as never;
   }
-  async end() { this.ended += 1; }
-  emit(event: string, value?: unknown) { this.handlers.get(event)?.forEach((handler) => handler(value)); }
+  async end() {
+    this.ended += 1;
+  }
+  emit(event: string, value?: unknown) {
+    this.handlers.get(event)?.forEach((handler) => handler(value));
+  }
 }
 
 const changed = { version: 1, pairId: "pair-a", type: "pair.changed" } as const;
@@ -25,9 +38,21 @@ const changed = { version: 1, pairId: "pair-a", type: "pair.changed" } as const;
 describe("Postgres-backed realtime bus", () => {
   test("accepts every allowed metadata-only event and rejects invalid payloads", () => {
     expect(parseRealtimeEvent(changed)).toEqual(changed);
-    expect(parseRealtimeEvent({ version: 1, pairId: "pair-a", type: "private.changed" })).toEqual({ version: 1, pairId: "pair-a", type: "private.changed" });
-    expect(parseRealtimeEvent({ version: 1, pairId: "pair-a", type: "together.changed" })).toEqual({ version: 1, pairId: "pair-a", type: "together.changed" });
-    expect(parseRealtimeEvent({ version: 1, pairId: "pair-a", type: "pair.terminated" })).toEqual({ version: 1, pairId: "pair-a", type: "pair.terminated" });
+    expect(parseRealtimeEvent({ version: 1, pairId: "pair-a", type: "private.changed" })).toEqual({
+      version: 1,
+      pairId: "pair-a",
+      type: "private.changed",
+    });
+    expect(parseRealtimeEvent({ version: 1, pairId: "pair-a", type: "together.changed" })).toEqual({
+      version: 1,
+      pairId: "pair-a",
+      type: "together.changed",
+    });
+    expect(parseRealtimeEvent({ version: 1, pairId: "pair-a", type: "pair.terminated" })).toEqual({
+      version: 1,
+      pairId: "pair-a",
+      type: "pair.terminated",
+    });
     expect(parseRealtimeEvent({ version: 1, pairId: "pair-a", type: "answer.leaked" })).toBeNull();
     expect(parseRealtimeEvent({ version: 1, type: "pair.changed" })).toBeNull();
     expect(parseRealtimeEvent({ version: 2, pairId: "pair-a", type: "pair.changed" })).toBeNull();
@@ -84,19 +109,37 @@ describe("Postgres-backed realtime bus", () => {
 
   test("serializes exactly the allowed event metadata for fixed-channel publication", async () => {
     const publications: string[] = [];
-    const bus = new RealtimeBus("postgres://test", () => new FakeListener() as never, async (payload) => { publications.push(payload); });
+    const bus = new RealtimeBus(
+      "postgres://test",
+      () => new FakeListener() as never,
+      async (payload) => {
+        publications.push(payload);
+      },
+    );
     await bus.publish({ version: 1, pairId: "pair-a", type: "private.changed" });
-    expect(JSON.parse(publications[0]!)).toEqual({ version: 1, pairId: "pair-a", type: "private.changed" });
+    expect(JSON.parse(publications[0]!)).toEqual({
+      version: 1,
+      pairId: "pair-a",
+      type: "private.changed",
+    });
     expect(REALTIME_CHANNEL).toBe("closer_realtime");
   });
 
   test("contains publication failure after a committed command and emits a restrained warning", async () => {
-    const globalBus = globalThis as typeof globalThis & { __closerRealtimeBus?: { publish: () => Promise<void> } };
+    const globalBus = globalThis as typeof globalThis & {
+      __closerRealtimeBus?: { publish: () => Promise<void> };
+    };
     const original = globalBus.__closerRealtimeBus;
     const warning = console.warn;
     const warnings: string[] = [];
-    globalBus.__closerRealtimeBus = { publish: async () => { throw new Error("database unavailable"); } };
-    console.warn = (message: string) => { warnings.push(message); };
+    globalBus.__closerRealtimeBus = {
+      publish: async () => {
+        throw new Error("database unavailable");
+      },
+    };
+    console.warn = (message: string) => {
+      warnings.push(message);
+    };
     try {
       await expect(publishRealtimeEvent("pair-a", "private.changed")).resolves.toBeUndefined();
       expect(warnings).toEqual(["realtime publish failed type=private.changed"]);

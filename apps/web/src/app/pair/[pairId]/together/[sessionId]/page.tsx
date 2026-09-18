@@ -7,13 +7,21 @@ import { getCurrentParticipant } from "@/lib/closer-server";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-export default async function TogetherSessionPage({ params }: { params: Promise<{ pairId: string; sessionId: string }> }) {
+export default async function TogetherSessionPage({
+  params,
+}: {
+  params: Promise<{ pairId: string; sessionId: string }>;
+}) {
   const { pairId, sessionId } = await params;
   const currentParticipant = await getCurrentParticipant();
   if (!currentParticipant) notFound();
   let view;
   try {
-    view = await getTogetherSessionPlaybackForParticipant(db, { participantId: currentParticipant.id, pairId, sessionId });
+    view = await getTogetherSessionPlaybackForParticipant(db, {
+      participantId: currentParticipant.id,
+      pairId,
+      sessionId,
+    });
   } catch {
     notFound();
   }

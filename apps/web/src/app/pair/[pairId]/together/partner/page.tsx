@@ -3,7 +3,11 @@ import { TogetherPickerFrame } from "@/components/together-picker-frame";
 
 export const dynamic = "force-static";
 
-export default async function PartnerTogetherPickerPage({ params }: { params: Promise<{ pairId: string }> }) {
+export default async function PartnerTogetherPickerPage({
+  params,
+}: {
+  params: Promise<{ pairId: string }>;
+}) {
   const { pairId } = await params;
 
   return (

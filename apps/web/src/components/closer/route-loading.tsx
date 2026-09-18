@@ -1,7 +1,11 @@
 import { Skeleton } from "@Closer/ui/components/skeleton";
 import { cn } from "@Closer/ui/lib/utils";
 
-import { categoriesForRelationship, categorySurfaceClass, type CloserCategory } from "@/components/closer/category";
+import {
+  categoriesForRelationship,
+  categorySurfaceClass,
+  type CloserCategory,
+} from "@/components/closer/category";
 import { CloserPageShell, CloserTopbar } from "@/components/closer/page-shell";
 
 type RouteLoadingVariant =
@@ -16,7 +20,7 @@ type RouteLoadingVariant =
 const loadingCategories = categoriesForRelationship("partner");
 
 function LoadingLine({ className }: { className: string }) {
-  return <Skeleton className={`rounded-full bg-closer-navy/10 ${className}`} />;
+  return <Skeleton className={`bg-closer-navy/10 rounded-full ${className}`} />;
 }
 
 function LoadingBackButton() {
@@ -24,15 +28,36 @@ function LoadingBackButton() {
 }
 
 function LoadingModeBadge({ mode }: { mode: "private" | "together" }) {
-  return <Skeleton aria-hidden="true" className={cn("h-9 rounded-full", mode === "private" ? "w-[76px] bg-closer-lavender-soft" : "w-[88px] bg-closer-coral-soft")} />;
+  return (
+    <Skeleton
+      aria-hidden="true"
+      className={cn(
+        "h-9 rounded-full",
+        mode === "private" ? "bg-closer-lavender-soft w-[76px]" : "bg-closer-coral-soft w-[88px]",
+      )}
+    />
+  );
 }
 
-function LoadingCategoryCard({ category, compact }: { category: CloserCategory; compact?: boolean }) {
+function LoadingCategoryCard({
+  category,
+  compact,
+}: {
+  category: CloserCategory;
+  compact?: boolean;
+}) {
   return (
-    <Skeleton aria-hidden="true" className={cn("grid w-full grid-cols-[1fr_auto] items-center gap-x-2.5 gap-y-0.5 rounded-[1.3rem] px-[18px] text-left shadow-closer-soft", compact ? "min-h-[70px] py-3" : "min-h-[78px] py-4", categorySurfaceClass(category))}>
-      <LoadingLine className="h-4 w-20 bg-closer-navy/20" />
-      <LoadingLine className="col-start-1 h-3 w-44 max-w-full bg-closer-navy/15" />
-      <Skeleton className="col-start-2 row-span-2 row-start-1 size-5 rounded-full bg-closer-navy/15" />
+    <Skeleton
+      aria-hidden="true"
+      className={cn(
+        "shadow-closer-soft grid w-full grid-cols-[1fr_auto] items-center gap-x-2.5 gap-y-0.5 rounded-[1.3rem] px-[18px] text-left",
+        compact ? "min-h-[70px] py-3" : "min-h-[78px] py-4",
+        categorySurfaceClass(category),
+      )}
+    >
+      <LoadingLine className="bg-closer-navy/20 h-4 w-20" />
+      <LoadingLine className="bg-closer-navy/15 col-start-1 h-3 w-44 max-w-full" />
+      <Skeleton className="bg-closer-navy/15 col-start-2 row-span-2 row-start-1 size-5 rounded-full" />
     </Skeleton>
   );
 }
@@ -40,17 +65,17 @@ function LoadingCategoryCard({ category, compact }: { category: CloserCategory; 
 function HomeSkeleton() {
   return (
     <>
-      <section className="pb-7 pt-8 text-center">
+      <section className="pt-8 pb-7 text-center">
         <div aria-hidden="true" className="mb-3 flex min-h-24 items-end justify-center">
-          <Skeleton className="size-[88px] -rotate-[9deg] rounded-[55%_45%_57%_43%/55%_57%_43%_45%] bg-closer-coral-soft" />
-          <Skeleton className="-ml-2 size-[88px] rotate-[10deg] rounded-[44%_56%_43%_57%/57%_44%_56%_43%] bg-closer-lavender-soft" />
+          <Skeleton className="bg-closer-coral-soft size-[88px] -rotate-[9deg] rounded-[55%_45%_57%_43%/55%_57%_43%_45%]" />
+          <Skeleton className="bg-closer-lavender-soft -ml-2 size-[88px] rotate-[10deg] rounded-[44%_56%_43%_57%/57%_44%_56%_43%]" />
         </div>
         <LoadingLine className="mx-auto h-9 w-64 max-w-[82%]" />
         <LoadingLine className="mx-auto mt-3 h-4 w-48 max-w-[62%]" />
       </section>
       <section className="grid gap-3" aria-hidden="true">
-        <Skeleton className="h-[88px] rounded-3xl bg-closer-peach/75 shadow-closer-card" />
-        <Skeleton className="h-[88px] rounded-3xl bg-closer-lavender-soft/80 shadow-closer-card" />
+        <Skeleton className="bg-closer-peach/75 shadow-closer-card h-[88px] rounded-3xl" />
+        <Skeleton className="bg-closer-lavender-soft/80 shadow-closer-card h-[88px] rounded-3xl" />
       </section>
       <LoadingLine className="mx-auto mt-8 h-3 w-24" />
     </>
@@ -60,12 +85,12 @@ function HomeSkeleton() {
 function FormSkeleton() {
   return (
     <div className="flex flex-1 items-center py-10" aria-hidden="true">
-      <section className="mx-auto grid w-full max-w-[31rem] justify-items-center rounded-[1.75rem] bg-white/60 px-5 py-7 shadow-closer-soft">
-        <Skeleton className="size-16 rounded-[44%_56%_52%_48%] bg-closer-coral-soft" />
+      <section className="shadow-closer-soft mx-auto grid w-full max-w-[31rem] justify-items-center rounded-[1.75rem] bg-white/60 px-5 py-7">
+        <Skeleton className="bg-closer-coral-soft size-16 rounded-[44%_56%_52%_48%]" />
         <LoadingLine className="mt-5 h-8 w-64 max-w-[82%]" />
         <LoadingLine className="mt-3 h-4 w-52 max-w-[70%]" />
         <Skeleton className="mt-7 h-12 w-full rounded-[1.05rem] bg-white/90" />
-        <Skeleton className="mt-3 h-12 w-full rounded-[1.05rem] bg-closer-coral-soft" />
+        <Skeleton className="bg-closer-coral-soft mt-3 h-12 w-full rounded-[1.05rem]" />
       </section>
     </div>
   );
@@ -82,7 +107,9 @@ function PrivatePickerSkeleton() {
         <LoadingLine className="mt-3 h-4 w-[88%] max-w-[20rem]" />
         <LoadingLine className="mt-2 h-4 w-[66%] max-w-[15rem]" />
         <div className="mt-6 grid gap-2.5">
-          {loadingCategories.map((category) => <LoadingCategoryCard category={category} key={category} />)}
+          {loadingCategories.map((category) => (
+            <LoadingCategoryCard category={category} key={category} />
+          ))}
         </div>
       </section>
     </>
@@ -94,7 +121,9 @@ export function TogetherPickerLoading() {
     <div aria-busy="true" aria-live="polite">
       <span className="sr-only">Opening the conversation topics…</span>
       <div aria-hidden="true" className="mt-5 grid gap-2.5">
-        {loadingCategories.map((category) => <LoadingCategoryCard category={category} compact key={category} />)}
+        {loadingCategories.map((category) => (
+          <LoadingCategoryCard category={category} compact key={category} />
+        ))}
       </div>
     </div>
   );
@@ -113,10 +142,10 @@ function PrivateConversationSkeleton() {
         <LoadingLine className="mt-4 h-4 w-[88%] max-w-[20rem]" />
         <LoadingLine className="mt-2 h-4 w-[66%] max-w-[15rem]" />
         <div className="mt-8 grid gap-3">
-          <Skeleton className="h-12 rounded-[1.05rem] bg-closer-coral-soft" />
+          <Skeleton className="bg-closer-coral-soft h-12 rounded-[1.05rem]" />
           <div className="grid grid-cols-2 gap-3">
             <Skeleton className="h-12 rounded-[1.05rem] bg-white/90" />
-            <Skeleton className="h-12 rounded-[1.05rem] bg-closer-lavender-soft" />
+            <Skeleton className="bg-closer-lavender-soft h-12 rounded-[1.05rem]" />
           </div>
         </div>
       </section>
@@ -132,15 +161,18 @@ function PrivateRoundSkeleton() {
         <LoadingModeBadge mode="private" />
         <span className="w-[38px]" />
       </header>
-      <section className="flex min-h-[calc(100svh-100px)] flex-col items-center pt-6" aria-hidden="true">
-        <Skeleton className="h-9 w-[76px] rounded-full bg-closer-yellow" />
+      <section
+        className="flex min-h-[calc(100svh-100px)] flex-col items-center pt-6"
+        aria-hidden="true"
+      >
+        <Skeleton className="bg-closer-yellow h-9 w-[76px] rounded-full" />
         <LoadingLine className="mt-3 h-3 w-36" />
         <LoadingLine className="mt-7 h-10 w-[88%] max-w-[18rem]" />
         <LoadingLine className="mt-2 h-10 w-[72%] max-w-[15rem]" />
         <LoadingLine className="mt-2 h-10 w-[56%] max-w-[12rem]" />
         <div className="mt-auto flex w-full flex-col pt-7">
           <Skeleton className="min-h-[132px] w-full rounded-[1.05rem] bg-white/90" />
-          <Skeleton className="mt-[18px] h-12 w-full rounded-[1.05rem] bg-closer-coral-soft" />
+          <Skeleton className="bg-closer-coral-soft mt-[18px] h-12 w-full rounded-[1.05rem]" />
           <Skeleton className="mt-3 h-12 w-full rounded-[1.05rem] bg-white/65" />
           <LoadingLine className="mx-auto mt-4 h-3 w-56 max-w-full" />
         </div>
@@ -157,8 +189,11 @@ function TogetherQuestionSkeleton() {
         <LoadingModeBadge mode="together" />
         <span className="w-[38px]" />
       </header>
-      <section className="flex min-h-[min(52svh,470px)] flex-1 flex-col items-center justify-center py-9 text-center" aria-hidden="true">
-        <Skeleton className="h-9 w-[76px] rounded-full bg-closer-yellow" />
+      <section
+        className="flex min-h-[min(52svh,470px)] flex-1 flex-col items-center justify-center py-9 text-center"
+        aria-hidden="true"
+      >
+        <Skeleton className="bg-closer-yellow h-9 w-[76px] rounded-full" />
         <LoadingLine className="mx-auto mt-7 h-10 w-[88%] max-w-[18rem]" />
         <LoadingLine className="mx-auto mt-2 h-10 w-[72%] max-w-[15rem]" />
         <LoadingLine className="mx-auto mt-2 h-10 w-[56%] max-w-[12rem]" />
@@ -166,12 +201,22 @@ function TogetherQuestionSkeleton() {
       <section aria-hidden="true" className="mx-auto grid w-full max-w-[330px] grid-cols-3 gap-2.5">
         {Array.from({ length: 3 }, (_, index) => (
           <div className="grid justify-items-center gap-2" key={index}>
-            <Skeleton className={cn("size-[66px] rounded-full shadow-closer-card", index === 2 ? "bg-closer-coral" : "bg-white")} />
+            <Skeleton
+              className={cn(
+                "shadow-closer-card size-[66px] rounded-full",
+                index === 2 ? "bg-closer-coral" : "bg-white",
+              )}
+            />
             <LoadingLine className="h-3 w-10" />
           </div>
         ))}
       </section>
-      <div aria-hidden="true" className="mt-6 flex justify-center border-t border-closer-navy/10 pt-4"><LoadingLine className="h-4 w-20" /></div>
+      <div
+        aria-hidden="true"
+        className="border-closer-navy/10 mt-6 flex justify-center border-t pt-4"
+      >
+        <LoadingLine className="h-4 w-20" />
+      </div>
     </>
   );
 }
@@ -179,26 +224,29 @@ function TogetherQuestionSkeleton() {
 function HistorySkeleton() {
   return (
     <>
-      <section className="pb-7 pt-8" aria-hidden="true">
-        <LoadingLine className="h-3 w-24 bg-closer-coral/20" />
+      <section className="pt-8 pb-7" aria-hidden="true">
+        <LoadingLine className="bg-closer-coral/20 h-3 w-24" />
         <LoadingLine className="mt-4 h-10 w-72 max-w-[88%]" />
         <LoadingLine className="mt-3 h-4 w-60 max-w-[75%]" />
       </section>
       <section className="grid gap-3" aria-hidden="true">
-        <Skeleton className="h-28 rounded-[1.4rem] bg-white/65 shadow-closer-soft" />
-        <Skeleton className="h-40 rounded-[1.4rem] bg-white/65 shadow-closer-soft" />
-        <Skeleton className="h-28 rounded-[1.4rem] bg-white/65 shadow-closer-soft" />
+        <Skeleton className="shadow-closer-soft h-28 rounded-[1.4rem] bg-white/65" />
+        <Skeleton className="shadow-closer-soft h-40 rounded-[1.4rem] bg-white/65" />
+        <Skeleton className="shadow-closer-soft h-28 rounded-[1.4rem] bg-white/65" />
       </section>
     </>
   );
 }
 
 export function CloserRouteLoading({ variant }: { variant: RouteLoadingVariant }) {
-  const shellClassName = variant === "private-picker" || variant === "private-conversation" || variant === "private-round"
-    ? "pt-5"
-    : variant === "together-question"
-      ? "flex min-h-svh flex-col pb-[max(28px,env(safe-area-inset-bottom))]"
-      : undefined;
+  const shellClassName =
+    variant === "private-picker" ||
+    variant === "private-conversation" ||
+    variant === "private-round"
+      ? "pt-5"
+      : variant === "together-question"
+        ? "flex min-h-svh flex-col pb-[max(28px,env(safe-area-inset-bottom))]"
+        : undefined;
 
   return (
     <CloserPageShell aria-busy="true" aria-live="polite" className={shellClassName}>

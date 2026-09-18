@@ -25,12 +25,20 @@ async function getRequestParticipant(request: Request) {
 
 export async function POST(request: Request, context: { params: Promise<{ pairId: string }> }) {
   const participant = await getRequestParticipant(request);
-  if (!participant) return Response.json({ error: "Sign in is required." }, { status: 401, headers: noStoreHeaders });
+  if (!participant)
+    return Response.json(
+      { error: "Sign in is required." },
+      { status: 401, headers: noStoreHeaders },
+    );
   const { pairId } = await context.params;
   try {
     const invite = await issueRejoinInvite(db, { participantId: participant.id, pairId });
     return Response.json(
-      { token: invite.token, expiresAt: invite.expiresAt.toISOString(), targetParticipantDisplayName: invite.targetParticipantDisplayName },
+      {
+        token: invite.token,
+        expiresAt: invite.expiresAt.toISOString(),
+        targetParticipantDisplayName: invite.targetParticipantDisplayName,
+      },
       { headers: noStoreHeaders },
     );
   } catch (error) {
@@ -40,7 +48,11 @@ export async function POST(request: Request, context: { params: Promise<{ pairId
 
 export async function DELETE(request: Request, context: { params: Promise<{ pairId: string }> }) {
   const participant = await getRequestParticipant(request);
-  if (!participant) return Response.json({ error: "Sign in is required." }, { status: 401, headers: noStoreHeaders });
+  if (!participant)
+    return Response.json(
+      { error: "Sign in is required." },
+      { status: 401, headers: noStoreHeaders },
+    );
   const { pairId } = await context.params;
   try {
     await revokeRejoinInvites(db, { participantId: participant.id, pairId });

@@ -15,7 +15,12 @@ export function getInitialInviteCookie(request: Request, pairId: string) {
   return pairCookie ? decodeURIComponent(pairCookie.slice(name.length + 1)) : null;
 }
 
-export function setInitialInviteCookie(headers: Headers, pairId: string, token: string, expiresAt: Date) {
+export function setInitialInviteCookie(
+  headers: Headers,
+  pairId: string,
+  token: string,
+  expiresAt: Date,
+) {
   const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
   headers.append(
     "set-cookie",

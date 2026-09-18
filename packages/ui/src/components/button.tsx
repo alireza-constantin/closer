@@ -7,7 +7,8 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-closer-coral text-white shadow-[0_10px_20px_rgba(255,98,110,0.24)] hover:-translate-y-0.5 hover:bg-closer-coral/90",
+        default:
+          "bg-closer-coral text-white shadow-[0_10px_20px_rgba(255,98,110,0.24)] hover:-translate-y-0.5 hover:bg-closer-coral/90",
         outline:
           "border-closer-navy/10 bg-white text-closer-navy shadow-closer-soft hover:-translate-y-0.5 hover:bg-closer-lavender-soft/70",
         secondary:

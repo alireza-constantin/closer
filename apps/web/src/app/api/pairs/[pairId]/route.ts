@@ -6,15 +6,24 @@ const noStoreHeaders = { "Cache-Control": "private, no-store" };
 
 export async function PATCH(request: Request, context: { params: Promise<{ pairId: string }> }) {
   const authUserId = await getAuthUserIdFromRequest(request.headers);
-  if (!authUserId) return Response.json({ error: "Sign in is required." }, { status: 401, headers: noStoreHeaders });
+  if (!authUserId)
+    return Response.json(
+      { error: "Sign in is required." },
+      { status: 401, headers: noStoreHeaders },
+    );
 
   const body: unknown = await request.json().catch(() => null);
-  if (!body || typeof body !== "object" || typeof (body as Record<string, unknown>).intendedPersonName !== "string") {
+  if (
+    !body ||
+    typeof body !== "object" ||
+    typeof (body as Record<string, unknown>).intendedPersonName !== "string"
+  ) {
     return Response.json({ error: "Invalid request." }, { status: 400, headers: noStoreHeaders });
   }
 
   const participant = await getParticipantByAuthUserId(db, authUserId);
-  if (!participant) return Response.json({ error: "Not found." }, { status: 404, headers: noStoreHeaders });
+  if (!participant)
+    return Response.json({ error: "Not found." }, { status: 404, headers: noStoreHeaders });
 
   try {
     const { pairId } = await context.params;
@@ -23,10 +32,16 @@ export async function PATCH(request: Request, context: { params: Promise<{ pairI
       pairId,
       intendedPersonName: (body as Record<string, string>).intendedPersonName,
     });
-    return Response.json({ pairId: updated.id, intendedPersonName: updated.intendedPersonName }, { headers: noStoreHeaders });
+    return Response.json(
+      { pairId: updated.id, intendedPersonName: updated.intendedPersonName },
+      { headers: noStoreHeaders },
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
     const status = message === "INTENDED_PERSON_NAME_INVALID" ? 400 : 404;
-    return Response.json({ error: status === 400 ? message : "Not found." }, { status, headers: noStoreHeaders });
+    return Response.json(
+      { error: status === 400 ? message : "Not found." },
+      { status, headers: noStoreHeaders },
+    );
   }
 }

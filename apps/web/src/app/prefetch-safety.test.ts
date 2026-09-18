@@ -48,8 +48,12 @@ describe("prefetch-safe route entry", () => {
   });
 
   test("keeps category pickers inert until an explicit POST", async () => {
-    const privatePicker = await Bun.file(join(appDirectory, "..", "components/private-picker.tsx")).text();
-    const togetherPicker = await Bun.file(join(appDirectory, "..", "components/together-picker.tsx")).text();
+    const privatePicker = await Bun.file(
+      join(appDirectory, "..", "components/private-picker.tsx"),
+    ).text();
+    const togetherPicker = await Bun.file(
+      join(appDirectory, "..", "components/together-picker.tsx"),
+    ).text();
     const privateRoute = await routeSource("api/pairs/[pairId]/private-conversations/route.ts");
     const togetherRoute = await routeSource("api/pairs/[pairId]/together/sessions/route.ts");
 
@@ -57,7 +61,11 @@ describe("prefetch-safe route entry", () => {
     expect(togetherPicker).toContain('method: "POST"');
     expect(privateRoute).toContain("export async function GET");
     expect(privateRoute).toContain("listActivePrivateConversations");
-    expect(privateRoute.split("export async function GET", 2)[1].split("export async function POST", 1)[0]).not.toContain("startOrResumePrivateConversation");
+    expect(
+      privateRoute
+        .split("export async function GET", 2)[1]
+        .split("export async function POST", 1)[0],
+    ).not.toContain("startOrResumePrivateConversation");
     expect(togetherRoute).not.toContain("export async function GET");
     expect(togetherRoute).toContain("export async function POST");
     expect(togetherRoute).toContain("startTogetherSession");
@@ -71,7 +79,11 @@ describe("prefetch-safe route entry", () => {
 
     expect(inviteRoute).toContain("export async function GET");
     expect(inviteRoute).toContain("getInitialInviteStatus");
-    expect(inviteRoute.split("export async function GET", 2)[1].split("export async function POST", 1)[0]).not.toContain("issueOrReuseInitialInvite");
+    expect(
+      inviteRoute
+        .split("export async function GET", 2)[1]
+        .split("export async function POST", 1)[0],
+    ).not.toContain("issueOrReuseInitialInvite");
     expect(initialRedeemRoute).toContain("export async function POST");
     expect(initialRedeemRoute).toContain("redeemInitialInvite");
     expect(rejoinRedeemRoute).toContain("export async function POST");
@@ -83,8 +95,12 @@ describe("prefetch-safe route entry", () => {
 
   test("keeps Round reads, history, and termination rendering inert", async () => {
     const roundRoute = await routeSource("api/pairs/[pairId]/private-rounds/[roundId]/route.ts");
-    const revealRoute = await routeSource("api/pairs/[pairId]/private-rounds/[roundId]/reveal/route.ts");
-    const terminationControl = await Bun.file(join(appDirectory, "..", "components/pair-termination-control.tsx")).text();
+    const revealRoute = await routeSource(
+      "api/pairs/[pairId]/private-rounds/[roundId]/reveal/route.ts",
+    );
+    const terminationControl = await Bun.file(
+      join(appDirectory, "..", "components/pair-termination-control.tsx"),
+    ).text();
 
     expect(roundRoute).toContain("export async function GET");
     expect(roundRoute).not.toContain("markPrivateRevealViewed");
@@ -96,14 +112,25 @@ describe("prefetch-safe route entry", () => {
   });
 
   test("keeps the Together question-buffer prefetch read-only", async () => {
-    const sessionScreen = await Bun.file(join(appDirectory, "..", "components/together-session-screen.tsx")).text();
-    const questionPageRoute = await routeSource("api/pairs/[pairId]/together/sessions/[sessionId]/questions/route.ts");
+    const sessionScreen = await Bun.file(
+      join(appDirectory, "..", "components/together-session-screen.tsx"),
+    ).text();
+    const questionPageRoute = await routeSource(
+      "api/pairs/[pairId]/together/sessions/[sessionId]/questions/route.ts",
+    );
 
     expect(sessionScreen).toContain("shouldPrefetchTogetherQuestionPage");
-    expect(sessionScreen).toContain('fetch(`${baseUrl}/questions?band=${encodeURIComponent(band)}&cursor=${encodeURIComponent(cursor)}`, { cache: "no-store" })');
+    expect(sessionScreen).toContain(
+      'fetch(`${baseUrl}/questions?band=${encodeURIComponent(band)}&cursor=${encodeURIComponent(cursor)}`, { cache: "no-store" })',
+    );
     expect(questionPageRoute).toContain("export async function GET");
     expect(questionPageRoute).toContain("getTogetherQuestionPageForParticipant");
-    for (const command of ["startTogetherSession", "advanceTogetherSession", "endTogetherSession", "toggleTogetherQuestionLike"]) {
+    for (const command of [
+      "startTogetherSession",
+      "advanceTogetherSession",
+      "endTogetherSession",
+      "toggleTogetherQuestionLike",
+    ]) {
       expect(questionPageRoute).not.toContain(command);
     }
   });

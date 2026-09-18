@@ -1,0 +1,43 @@
+# Dependencies and package-manager artifacts
+node_modules/
+.pnp/
+.pnp.js
+bun.lock
+
+# Local agent tooling and issue-tracker material
+.agents/
+.claude/
+.scratch/
+
+# Framework/build/test output and caches
+.next/
+**/.next/
+dist/
+**/dist/
+build/
+**/build/
+coverage/
+**/coverage/
+.turbo/
+.nx/
+.cache/
+.next-build/
+*.tsbuildinfo
+logs/
+*.log
+tmp/
+temp/
+
+# Local environments and deployment state
+.env
+.env.*
+**/.env
+**/.env.*
+.vercel/
+.alchemy/
+local.db
+local.db-*
+
+# Generated application and database metadata
+apps/web/src/routeTree.gen.ts
+packages/db/src/migrations/meta/

@@ -1,4 +1,9 @@
-import { CloserDomainError, db, publishRealtimeEvent, redeemRejoinInvite } from "@Closer/auth/closer";
+import {
+  CloserDomainError,
+  db,
+  publishRealtimeEvent,
+  redeemRejoinInvite,
+} from "@Closer/auth/closer";
 
 import { getAuthUserIdFromRequest } from "@/lib/closer-server";
 
@@ -7,8 +12,10 @@ export async function POST(request: Request, context: { params: Promise<{ token:
   if (!authUserId) return Response.json({ error: "Sign in is required." }, { status: 401 });
 
   const body: unknown = await request.json().catch(() => null);
-  const displayName = body && typeof body === "object" ? (body as Record<string, unknown>).displayName : null;
-  if (typeof displayName !== "string") return Response.json({ error: "Invalid request." }, { status: 400 });
+  const displayName =
+    body && typeof body === "object" ? (body as Record<string, unknown>).displayName : null;
+  if (typeof displayName !== "string")
+    return Response.json({ error: "Invalid request." }, { status: 400 });
 
   const { token } = await context.params;
   try {

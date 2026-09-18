@@ -82,11 +82,7 @@ function serializedPayloadSize(value: unknown) {
   return { jsonBytes: body.byteLength, gzipBytes: gzipSync(body).byteLength };
 }
 
-async function measure(
-  name: string,
-  operation: () => Promise<unknown>,
-  count = repeats,
-) {
+async function measure(name: string, operation: () => Promise<unknown>, count = repeats) {
   const durations: number[] = [];
   const queryCounts: number[] = [];
   for (let index = 0; index < count; index += 1) {
@@ -121,14 +117,18 @@ async function measure(
 async function measureHttp(name: string, path: string, count = repeats) {
   const fixture = currentFixture;
   if (!fixture) throw new Error("fixture is not initialized");
-  return measure(name, async () => {
-    const response = await fetch(`${baseUrl}${path}`, {
-      headers: { cookie: fixture.cookie },
-      redirect: "manual",
-    });
-    await response.text();
-    if (response.status >= 500) throw new Error(`${name} returned ${response.status}`);
-  }, count);
+  return measure(
+    name,
+    async () => {
+      const response = await fetch(`${baseUrl}${path}`, {
+        headers: { cookie: fixture.cookie },
+        redirect: "manual",
+      });
+      await response.text();
+      if (response.status >= 500) throw new Error(`${name} returned ${response.status}`);
+    },
+    count,
+  );
 }
 
 let currentFixture: Fixture | null = null;
@@ -153,8 +153,9 @@ async function signUpForBenchmark() {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ name: "Perf User", email, password: "PerfPass123!" }),
   });
-  const body = await response.json() as { user?: { id: string }; token?: string };
-  if (!response.ok || !body.user?.id) throw new Error(`benchmark signup failed: ${response.status}`);
+  const body = (await response.json()) as { user?: { id: string }; token?: string };
+  if (!response.ok || !body.user?.id)
+    throw new Error(`benchmark signup failed: ${response.status}`);
   const setCookie = response.headers.get("set-cookie") ?? "";
   const cookie = setCookie.match(/(?:^|,\s*)(better-auth\.session_token=[^;]+)/)?.[1];
   if (!cookie) throw new Error("benchmark signup did not return a session cookie");
@@ -181,24 +182,46 @@ async function seedFixture(): Promise<Fixture> {
   const otherParticipantId = randomUUID();
   const otherUser = userRow(otherAuthUserId, "Other");
   await database.insert(user).values(otherUser);
-  await database.insert(participant).values({ id: otherParticipantId, authUserId: otherAuthUserId, displayName: "Other User" });
+  await database
+    .insert(participant)
+    .values({ id: otherParticipantId, authUserId: otherAuthUserId, displayName: "Other User" });
 
   const oldParticipants = Array.from({ length: 8 }, (_, index) => ({
     id: randomUUID(),
     authUserId: `perf-old-${index}-${randomUUID()}`,
     displayName: `Former ${index}`,
   }));
-  await database.insert(user).values(oldParticipants.map((item, index) => userRow(item.authUserId, `Former ${index}`)));
+  await database
+    .insert(user)
+    .values(oldParticipants.map((item, index) => userRow(item.authUserId, `Former ${index}`)));
   await database.insert(participant).values(oldParticipants);
 
   const pairId = randomUUID();
-  await database.insert(pair).values({ id: pairId, relationshipType: "partner", intendedPersonName: null });
+  await database
+    .insert(pair)
+    .values({ id: pairId, relationshipType: "partner", intendedPersonName: null });
 
   const historicalMemberships = oldParticipants.flatMap((oldParticipant, index) => {
     const endedAt = new Date(Date.now() - (index + 2) * 86400000);
     return [
-      { id: randomUUID(), pairId, participantId: primary.id, slot: "first" as const, startedAt: new Date(endedAt.getTime() - 86400000), endedAt, endedDisplayName: "Primary User" },
-      { id: randomUUID(), pairId, participantId: oldParticipant.id, slot: "second" as const, startedAt: new Date(endedAt.getTime() - 86400000), endedAt, endedDisplayName: oldParticipant.displayName },
+      {
+        id: randomUUID(),
+        pairId,
+        participantId: primary.id,
+        slot: "first" as const,
+        startedAt: new Date(endedAt.getTime() - 86400000),
+        endedAt,
+        endedDisplayName: "Primary User",
+      },
+      {
+        id: randomUUID(),
+        pairId,
+        participantId: oldParticipant.id,
+        slot: "second" as const,
+        startedAt: new Date(endedAt.getTime() - 86400000),
+        endedAt,
+        endedDisplayName: oldParticipant.displayName,
+      },
     ];
   });
   await database.insert(pairMembership).values(historicalMemberships);
@@ -207,7 +230,12 @@ async function seedFixture(): Promise<Fixture> {
   const currentSecondMembershipId = randomUUID();
   await database.insert(pairMembership).values([
     { id: currentFirstMembershipId, pairId, participantId: primary.id, slot: "first" as const },
-    { id: currentSecondMembershipId, pairId, participantId: otherParticipantId, slot: "second" as const },
+    {
+      id: currentSecondMembershipId,
+      pairId,
+      participantId: otherParticipantId,
+      slot: "second" as const,
+    },
   ]);
 
   const historicalEras = Array.from({ length: 8 }, (_, index) => ({
@@ -221,12 +249,21 @@ async function seedFixture(): Promise<Fixture> {
   const currentEraId = randomUUID();
   await database.insert(pairMembershipEra).values([
     ...historicalEras,
-    { id: currentEraId, pairId, firstMembershipId: currentFirstMembershipId, secondMembershipId: currentSecondMembershipId },
+    {
+      id: currentEraId,
+      pairId,
+      firstMembershipId: currentFirstMembershipId,
+      secondMembershipId: currentSecondMembershipId,
+    },
   ]);
 
   const invitePairId = randomUUID();
-  await database.insert(pair).values({ id: invitePairId, relationshipType: "partner", intendedPersonName: "Invite Guest" });
-  await database.insert(pairMembership).values({ id: randomUUID(), pairId: invitePairId, participantId: primary.id, slot: "first" });
+  await database
+    .insert(pair)
+    .values({ id: invitePairId, relationshipType: "partner", intendedPersonName: "Invite Guest" });
+  await database
+    .insert(pairMembership)
+    .values({ id: randomUUID(), pairId: invitePairId, participantId: primary.id, slot: "first" });
 
   const questionRows = Array.from({ length: 240 }, () => ({ id: randomUUID(), isActive: true }));
   await database.insert(question).values(questionRows);
@@ -264,7 +301,11 @@ async function seedFixture(): Promise<Fixture> {
   });
 
   const revisionFor = (index: number) => revisionRows[index % revisionRows.length]!;
-  const historicalConversations: Array<{ id: string; eraId: string; category: "fun" | "deep" | "memories" }> = [];
+  const historicalConversations: Array<{
+    id: string;
+    eraId: string;
+    category: "fun" | "deep" | "memories";
+  }> = [];
   const historicalRoundRows: Array<Record<string, unknown>> = [];
   const historicalAnswerRows: Array<Record<string, unknown>> = [];
   const historicalRevealRows: Array<Record<string, unknown>> = [];
@@ -274,7 +315,11 @@ async function seedFixture(): Promise<Fixture> {
     for (let conversationIndex = 0; conversationIndex < 3; conversationIndex += 1) {
       const conversationId = randomUUID();
       const category = (["fun", "deep", "memories"] as const)[conversationIndex]!;
-      historicalConversations.push({ id: conversationId, eraId: historicalEras[eraIndex]!.id, category });
+      historicalConversations.push({
+        id: conversationId,
+        eraId: historicalEras[eraIndex]!.id,
+        category,
+      });
       for (let roundIndex = 1; roundIndex <= 18; roundIndex += 1) {
         const roundId = randomUUID();
         const revision = revisionFor(eraIndex * 30 + conversationIndex * 18 + roundIndex);
@@ -291,20 +336,53 @@ async function seedFixture(): Promise<Fixture> {
           declinedByParticipantId: declined ? primary.id : null,
           declinedAt: declined ? new Date() : null,
         });
-        historicalAnswerRows.push({ roundId, participantId: primary.id, body: `Historical answer ${eraIndex}-${conversationIndex}-${roundIndex}-one` });
-        if (!declined) historicalAnswerRows.push({ roundId, participantId: oldParticipants[eraIndex]!.id, body: `Historical answer ${eraIndex}-${conversationIndex}-${roundIndex}-two` });
+        historicalAnswerRows.push({
+          roundId,
+          participantId: primary.id,
+          body: `Historical answer ${eraIndex}-${conversationIndex}-${roundIndex}-one`,
+        });
+        if (!declined)
+          historicalAnswerRows.push({
+            roundId,
+            participantId: oldParticipants[eraIndex]!.id,
+            body: `Historical answer ${eraIndex}-${conversationIndex}-${roundIndex}-two`,
+          });
         if (!declined) {
           historicalRevealRows.push({ roundId, participantId: primary.id });
           historicalRevealRows.push({ roundId, participantId: oldParticipants[eraIndex]!.id });
-          historicalReactionRows.push({ roundId, participantId: primary.id, value: "heart" as const });
-          historicalReactionRows.push({ roundId, participantId: oldParticipants[eraIndex]!.id, value: "tender" as const });
-          historicalReplyRows.push({ roundId, participantId: primary.id, body: "Historical reply one" });
-          historicalReplyRows.push({ roundId, participantId: oldParticipants[eraIndex]!.id, body: "Historical reply two" });
+          historicalReactionRows.push({
+            roundId,
+            participantId: primary.id,
+            value: "heart" as const,
+          });
+          historicalReactionRows.push({
+            roundId,
+            participantId: oldParticipants[eraIndex]!.id,
+            value: "tender" as const,
+          });
+          historicalReplyRows.push({
+            roundId,
+            participantId: primary.id,
+            body: "Historical reply one",
+          });
+          historicalReplyRows.push({
+            roundId,
+            participantId: oldParticipants[eraIndex]!.id,
+            body: "Historical reply two",
+          });
         }
       }
     }
   }
-  await database.insert(privateConversation).values(historicalConversations.map((item) => ({ id: item.id, pairId, category: item.category, createdByParticipantId: primary.id, membershipEraId: item.eraId })));
+  await database.insert(privateConversation).values(
+    historicalConversations.map((item) => ({
+      id: item.id,
+      pairId,
+      category: item.category,
+      createdByParticipantId: primary.id,
+      membershipEraId: item.eraId,
+    })),
+  );
   await database.insert(privateRound).values(historicalRoundRows as never);
   await database.insert(privateAnswer).values(historicalAnswerRows as never);
   await database.insert(privateRevealView).values(historicalRevealRows as never);
@@ -330,38 +408,111 @@ async function seedFixture(): Promise<Fixture> {
       }
     }
   }
-  await database.insert(togetherSession).values(historicalSessions.map((item) => ({ id: item.id, pairId, membershipEraId: item.eraId, category: "fun" as const, startedByParticipantId: primary.id, endedAt: new Date() })));
+  await database.insert(togetherSession).values(
+    historicalSessions.map((item) => ({
+      id: item.id,
+      pairId,
+      membershipEraId: item.eraId,
+      category: "fun" as const,
+      startedByParticipantId: primary.id,
+      endedAt: new Date(),
+    })),
+  );
   await database.insert(togetherSessionQuestion).values(historicalCardRows as never);
 
   const currentConversations = ["fun", "deep", "memories", "relationship"] as const;
-  const currentConversationRows = currentConversations.map((category, index) => ({ id: randomUUID(), pairId, category, createdByParticipantId: index === 0 ? primary.id : otherParticipantId, membershipEraId: currentEraId }));
+  const currentConversationRows = currentConversations.map((category, index) => ({
+    id: randomUUID(),
+    pairId,
+    category,
+    createdByParticipantId: index === 0 ? primary.id : otherParticipantId,
+    membershipEraId: currentEraId,
+  }));
   await database.insert(privateConversation).values(currentConversationRows);
   const candidateId = randomUUID();
   const candidateRevision = revisionFor(200);
-  await database.insert(privateQuestionCandidate).values({ id: candidateId, conversationId: currentConversationRows[0]!.id, questionId: candidateRevision.questionId, questionRevisionId: candidateRevision.id });
+  await database.insert(privateQuestionCandidate).values({
+    id: candidateId,
+    conversationId: currentConversationRows[0]!.id,
+    questionId: candidateRevision.questionId,
+    questionRevisionId: candidateRevision.id,
+  });
 
   const answerRoundId = randomUUID();
   const answerRevision = revisionFor(201);
-  await database.insert(privateRound).values({ id: answerRoundId, pairId, conversationId: currentConversationRows[3]!.id, questionId: answerRevision.questionId, questionRevisionId: answerRevision.id, questionNumber: 1, initiatorParticipantId: otherParticipantId });
+  await database.insert(privateRound).values({
+    id: answerRoundId,
+    pairId,
+    conversationId: currentConversationRows[3]!.id,
+    questionId: answerRevision.questionId,
+    questionRevisionId: answerRevision.id,
+    questionNumber: 1,
+    initiatorParticipantId: otherParticipantId,
+  });
   const revealRoundId = randomUUID();
   const revealRevision = revisionFor(202);
-  await database.insert(privateRound).values({ id: revealRoundId, pairId, conversationId: currentConversationRows[1]!.id, questionId: revealRevision.questionId, questionRevisionId: revealRevision.id, questionNumber: 1, initiatorParticipantId: primary.id });
-  await database.insert(privateAnswer).values({ roundId: revealRoundId, participantId: primary.id, body: "Reveal answer one" });
-  await database.insert(privateAnswer).values({ roundId: revealRoundId, participantId: otherParticipantId, body: "Reveal answer two" });
+  await database.insert(privateRound).values({
+    id: revealRoundId,
+    pairId,
+    conversationId: currentConversationRows[1]!.id,
+    questionId: revealRevision.questionId,
+    questionRevisionId: revealRevision.id,
+    questionNumber: 1,
+    initiatorParticipantId: primary.id,
+  });
+  await database
+    .insert(privateAnswer)
+    .values({ roundId: revealRoundId, participantId: primary.id, body: "Reveal answer one" });
+  await database.insert(privateAnswer).values({
+    roundId: revealRoundId,
+    participantId: otherParticipantId,
+    body: "Reveal answer two",
+  });
 
-  const currentSessions = Array.from({ length: 6 }, () => ({ id: randomUUID(), pairId, membershipEraId: currentEraId, category: "fun" as const, startedByParticipantId: primary.id }));
+  const currentSessions = Array.from({ length: 6 }, () => ({
+    id: randomUUID(),
+    pairId,
+    membershipEraId: currentEraId,
+    category: "fun" as const,
+    startedByParticipantId: primary.id,
+  }));
   await database.insert(togetherSession).values(currentSessions);
-  const currentCardRows: Array<{ sessionId: string; questionId: string; questionRevisionId: string; position: number; advancedAt: Date | null }> = [];
+  const currentCardRows: Array<{
+    sessionId: string;
+    questionId: string;
+    questionRevisionId: string;
+    position: number;
+    advancedAt: Date | null;
+  }> = [];
   for (const [sessionIndex, currentSession] of currentSessions.entries()) {
     const revision = revisionFor(20 + sessionIndex);
-    currentCardRows.push({ sessionId: currentSession.id, questionId: revision.questionId, questionRevisionId: revision.id, position: 1, advancedAt: null });
+    currentCardRows.push({
+      sessionId: currentSession.id,
+      questionId: revision.questionId,
+      questionRevisionId: revision.id,
+      position: 1,
+      advancedAt: null,
+    });
   }
   await database.insert(togetherSessionQuestion).values(currentCardRows);
 
   const preClaimSessionId = randomUUID();
   const preClaimRevision = revisionFor(230);
-  await database.insert(togetherSession).values({ id: preClaimSessionId, pairId, membershipEraId: null, category: "fun", startedByParticipantId: primary.id, endedAt: new Date() });
-  await database.insert(togetherSessionQuestion).values({ sessionId: preClaimSessionId, questionId: preClaimRevision.questionId, questionRevisionId: preClaimRevision.id, position: 1, advancedAt: new Date() });
+  await database.insert(togetherSession).values({
+    id: preClaimSessionId,
+    pairId,
+    membershipEraId: null,
+    category: "fun",
+    startedByParticipantId: primary.id,
+    endedAt: new Date(),
+  });
+  await database.insert(togetherSessionQuestion).values({
+    sessionId: preClaimSessionId,
+    questionId: preClaimRevision.questionId,
+    questionRevisionId: preClaimRevision.id,
+    position: 1,
+    advancedAt: new Date(),
+  });
 
   const activePairStatus = await getPairStatusForParticipant(database, primary.id, pairId);
   if (activePairStatus.state !== "connected") throw new Error("fixture pair was not connected");
@@ -389,91 +540,216 @@ async function run() {
   const f = currentFixture;
   const results = [] as unknown[];
 
-  results.push(await measure("auth.session", async () => {
-    const resolved = await auth.api.getSession({ headers: new Headers({ cookie: f.cookie }) });
-    if (!resolved?.user?.id) throw new Error("session did not resolve");
-  }));
-  results.push(await measure("auth.participant", async () => {
-    if (!(await getParticipantByAuthUserId(database, f.authUserId))) throw new Error("participant did not resolve");
-  }));
+  results.push(
+    await measure("auth.session", async () => {
+      const resolved = await auth.api.getSession({ headers: new Headers({ cookie: f.cookie }) });
+      if (!resolved?.user?.id) throw new Error("session did not resolve");
+    }),
+  );
+  results.push(
+    await measure("auth.participant", async () => {
+      if (!(await getParticipantByAuthUserId(database, f.authUserId)))
+        throw new Error("participant did not resolve");
+    }),
+  );
   results.push(await measureHttp("root.home.request", "/"));
   results.push(await measureHttp("pair.home.request", `/pair/${f.pairId}`));
   results.push(await measureHttp("private.picker.request", `/pair/${f.pairId}/private`));
-  results.push(await measureHttp("history.request", `/pair/${f.pairId}/history`, Math.max(3, Math.min(repeats, 5))));
-  results.push(await measure("pair.home.projection", async () => {
-    const [pairView, spaces] = await Promise.all([
-      getPairForParticipant(database, f.participantId, f.pairId),
-      listActivePairsForParticipant(database, f.participantId),
-    ]);
-    if (pairView.members.length === 2) await listActivePrivateConversations(database, { participantId: f.participantId, pairId: f.pairId });
-    if (!spaces.length) throw new Error("spaces projection was empty");
-  }));
-  results.push(await measure("together.session.load", async () => {
-    await getTogetherSessionForParticipant(database, { participantId: f.participantId, pairId: f.pairId, sessionId: f.togetherSessionId });
-  }));
-  results.push(await measure("together.playback.initial", async () => {
-    await getTogetherSessionPlaybackForParticipant(database, { participantId: f.participantId, pairId: f.pairId, sessionId: f.togetherSessionId });
-  }));
-  results.push(await measure("together.question-page.light", async () => {
-    await getTogetherQuestionPageForParticipant(database, { participantId: f.participantId, pairId: f.pairId, sessionId: f.togetherSessionId, band: "light" });
-  }));
-  results.push(await measure("private.conversation.load", async () => {
-    await getPrivateConversationForParticipant(database, { participantId: f.participantId, pairId: f.pairId, conversationId: f.privateConversationId });
-  }));
-  results.push(await measure("private.round.load", async () => {
-    await getPrivateRoundForParticipant(database, { participantId: f.participantId, pairId: f.pairId, roundId: f.revealRoundId });
-  }));
-  results.push(await measure("history.projection", async () => {
-    await getFormerEraHistoryForParticipant(database, { participantId: f.participantId, pairId: f.pairId });
-  }, Math.max(3, Math.min(repeats, 5))));
-  results.push(await measure("invite.status", async () => {
-    await getInitialInviteStatus(database, { participantId: f.participantId, pairId: f.invitePairId });
-  }));
-  results.push(await measure("join.preview", async () => {
-    await getInitialInviteLanding(database, f.initialInviteToken);
-  }));
-  results.push(await measure("rejoin.preview", async () => {
-    await getRejoinInviteLanding(database, f.rejoinInviteToken);
-  }));
+  results.push(
+    await measureHttp(
+      "history.request",
+      `/pair/${f.pairId}/history`,
+      Math.max(3, Math.min(repeats, 5)),
+    ),
+  );
+  results.push(
+    await measure("pair.home.projection", async () => {
+      const [pairView, spaces] = await Promise.all([
+        getPairForParticipant(database, f.participantId, f.pairId),
+        listActivePairsForParticipant(database, f.participantId),
+      ]);
+      if (pairView.members.length === 2)
+        await listActivePrivateConversations(database, {
+          participantId: f.participantId,
+          pairId: f.pairId,
+        });
+      if (!spaces.length) throw new Error("spaces projection was empty");
+    }),
+  );
+  results.push(
+    await measure("together.session.load", async () => {
+      await getTogetherSessionForParticipant(database, {
+        participantId: f.participantId,
+        pairId: f.pairId,
+        sessionId: f.togetherSessionId,
+      });
+    }),
+  );
+  results.push(
+    await measure("together.playback.initial", async () => {
+      await getTogetherSessionPlaybackForParticipant(database, {
+        participantId: f.participantId,
+        pairId: f.pairId,
+        sessionId: f.togetherSessionId,
+      });
+    }),
+  );
+  results.push(
+    await measure("together.question-page.light", async () => {
+      await getTogetherQuestionPageForParticipant(database, {
+        participantId: f.participantId,
+        pairId: f.pairId,
+        sessionId: f.togetherSessionId,
+        band: "light",
+      });
+    }),
+  );
+  results.push(
+    await measure("private.conversation.load", async () => {
+      await getPrivateConversationForParticipant(database, {
+        participantId: f.participantId,
+        pairId: f.pairId,
+        conversationId: f.privateConversationId,
+      });
+    }),
+  );
+  results.push(
+    await measure("private.round.load", async () => {
+      await getPrivateRoundForParticipant(database, {
+        participantId: f.participantId,
+        pairId: f.pairId,
+        roundId: f.revealRoundId,
+      });
+    }),
+  );
+  results.push(
+    await measure(
+      "history.projection",
+      async () => {
+        await getFormerEraHistoryForParticipant(database, {
+          participantId: f.participantId,
+          pairId: f.pairId,
+        });
+      },
+      Math.max(3, Math.min(repeats, 5)),
+    ),
+  );
+  results.push(
+    await measure("invite.status", async () => {
+      await getInitialInviteStatus(database, {
+        participantId: f.participantId,
+        pairId: f.invitePairId,
+      });
+    }),
+  );
+  results.push(
+    await measure("join.preview", async () => {
+      await getInitialInviteLanding(database, f.initialInviteToken);
+    }),
+  );
+  results.push(
+    await measure("rejoin.preview", async () => {
+      await getRejoinInviteLanding(database, f.rejoinInviteToken);
+    }),
+  );
 
-  const legacyTogetherProjection = await getTogetherSessionForParticipant(database, { participantId: f.participantId, pairId: f.pairId, sessionId: f.togetherSessionId });
-  const initialTogetherPlayback = await getTogetherSessionPlaybackForParticipant(database, { participantId: f.participantId, pairId: f.pairId, sessionId: f.togetherSessionId });
-  const nextTogetherPage = await getTogetherQuestionPageForParticipant(database, { participantId: f.participantId, pairId: f.pairId, sessionId: f.togetherSessionId, band: "light" });
+  const legacyTogetherProjection = await getTogetherSessionForParticipant(database, {
+    participantId: f.participantId,
+    pairId: f.pairId,
+    sessionId: f.togetherSessionId,
+  });
+  const initialTogetherPlayback = await getTogetherSessionPlaybackForParticipant(database, {
+    participantId: f.participantId,
+    pairId: f.pairId,
+    sessionId: f.togetherSessionId,
+  });
+  const nextTogetherPage = await getTogetherQuestionPageForParticipant(database, {
+    participantId: f.participantId,
+    pairId: f.pairId,
+    sessionId: f.togetherSessionId,
+    band: "light",
+  });
   const nextTogetherQuestion = nextTogetherPage.items[0];
-  if (!nextTogetherQuestion) throw new Error("performance fixture did not produce a next Together Question");
-  results.push(await measure("together.next.mutation", async () => {
-    await advanceTogetherSession(database, {
-      participantId: f.participantId,
-      pairId: f.pairId,
-      sessionId: f.togetherSessionId,
-      action: "next",
-      currentQuestionId: f.togetherQuestionId,
-      nextQuestionId: nextTogetherQuestion.questionId,
-      nextQuestionRevisionId: nextTogetherQuestion.questionRevisionId,
-      clientRequestId: randomUUID(),
-    });
-  }, 1));
+  if (!nextTogetherQuestion)
+    throw new Error("performance fixture did not produce a next Together Question");
+  results.push(
+    await measure(
+      "together.next.mutation",
+      async () => {
+        await advanceTogetherSession(database, {
+          participantId: f.participantId,
+          pairId: f.pairId,
+          sessionId: f.togetherSessionId,
+          action: "next",
+          currentQuestionId: f.togetherQuestionId,
+          nextQuestionId: nextTogetherQuestion.questionId,
+          nextQuestionRevisionId: nextTogetherQuestion.questionRevisionId,
+          clientRequestId: randomUUID(),
+        });
+      },
+      1,
+    ),
+  );
 
   // Mutations are measured once against isolated fixture rows because they advance lifecycle state.
-  results.push(await measure("private.answer.mutation+projection", async () => {
-    await submitPrivateAnswer(database, { participantId: f.participantId, pairId: f.pairId, roundId: f.answerRoundId, body: "Performance answer" });
-  }, 1));
-  results.push(await measure("private.reveal.mutation+projection", async () => {
-    await markPrivateRevealViewed(database, { participantId: f.participantId, pairId: f.pairId, roundId: f.revealRoundId });
-  }, 1));
-  results.push(await measure("private.ask.mutation", async () => {
-    await askPrivateQuestionCandidate(database, { participantId: f.participantId, pairId: f.pairId, conversationId: f.privateConversationId, candidateId: f.candidateId, clientRequestId: randomUUID() });
-  }, 1));
+  results.push(
+    await measure(
+      "private.answer.mutation+projection",
+      async () => {
+        await submitPrivateAnswer(database, {
+          participantId: f.participantId,
+          pairId: f.pairId,
+          roundId: f.answerRoundId,
+          body: "Performance answer",
+        });
+      },
+      1,
+    ),
+  );
+  results.push(
+    await measure(
+      "private.reveal.mutation+projection",
+      async () => {
+        await markPrivateRevealViewed(database, {
+          participantId: f.participantId,
+          pairId: f.pairId,
+          roundId: f.revealRoundId,
+        });
+      },
+      1,
+    ),
+  );
+  results.push(
+    await measure(
+      "private.ask.mutation",
+      async () => {
+        await askPrivateQuestionCandidate(database, {
+          participantId: f.participantId,
+          pairId: f.pairId,
+          conversationId: f.privateConversationId,
+          candidateId: f.candidateId,
+          clientRequestId: randomUUID(),
+        });
+      },
+      1,
+    ),
+  );
 
-  console.log(JSON.stringify({
-    fixture: { pairId: f.pairId, participantId: f.participantId },
-    togetherPayloads: {
-      legacyInitialProjection: serializedPayloadSize(legacyTogetherProjection),
-      initialPlaybackProjection: serializedPayloadSize(initialTogetherPlayback),
-      subsequentQuestionPage: serializedPayloadSize(nextTogetherPage),
-    },
-    results,
-  }, null, 2));
+  console.log(
+    JSON.stringify(
+      {
+        fixture: { pairId: f.pairId, participantId: f.participantId },
+        togetherPayloads: {
+          legacyInitialProjection: serializedPayloadSize(legacyTogetherProjection),
+          initialPlaybackProjection: serializedPayloadSize(initialTogetherPlayback),
+          subsequentQuestionPage: serializedPayloadSize(nextTogetherPage),
+        },
+        results,
+      },
+      null,
+      2,
+    ),
+  );
   process.exit(0);
 }
 

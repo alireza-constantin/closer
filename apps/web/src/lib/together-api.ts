@@ -1,8 +1,4 @@
-import {
-  CloserDomainError,
-  db,
-  getParticipantByAuthUserId,
-} from "@Closer/auth/closer";
+import { CloserDomainError, db, getParticipantByAuthUserId } from "@Closer/auth/closer";
 
 import { getAuthUserIdFromRequest } from "@/lib/closer-server";
 

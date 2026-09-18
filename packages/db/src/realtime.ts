@@ -4,7 +4,12 @@ import { Client } from "pg";
 import { env } from "@Closer/env/server";
 
 export const REALTIME_CHANNEL = "closer_realtime";
-export const realtimeEventTypes = ["pair.changed", "private.changed", "together.changed", "pair.terminated"] as const;
+export const realtimeEventTypes = [
+  "pair.changed",
+  "private.changed",
+  "together.changed",
+  "pair.terminated",
+] as const;
 export type RealtimeEventType = (typeof realtimeEventTypes)[number];
 export type RealtimeEvent = { version: 1; pairId: string; type: RealtimeEventType };
 
@@ -14,9 +19,11 @@ type ListenerClient = Pick<Client, "connect" | "query" | "on" | "end">;
 export function parseRealtimeEvent(value: unknown): RealtimeEvent | null {
   if (!value || typeof value !== "object") return null;
   const event = value as Record<string, unknown>;
-  return event.version === 1
-    && typeof event.pairId === "string" && event.pairId.length > 0
-    && typeof event.type === "string" && (realtimeEventTypes as readonly string[]).includes(event.type)
+  return event.version === 1 &&
+    typeof event.pairId === "string" &&
+    event.pairId.length > 0 &&
+    typeof event.type === "string" &&
+    (realtimeEventTypes as readonly string[]).includes(event.type)
     ? { version: 1, pairId: event.pairId, type: event.type as RealtimeEventType }
     : null;
 }
@@ -30,7 +37,8 @@ export class RealtimeBus {
 
   constructor(
     private readonly databaseUrl: string,
-    private readonly createListener: () => ListenerClient = () => new Client({ connectionString: databaseUrl }),
+    private readonly createListener: () => ListenerClient = () =>
+      new Client({ connectionString: databaseUrl }),
     private readonly publishQuery: (payload: string) => Promise<void> = async (payload) => {
       const publisher = new Client({ connectionString: databaseUrl });
       try {
@@ -63,7 +71,9 @@ export class RealtimeBus {
 
   private async ensureListener() {
     if (this.listener || this.starting) return this.starting;
-    this.starting = this.startListener().finally(() => { this.starting = null; });
+    this.starting = this.startListener().finally(() => {
+      this.starting = null;
+    });
     return this.starting;
   }
 
@@ -72,7 +82,11 @@ export class RealtimeBus {
     listener.on("notification", (message: { channel?: string; payload?: string }) => {
       if (message.channel !== REALTIME_CHANNEL || !message.payload) return;
       let parsed: RealtimeEvent | null = null;
-      try { parsed = parseRealtimeEvent(JSON.parse(message.payload)); } catch { return; }
+      try {
+        parsed = parseRealtimeEvent(JSON.parse(message.payload));
+      } catch {
+        return;
+      }
       if (!parsed) return;
       this.subscribers.get(parsed.pairId)?.forEach((subscriber) => subscriber(parsed!));
     });
@@ -103,7 +117,7 @@ export class RealtimeBus {
 const globalRealtime = globalThis as typeof globalThis & { __closerRealtimeBus?: RealtimeBus };
 
 export function getRealtimeBus() {
-  return globalRealtime.__closerRealtimeBus ??= new RealtimeBus(
+  return (globalRealtime.__closerRealtimeBus ??= new RealtimeBus(
     env.REALTIME_DATABASE_URL ?? env.DATABASE_URL,
     undefined,
     async (payload) => {
@@ -112,7 +126,7 @@ export function getRealtimeBus() {
       const { db } = await import("./index");
       await db.execute(sql`SELECT pg_notify(${REALTIME_CHANNEL}, ${payload})`);
     },
-  );
+  ));
 }
 
 export async function publishRealtimeEvent(pairId: string, type: RealtimeEventType) {

@@ -74,10 +74,12 @@ function createCodewords(value: string) {
     pad += 1;
   }
 
-  const dataBlocks = Array.from({ length: QR_BLOCK_COUNT }, (_, index) => (
-    codewords.slice(index * QR_BLOCK_DATA_CODEWORDS, (index + 1) * QR_BLOCK_DATA_CODEWORDS)
-  ));
-  const errorBlocks = dataBlocks.map((block) => reedSolomonRemainder(block, QR_ECC_CODEWORDS_PER_BLOCK));
+  const dataBlocks = Array.from({ length: QR_BLOCK_COUNT }, (_, index) =>
+    codewords.slice(index * QR_BLOCK_DATA_CODEWORDS, (index + 1) * QR_BLOCK_DATA_CODEWORDS),
+  );
+  const errorBlocks = dataBlocks.map((block) =>
+    reedSolomonRemainder(block, QR_ECC_CODEWORDS_PER_BLOCK),
+  );
   const interleaved: number[] = [];
   for (let i = 0; i < QR_BLOCK_DATA_CODEWORDS; i += 1) {
     for (const block of dataBlocks) interleaved.push(block[i]);
@@ -104,7 +106,9 @@ function formatBits(mask: number) {
 }
 
 function createMatrix(codewords: number[], mask: number) {
-  const modules = Array.from({ length: QR_SIZE }, () => new Array<boolean | null>(QR_SIZE).fill(null));
+  const modules = Array.from({ length: QR_SIZE }, () =>
+    new Array<boolean | null>(QR_SIZE).fill(null),
+  );
   const functions = Array.from({ length: QR_SIZE }, () => new Array<boolean>(QR_SIZE).fill(false));
 
   function setFunction(row: number, column: number, value: boolean) {
@@ -118,7 +122,13 @@ function createMatrix(codewords: number[], mask: number) {
     for (let dy = -1; dy <= 7; dy += 1) {
       for (let dx = -1; dx <= 7; dx += 1) {
         const inside = dx >= 0 && dx <= 6 && dy >= 0 && dy <= 6;
-        const dark = inside && (dx === 0 || dx === 6 || dy === 0 || dy === 6 || (dx >= 2 && dx <= 4 && dy >= 2 && dy <= 4));
+        const dark =
+          inside &&
+          (dx === 0 ||
+            dx === 6 ||
+            dy === 0 ||
+            dy === 6 ||
+            (dx >= 2 && dx <= 4 && dy >= 2 && dy <= 4));
         setFunction(row + dy, column + dx, dark);
       }
     }
@@ -136,10 +146,19 @@ function createMatrix(codewords: number[], mask: number) {
   const alignmentPositions = [6, QR_SIZE - 7];
   for (const row of alignmentPositions) {
     for (const column of alignmentPositions) {
-      if ((row === 6 && column === 6) || (row === 6 && column === QR_SIZE - 7) || (row === QR_SIZE - 7 && column === 6)) continue;
+      if (
+        (row === 6 && column === 6) ||
+        (row === 6 && column === QR_SIZE - 7) ||
+        (row === QR_SIZE - 7 && column === 6)
+      )
+        continue;
       for (let dy = -2; dy <= 2; dy += 1) {
         for (let dx = -2; dx <= 2; dx += 1) {
-          setFunction(row + dy, column + dx, Math.max(Math.abs(dx), Math.abs(dy)) !== 1 || (dx === 0 && dy === 0));
+          setFunction(
+            row + dy,
+            column + dx,
+            Math.max(Math.abs(dx), Math.abs(dy)) !== 1 || (dx === 0 && dy === 0),
+          );
         }
       }
     }
@@ -167,7 +186,9 @@ function createMatrix(codewords: number[], mask: number) {
     modules[8][i < 8 ? i : i < 9 ? i + 1 : QR_SIZE - 15 + i] = dark;
   }
 
-  const dataBits = codewords.flatMap((codeword) => Array.from({ length: 8 }, (_, i) => (codeword >>> (7 - i)) & 1));
+  const dataBits = codewords.flatMap((codeword) =>
+    Array.from({ length: 8 }, (_, i) => (codeword >>> (7 - i)) & 1),
+  );
   let bitIndex = 0;
   let upward = true;
   for (let column = QR_SIZE - 1; column >= 1; column -= 2) {
@@ -178,14 +199,22 @@ function createMatrix(codewords: number[], mask: number) {
         if (functions[row][currentColumn]) continue;
         const raw = bitIndex < dataBits.length ? dataBits[bitIndex] === 1 : false;
         bitIndex += 1;
-        const masked = mask === 0 ? (row + currentColumn) % 2 === 0
-          : mask === 1 ? row % 2 === 0
-            : mask === 2 ? currentColumn % 3 === 0
-              : mask === 3 ? (row + currentColumn) % 3 === 0
-                : mask === 4 ? (Math.floor(row / 2) + Math.floor(currentColumn / 3)) % 2 === 0
-                  : mask === 5 ? (row * currentColumn) % 2 + (row * currentColumn) % 3 === 0
-                    : mask === 6 ? ((row * currentColumn) % 2 + (row * currentColumn) % 3) % 2 === 0
-                      : ((row * currentColumn) % 3 + (row + currentColumn) % 2) % 2 === 0;
+        const masked =
+          mask === 0
+            ? (row + currentColumn) % 2 === 0
+            : mask === 1
+              ? row % 2 === 0
+              : mask === 2
+                ? currentColumn % 3 === 0
+                : mask === 3
+                  ? (row + currentColumn) % 3 === 0
+                  : mask === 4
+                    ? (Math.floor(row / 2) + Math.floor(currentColumn / 3)) % 2 === 0
+                    : mask === 5
+                      ? ((row * currentColumn) % 2) + ((row * currentColumn) % 3) === 0
+                      : mask === 6
+                        ? (((row * currentColumn) % 2) + ((row * currentColumn) % 3)) % 2 === 0
+                        : (((row * currentColumn) % 3) + ((row + currentColumn) % 2)) % 2 === 0;
         modules[row][currentColumn] = raw !== masked;
       }
     }
@@ -199,12 +228,42 @@ function penalty(matrix: boolean[][]) {
   let score = 0;
   for (let row = 0; row < QR_SIZE; row += 1) {
     for (let column = 0; column < QR_SIZE; column += 1) {
-      if (row + 1 < QR_SIZE && column + 1 < QR_SIZE && matrix[row][column] === matrix[row + 1][column] && matrix[row][column] === matrix[row][column + 1] && matrix[row][column] === matrix[row + 1][column + 1]) score += 3;
-      if (row + 6 < QR_SIZE && matrix[row][column] && !matrix[row + 1][column] && matrix[row + 2][column] && matrix[row + 3][column] && matrix[row + 4][column] && !matrix[row + 5][column] && matrix[row + 6][column]) score += 40;
-      if (column + 6 < QR_SIZE && matrix[row][column] && !matrix[row][column + 1] && matrix[row][column + 2] && matrix[row][column + 3] && matrix[row][column + 4] && !matrix[row][column + 5] && matrix[row][column + 6]) score += 40;
+      if (
+        row + 1 < QR_SIZE &&
+        column + 1 < QR_SIZE &&
+        matrix[row][column] === matrix[row + 1][column] &&
+        matrix[row][column] === matrix[row][column + 1] &&
+        matrix[row][column] === matrix[row + 1][column + 1]
+      )
+        score += 3;
+      if (
+        row + 6 < QR_SIZE &&
+        matrix[row][column] &&
+        !matrix[row + 1][column] &&
+        matrix[row + 2][column] &&
+        matrix[row + 3][column] &&
+        matrix[row + 4][column] &&
+        !matrix[row + 5][column] &&
+        matrix[row + 6][column]
+      )
+        score += 40;
+      if (
+        column + 6 < QR_SIZE &&
+        matrix[row][column] &&
+        !matrix[row][column + 1] &&
+        matrix[row][column + 2] &&
+        matrix[row][column + 3] &&
+        matrix[row][column + 4] &&
+        !matrix[row][column + 5] &&
+        matrix[row][column + 6]
+      )
+        score += 40;
     }
   }
-  for (const line of [...matrix, ...Array.from({ length: QR_SIZE }, (_, column) => matrix.map((row) => row[column]))]) {
+  for (const line of [
+    ...matrix,
+    ...Array.from({ length: QR_SIZE }, (_, column) => matrix.map((row) => row[column])),
+  ]) {
     let runColor = line[0];
     let runLength = 1;
     for (let i = 1; i < line.length; i += 1) {
@@ -218,7 +277,8 @@ function penalty(matrix: boolean[][]) {
     if (runLength >= 5) score += runLength - 2;
   }
   const darkModules = matrix.flat().filter(Boolean).length;
-  score += Math.floor(Math.abs(darkModules * 20 - QR_SIZE * QR_SIZE * 10) / (QR_SIZE * QR_SIZE)) * 10;
+  score +=
+    Math.floor(Math.abs(darkModules * 20 - QR_SIZE * QR_SIZE * 10) / (QR_SIZE * QR_SIZE)) * 10;
   return score;
 }
 
@@ -237,6 +297,12 @@ export function encodeQrSvg(value: string) {
 
   const quiet = 4;
   const size = QR_SIZE + quiet * 2;
-  const path = best.flatMap((row, rowIndex) => row.flatMap((dark, columnIndex) => dark ? [`M${columnIndex + quiet} ${rowIndex + quiet}h1v1h-1z`] : [])).join("");
+  const path = best
+    .flatMap((row, rowIndex) =>
+      row.flatMap((dark, columnIndex) =>
+        dark ? [`M${columnIndex + quiet} ${rowIndex + quiet}h1v1h-1z`] : [],
+      ),
+    )
+    .join("");
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" shape-rendering="crispEdges" role="img" aria-label="Scan this QR code to join Closer"><rect width="100%" height="100%" fill="#fff"/><path d="${path}" fill="#102565"/></svg>`;
 }

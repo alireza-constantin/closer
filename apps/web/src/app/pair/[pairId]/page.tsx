@@ -1,4 +1,9 @@
-import { db, getPairForParticipant, listActivePairsForParticipant, listActivePrivateConversations } from "@Closer/auth/closer";
+import {
+  db,
+  getPairForParticipant,
+  listActivePairsForParticipant,
+  listActivePrivateConversations,
+} from "@Closer/auth/closer";
 import { notFound } from "next/navigation";
 
 import PairHome from "@/components/pair-home";

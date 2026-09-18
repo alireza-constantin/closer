@@ -145,8 +145,8 @@ function normalizeQuestionRevision(input: QuestionRevisionInput): QuestionRevisi
   assertQuestionModeFit(input.modeFit);
   assertQuestionIntensity(input.intensity);
   if (
-    (input.category === "relationship" && input.relationshipFit !== "partner")
-    || (input.category === "friendship" && input.relationshipFit !== "friend")
+    (input.category === "relationship" && input.relationshipFit !== "partner") ||
+    (input.category === "friendship" && input.relationshipFit !== "friend")
   ) {
     throw new CloserDomainError("QUESTION_UNAVAILABLE");
   }
@@ -159,7 +159,11 @@ function assertReactionValue(value: string): asserts value is ReactionValue {
   }
 }
 
-function normalizePrivateText(value: string, maximumLength: number, errorCode: "ANSWER_INVALID" | "REPLY_INVALID") {
+function normalizePrivateText(
+  value: string,
+  maximumLength: number,
+  errorCode: "ANSWER_INVALID" | "REPLY_INVALID",
+) {
   const normalized = value.trim();
   if (normalized.length < 1 || normalized.length > maximumLength) {
     throw new CloserDomainError(errorCode);
@@ -273,7 +277,8 @@ export async function createQuestionRevision(
       .set({ currentRevisionId: revision.id })
       .where(eq(question.id, input.questionId))
       .returning();
-    if (!updatedQuestion[0]) throw new Error("Question revision creation did not set a current revision.");
+    if (!updatedQuestion[0])
+      throw new Error("Question revision creation did not set a current revision.");
     return { question: updatedQuestion[0], revision };
   });
 }
@@ -318,16 +323,33 @@ export async function withdrawQuestionRevision(database: Database, questionRevis
     if (!rows[0]) throw new CloserDomainError("QUESTION_UNAVAILABLE");
 
     const affected = await tx
-      .select({ candidateId: privateQuestionCandidate.id, conversationId: privateQuestionCandidate.conversationId })
+      .select({
+        candidateId: privateQuestionCandidate.id,
+        conversationId: privateQuestionCandidate.conversationId,
+      })
       .from(privateQuestionCandidate)
-      .where(and(eq(privateQuestionCandidate.questionRevisionId, questionRevisionId), eq(privateQuestionCandidate.state, "unresolved")));
+      .where(
+        and(
+          eq(privateQuestionCandidate.questionRevisionId, questionRevisionId),
+          eq(privateQuestionCandidate.state, "unresolved"),
+        ),
+      );
     for (const candidate of affected) {
       await tx
         .update(privateQuestionCandidate)
         .set({ state: "invalidated", resolvedAt: new Date() })
-        .where(and(eq(privateQuestionCandidate.id, candidate.candidateId), eq(privateQuestionCandidate.state, "unresolved")));
+        .where(
+          and(
+            eq(privateQuestionCandidate.id, candidate.candidateId),
+            eq(privateQuestionCandidate.state, "unresolved"),
+          ),
+        );
       const conversationRows = await tx
-        .select({ conversation: privateConversation, relationshipType: pair.relationshipType, eraEndedAt: pairMembershipEra.endedAt })
+        .select({
+          conversation: privateConversation,
+          relationshipType: pair.relationshipType,
+          eraEndedAt: pairMembershipEra.endedAt,
+        })
         .from(privateConversation)
         .innerJoin(pair, eq(privateConversation.pairId, pair.id))
         .innerJoin(pairMembershipEra, eq(privateConversation.membershipEraId, pairMembershipEra.id))
@@ -335,7 +357,11 @@ export async function withdrawQuestionRevision(database: Database, questionRevis
         .limit(1);
       const conversation = conversationRows[0];
       if (conversation && !conversation.eraEndedAt) {
-        await selectPrivateQuestionCandidate(tx, conversation.conversation, conversation.relationshipType);
+        await selectPrivateQuestionCandidate(
+          tx,
+          conversation.conversation,
+          conversation.relationshipType,
+        );
       }
     }
     return rows[0];
@@ -440,16 +466,11 @@ async function requireSoleUnclaimedPairMemberInTransaction(
   const activeMemberships = await tx
     .select({ participantId: pairMembership.participantId, slot: pairMembership.slot })
     .from(pairMembership)
-    .where(
-      and(
-        eq(pairMembership.pairId, pairId),
-        isNull(pairMembership.endedAt),
-      ),
-    );
+    .where(and(eq(pairMembership.pairId, pairId), isNull(pairMembership.endedAt)));
   if (
-    activeMemberships.length !== 1
-    || activeMemberships[0]?.participantId !== participantId
-    || activeMemberships[0]?.slot !== "first"
+    activeMemberships.length !== 1 ||
+    activeMemberships[0]?.participantId !== participantId ||
+    activeMemberships[0]?.slot !== "first"
   ) {
     throw new CloserDomainError("INVITE_UNAVAILABLE");
   }
@@ -466,17 +487,32 @@ export async function terminatePair(
 ) {
   return database.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
-    const lockedPairs = await tx.select().from(pair).where(eq(pair.id, input.pairId)).for("update").limit(1);
+    const lockedPairs = await tx
+      .select()
+      .from(pair)
+      .where(eq(pair.id, input.pairId))
+      .for("update")
+      .limit(1);
     const lockedPair = lockedPairs[0];
     if (!lockedPair) throw new CloserDomainError("PAIR_NOT_FOUND");
 
     const actorMemberships = await tx
       .select({ id: pairMembership.id, endedAt: pairMembership.endedAt })
       .from(pairMembership)
-      .where(and(eq(pairMembership.pairId, input.pairId), eq(pairMembership.participantId, input.participantId)))
+      .where(
+        and(
+          eq(pairMembership.pairId, input.pairId),
+          eq(pairMembership.participantId, input.participantId),
+        ),
+      )
       .limit(1);
     if (!actorMemberships[0]) throw new CloserDomainError("PAIR_NOT_FOUND");
-    if (lockedPair.terminatedAt) return { pairId: lockedPair.id, state: "terminated" as const, terminatedAt: lockedPair.terminatedAt };
+    if (lockedPair.terminatedAt)
+      return {
+        pairId: lockedPair.id,
+        state: "terminated" as const,
+        terminatedAt: lockedPair.terminatedAt,
+      };
     if (actorMemberships[0].endedAt) throw new CloserDomainError("PAIR_NOT_FOUND");
 
     const endedAt = new Date();
@@ -502,22 +538,36 @@ export async function terminatePair(
     await tx
       .update(privateQuestionCandidate)
       .set({ state: "invalidated", resolvedAt: endedAt })
-      .where(and(
-        eq(privateQuestionCandidate.state, "unresolved"),
-        sql`exists (
+      .where(
+        and(
+          eq(privateQuestionCandidate.state, "unresolved"),
+          sql`exists (
           select 1 from private_conversation terminal_conversation
           where terminal_conversation.id = ${privateQuestionCandidate.conversationId}
             and terminal_conversation.pair_id = ${input.pairId}
         )`,
-      ));
+        ),
+      );
     await tx
       .update(initialInvite)
       .set({ revokedAt: endedAt })
-      .where(and(eq(initialInvite.pairId, input.pairId), isNull(initialInvite.revokedAt), isNull(initialInvite.redeemedAt)));
+      .where(
+        and(
+          eq(initialInvite.pairId, input.pairId),
+          isNull(initialInvite.revokedAt),
+          isNull(initialInvite.redeemedAt),
+        ),
+      );
     await tx
       .update(rejoinInvite)
       .set({ revokedAt: endedAt })
-      .where(and(eq(rejoinInvite.pairId, input.pairId), isNull(rejoinInvite.revokedAt), isNull(rejoinInvite.redeemedAt)));
+      .where(
+        and(
+          eq(rejoinInvite.pairId, input.pairId),
+          isNull(rejoinInvite.revokedAt),
+          isNull(rejoinInvite.redeemedAt),
+        ),
+      );
     await tx
       .update(togetherSession)
       .set({ endedAt })
@@ -527,10 +577,7 @@ export async function terminatePair(
   });
 }
 
-async function findUsableInitialInvite(
-  database: Pick<Database, "select">,
-  pairId: string,
-) {
+async function findUsableInitialInvite(database: Pick<Database, "select">, pairId: string) {
   const rows = await database
     .select({ id: initialInvite.id, expiresAt: initialInvite.expiresAt })
     .from(initialInvite)
@@ -565,12 +612,18 @@ async function createInitialInviteInTransaction(
 
 export async function createPairForParticipant(
   database: Database,
-  input: { participantId: string; intendedPersonName: string; relationshipType: string; clientRequestId?: string },
+  input: {
+    participantId: string;
+    intendedPersonName: string;
+    relationshipType: string;
+    clientRequestId?: string;
+  },
 ) {
   const relationshipType = input.relationshipType;
   assertRelationshipType(relationshipType);
   const intendedPersonName = normalizeIntendedPersonName(input.intendedPersonName);
-  if (input.clientRequestId && !isUuid(input.clientRequestId)) throw new CloserDomainError("PAIR_CREATION_REQUEST_INVALID");
+  if (input.clientRequestId && !isUuid(input.clientRequestId))
+    throw new CloserDomainError("PAIR_CREATION_REQUEST_INVALID");
 
   const existingParticipant = await database
     .select({ id: participant.id })
@@ -590,7 +643,15 @@ export async function createPairForParticipant(
       const existing = await tx
         .select({ pair })
         .from(pair)
-        .innerJoin(pairMembership, and(eq(pairMembership.pairId, pair.id), eq(pairMembership.participantId, input.participantId), eq(pairMembership.slot, "first"), isNull(pairMembership.endedAt)))
+        .innerJoin(
+          pairMembership,
+          and(
+            eq(pairMembership.pairId, pair.id),
+            eq(pairMembership.participantId, input.participantId),
+            eq(pairMembership.slot, "first"),
+            isNull(pairMembership.endedAt),
+          ),
+        )
         .where(eq(pair.creationRequestId, input.clientRequestId))
         .limit(1);
       createdPair = existing[0]?.pair;
@@ -650,7 +711,9 @@ export async function getInitialInviteStatus(
   return database.transaction(async (tx) => {
     await requireSoleUnclaimedPairMemberInTransaction(tx, input.participantId, input.pairId);
     const usable = await findUsableInitialInvite(tx, input.pairId);
-    return usable ? { state: "active" as const, expiresAt: usable.expiresAt } : { state: "none" as const };
+    return usable
+      ? { state: "active" as const, expiresAt: usable.expiresAt }
+      : { state: "none" as const };
   });
 }
 
@@ -675,7 +738,13 @@ export async function issueOrReuseInitialInvite(
     await tx
       .update(initialInvite)
       .set({ revokedAt: new Date() })
-      .where(and(eq(initialInvite.pairId, input.pairId), isNull(initialInvite.revokedAt), isNull(initialInvite.redeemedAt)));
+      .where(
+        and(
+          eq(initialInvite.pairId, input.pairId),
+          isNull(initialInvite.revokedAt),
+          isNull(initialInvite.redeemedAt),
+        ),
+      );
     const issued = await createInitialInviteInTransaction(tx, input.pairId);
     return { state: "issued" as const, ...issued };
   });
@@ -693,7 +762,13 @@ export async function replaceInitialInvite(
     await tx
       .update(initialInvite)
       .set({ revokedAt: new Date() })
-      .where(and(eq(initialInvite.pairId, input.pairId), isNull(initialInvite.revokedAt), isNull(initialInvite.redeemedAt)));
+      .where(
+        and(
+          eq(initialInvite.pairId, input.pairId),
+          isNull(initialInvite.revokedAt),
+          isNull(initialInvite.redeemedAt),
+        ),
+      );
     return createInitialInviteInTransaction(tx, input.pairId);
   });
 }
@@ -844,7 +919,11 @@ export async function redeemInitialInvite(
       .limit(1);
     const continuingParticipantId = firstMembership[0]?.participantId;
     const firstMembershipId = firstMembership[0]?.id;
-    if (!continuingParticipantId || !firstMembershipId || continuingParticipantId === input.participantId) {
+    if (
+      !continuingParticipantId ||
+      !firstMembershipId ||
+      continuingParticipantId === input.participantId
+    ) {
       throw new CloserDomainError("INVITE_UNAVAILABLE");
     }
 
@@ -890,11 +969,14 @@ export async function redeemInitialInvite(
       .returning({ pairId: initialInvite.pairId });
     if (!redeemed[0]) throw new CloserDomainError("INVITE_UNAVAILABLE");
 
-    const secondMembership = await tx.insert(pairMembership).values({
-      pairId: invite.pairId,
-      participantId: input.participantId,
-      slot: "second",
-    }).returning({ id: pairMembership.id });
+    const secondMembership = await tx
+      .insert(pairMembership)
+      .values({
+        pairId: invite.pairId,
+        participantId: input.participantId,
+        slot: "second",
+      })
+      .returning({ id: pairMembership.id });
     if (!secondMembership[0]) throw new Error("Initial claim did not create a membership.");
 
     const era = await tx
@@ -955,7 +1037,11 @@ export async function issueRejoinInvite(
   return database.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
     await tx.execute(sql`select id from "pair" where id = ${input.pairId} for update`);
-    const { targetSlot, target } = await findEligibleRejoinTarget(tx, input.participantId, input.pairId);
+    const { targetSlot, target } = await findEligibleRejoinTarget(
+      tx,
+      input.participantId,
+      input.pairId,
+    );
     const token = createInviteToken();
     const expiresAt = new Date(Date.now() + REJOIN_INVITE_LIFETIME_MS);
 
@@ -1075,15 +1161,23 @@ export async function redeemRejoinInvite(
       .where(and(eq(pairMembershipEra.pairId, invite.pairId), isNull(pairMembershipEra.endedAt)))
       .limit(1);
     const currentEra = currentEraRows[0];
-    if (!currentEra || (currentEra.firstMembershipId !== targetMembershipRows[0].membership.id && currentEra.secondMembershipId !== targetMembershipRows[0].membership.id)) {
+    if (
+      !currentEra ||
+      (currentEra.firstMembershipId !== targetMembershipRows[0].membership.id &&
+        currentEra.secondMembershipId !== targetMembershipRows[0].membership.id)
+    ) {
       throw new CloserDomainError("REJOIN_UNAVAILABLE");
     }
-    const continuingMembershipId = currentEra.firstMembershipId === targetMembershipRows[0].membership.id
-      ? currentEra.secondMembershipId
-      : currentEra.firstMembershipId;
+    const continuingMembershipId =
+      currentEra.firstMembershipId === targetMembershipRows[0].membership.id
+        ? currentEra.secondMembershipId
+        : currentEra.firstMembershipId;
     const insertedReplacement = await tx
       .insert(participant)
-      .values({ authUserId: input.authUserId, displayName: normalizeDisplayName(input.displayName) })
+      .values({
+        authUserId: input.authUserId,
+        displayName: normalizeDisplayName(input.displayName),
+      })
       .onConflictDoNothing({ target: participant.authUserId })
       .returning({ id: participant.id });
     const replacementParticipant = insertedReplacement[0];
@@ -1115,31 +1209,41 @@ export async function redeemRejoinInvite(
     await tx
       .update(privateQuestionCandidate)
       .set({ state: "invalidated", resolvedAt: endedAt })
-      .where(and(
-        eq(privateQuestionCandidate.state, "unresolved"),
-        sql`exists (
+      .where(
+        and(
+          eq(privateQuestionCandidate.state, "unresolved"),
+          sql`exists (
           select 1 from private_conversation old_conversation
           where old_conversation.id = ${privateQuestionCandidate.conversationId}
             and old_conversation.membership_era_id = ${currentEra.id}
         )`,
-      ));
+        ),
+      );
     await tx
       .update(togetherSession)
       .set({ endedAt })
-      .where(and(eq(togetherSession.membershipEraId, currentEra.id), isNull(togetherSession.endedAt)));
+      .where(
+        and(eq(togetherSession.membershipEraId, currentEra.id), isNull(togetherSession.endedAt)),
+      );
 
-    const replacementMembership = await tx.insert(pairMembership).values({
-      pairId: invite.pairId,
-      participantId: replacementParticipant.id,
-      slot: invite.targetSlot,
-    }).returning({ id: pairMembership.id });
-    if (!replacementMembership[0]) throw new Error("Rejoin replacement did not create a membership.");
+    const replacementMembership = await tx
+      .insert(pairMembership)
+      .values({
+        pairId: invite.pairId,
+        participantId: replacementParticipant.id,
+        slot: invite.targetSlot,
+      })
+      .returning({ id: pairMembership.id });
+    if (!replacementMembership[0])
+      throw new Error("Rejoin replacement did not create a membership.");
     const replacementEra = await tx
       .insert(pairMembershipEra)
       .values({
         pairId: invite.pairId,
-        firstMembershipId: invite.targetSlot === "first" ? replacementMembership[0].id : continuingMembershipId,
-        secondMembershipId: invite.targetSlot === "second" ? replacementMembership[0].id : continuingMembershipId,
+        firstMembershipId:
+          invite.targetSlot === "first" ? replacementMembership[0].id : continuingMembershipId,
+        secondMembershipId:
+          invite.targetSlot === "second" ? replacementMembership[0].id : continuingMembershipId,
       })
       .returning({ id: pairMembershipEra.id });
     if (!replacementEra[0]) throw new Error("Rejoin replacement did not create a membership era.");
@@ -1156,11 +1260,19 @@ export async function redeemRejoinInvite(
         ),
       );
 
-    return { pairId: invite.pairId, membershipEraId: replacementEra[0].id, participantId: replacementParticipant.id };
+    return {
+      pairId: invite.pairId,
+      membershipEraId: replacementEra[0].id,
+      participantId: replacementParticipant.id,
+    };
   });
 }
 
-export async function getPairForParticipant(database: Database, participantId: string, pairId: string) {
+export async function getPairForParticipant(
+  database: Database,
+  participantId: string,
+  pairId: string,
+) {
   const access = await requireActivePairAccess(database, participantId, pairId);
   const members = await database
     .select({
@@ -1175,7 +1287,11 @@ export async function getPairForParticipant(database: Database, participantId: s
   return { pair: access.pair, members };
 }
 
-export async function getPairStatusForParticipant(database: Database, participantId: string, pairId: string) {
+export async function getPairStatusForParticipant(
+  database: Database,
+  participantId: string,
+  pairId: string,
+) {
   const access = await requireActivePairAccess(database, participantId, pairId);
   const otherSlot = access.membership.slot === "first" ? "second" : "first";
   const otherMembers = await database
@@ -1196,7 +1312,11 @@ export async function getPairStatusForParticipant(database: Database, participan
   return { state: "connected" as const, otherParticipantDisplayName: otherMember.displayName };
 }
 
-async function requireCompletePairAccess(database: Database, participantId: string, pairId: string) {
+async function requireCompletePairAccess(
+  database: Database,
+  participantId: string,
+  pairId: string,
+) {
   const access = await requireActivePairAccess(database, participantId, pairId);
   const members = await database
     .select({ participantId: pairMembership.participantId, displayName: participant.displayName })
@@ -1217,7 +1337,12 @@ async function getActiveMembershipEra(database: Database, pairId: string) {
   return rows[0] ?? null;
 }
 
-async function loadTogetherSessionContext(database: Database, participantId: string, pairId: string, sessionId: string) {
+async function loadTogetherSessionContext(
+  database: Database,
+  participantId: string,
+  pairId: string,
+  sessionId: string,
+) {
   const access = await requireActivePairAccess(database, participantId, pairId);
   const rows = await database
     .select({ session: togetherSession })
@@ -1232,7 +1357,10 @@ async function loadTogetherSessionContext(database: Database, participantId: str
             where session_era.id = ${togetherSession.membershipEraId}
               and (${access.membership.id} = session_era.first_membership_id or ${access.membership.id} = session_era.second_membership_id)
           )`,
-          and(isNull(togetherSession.membershipEraId), eq(togetherSession.startedByParticipantId, participantId)),
+          and(
+            isNull(togetherSession.membershipEraId),
+            eq(togetherSession.startedByParticipantId, participantId),
+          ),
         ),
       ),
     )
@@ -1247,7 +1375,12 @@ async function requireMutableTogetherSessionInTransaction(
   input: { participantId: string; pairId: string; sessionId: string },
 ) {
   await tx.execute(sql`select id from "pair" where id = ${input.pairId} for update`);
-  const context = await loadTogetherSessionContext(tx, input.participantId, input.pairId, input.sessionId);
+  const context = await loadTogetherSessionContext(
+    tx,
+    input.participantId,
+    input.pairId,
+    input.sessionId,
+  );
   const activeEra = await getActiveMembershipEra(tx, input.pairId);
   if (context.session.membershipEraId !== (activeEra?.id ?? null)) {
     throw new CloserDomainError("TOGETHER_SESSION_ENDED");
@@ -1295,7 +1428,9 @@ export async function listEligibleTogetherQuestions(
 }
 
 function deterministicTogetherQuestionRank(selectionSeed: string, questionId: string) {
-  return createHash("sha256").update(`closer:together:${selectionSeed}:${questionId}`).digest("hex");
+  return createHash("sha256")
+    .update(`closer:together:${selectionSeed}:${questionId}`)
+    .digest("hex");
 }
 
 function encodeTogetherQuestionCursor(questionId: string) {
@@ -1327,13 +1462,16 @@ async function loadTogetherQuestionPage(
   if (input.cursor && !cursorQuestionId) throw new CloserDomainError("TOGETHER_ACTION_INVALID");
 
   const canonicalRank = sql<string>`encode(digest(${`closer:together:${input.selectionSeed}:`} || ${question.id}::text, 'sha256'), 'hex')`;
-  const cursorRank = cursorQuestionId ? deterministicTogetherQuestionRank(input.selectionSeed, cursorQuestionId) : null;
-  const cursorCondition = cursorQuestionId && cursorRank
-    ? or(
-        gt(canonicalRank, cursorRank),
-        and(eq(canonicalRank, cursorRank), gt(question.id, cursorQuestionId)),
-      )
-    : undefined;
+  const cursorRank = cursorQuestionId
+    ? deterministicTogetherQuestionRank(input.selectionSeed, cursorQuestionId)
+    : null;
+  const cursorCondition =
+    cursorQuestionId && cursorRank
+      ? or(
+          gt(canonicalRank, cursorRank),
+          and(eq(canonicalRank, cursorRank), gt(question.id, cursorQuestionId)),
+        )
+      : undefined;
   const shownCondition = input.sessionId
     ? sql`not exists (
         select 1
@@ -1370,7 +1508,8 @@ async function loadTogetherQuestionPage(
   return {
     items,
     hasMore,
-    nextCursor: hasMore && lastQuestion ? encodeTogetherQuestionCursor(lastQuestion.questionId) : null,
+    nextCursor:
+      hasMore && lastQuestion ? encodeTogetherQuestionCursor(lastQuestion.questionId) : null,
   };
 }
 
@@ -1393,7 +1532,12 @@ async function requireActiveTogetherSessionForPage(
   database: Database,
   input: { participantId: string; pairId: string; sessionId: string },
 ) {
-  const context = await loadTogetherSessionContext(database, input.participantId, input.pairId, input.sessionId);
+  const context = await loadTogetherSessionContext(
+    database,
+    input.participantId,
+    input.pairId,
+    input.sessionId,
+  );
   if (context.session.endedAt) throw new CloserDomainError("TOGETHER_SESSION_ENDED");
   const activeEra = await getActiveMembershipEra(database, input.pairId);
   if (context.session.membershipEraId !== (activeEra?.id ?? null)) {
@@ -1404,7 +1548,13 @@ async function requireActiveTogetherSessionForPage(
 
 export async function getTogetherQuestionPageForParticipant(
   database: Database,
-  input: { participantId: string; pairId: string; sessionId: string; band: string; cursor?: string },
+  input: {
+    participantId: string;
+    pairId: string;
+    sessionId: string;
+    band: string;
+    cursor?: string;
+  },
 ) {
   if (!togetherQuestionBands.includes(input.band as TogetherQuestionBand)) {
     throw new CloserDomainError("TOGETHER_ACTION_INVALID");
@@ -1422,7 +1572,13 @@ export async function getTogetherQuestionPageForParticipant(
 
 async function nextTogetherQuestion(
   database: Database,
-  input: { sessionId?: string; selectionSeed: string; relationshipType: RelationshipType; category: QuestionCategory; completedNextTransitions?: number },
+  input: {
+    sessionId?: string;
+    selectionSeed: string;
+    relationshipType: RelationshipType;
+    category: QuestionCategory;
+    completedNextTransitions?: number;
+  },
 ) {
   for (const band of togetherIntensityFallback(input.completedNextTransitions ?? 0)) {
     const page = await loadTogetherQuestionPage(database, { ...input, band });
@@ -1436,8 +1592,16 @@ async function currentTogetherQuestion(database: Database, sessionId: string) {
   const rows = await database
     .select({ card: togetherSessionQuestion, revision: questionRevision })
     .from(togetherSessionQuestion)
-    .innerJoin(questionRevision, eq(togetherSessionQuestion.questionRevisionId, questionRevision.id))
-    .where(and(eq(togetherSessionQuestion.sessionId, sessionId), isNull(togetherSessionQuestion.advancedAt)))
+    .innerJoin(
+      questionRevision,
+      eq(togetherSessionQuestion.questionRevisionId, questionRevision.id),
+    )
+    .where(
+      and(
+        eq(togetherSessionQuestion.sessionId, sessionId),
+        isNull(togetherSessionQuestion.advancedAt),
+      ),
+    )
     .orderBy(asc(togetherSessionQuestion.position))
     .limit(1);
   return rows[0] ?? null;
@@ -1445,10 +1609,17 @@ async function currentTogetherQuestion(database: Database, sessionId: string) {
 
 export async function startTogetherSession(
   database: Database,
-  input: { participantId: string; pairId: string; category: string; clientRequestId?: string; selectionSeed?: string },
+  input: {
+    participantId: string;
+    pairId: string;
+    category: string;
+    clientRequestId?: string;
+    selectionSeed?: string;
+  },
 ) {
   const access = await requireActivePairAccess(database, input.participantId, input.pairId);
-  if (input.clientRequestId && !isUuid(input.clientRequestId)) throw new CloserDomainError("TOGETHER_ACTION_INVALID");
+  if (input.clientRequestId && !isUuid(input.clientRequestId))
+    throw new CloserDomainError("TOGETHER_ACTION_INVALID");
   assertCategoryForPair(access, input.category);
   const category = input.category as QuestionCategory;
   const selectionSeed = normalizeTogetherSelectionSeed(input.selectionSeed);
@@ -1474,7 +1645,11 @@ export async function startTogetherSession(
       if (existing[0]) {
         const current = await currentTogetherQuestion(tx, existing[0].id);
         if (!current) throw new CloserDomainError("TOGETHER_SESSION_EXHAUSTED");
-        return { sessionId: existing[0].id, questionId: current.card.questionId, questionRevisionId: current.card.questionRevisionId };
+        return {
+          sessionId: existing[0].id,
+          questionId: current.card.questionId,
+          questionRevisionId: current.card.questionRevisionId,
+        };
       }
     }
 
@@ -1505,7 +1680,11 @@ export async function startTogetherSession(
       questionRevisionId: nextQuestion.questionRevisionId,
       position: 1,
     });
-    return { sessionId: session.id, questionId: nextQuestion.questionId, questionRevisionId: nextQuestion.questionRevisionId };
+    return {
+      sessionId: session.id,
+      questionId: nextQuestion.questionId,
+      questionRevisionId: nextQuestion.questionRevisionId,
+    };
   });
 }
 
@@ -1513,7 +1692,12 @@ export async function getTogetherSessionForParticipant(
   database: Database,
   input: { participantId: string; pairId: string; sessionId: string },
 ) {
-  const context = await loadTogetherSessionContext(database, input.participantId, input.pairId, input.sessionId);
+  const context = await loadTogetherSessionContext(
+    database,
+    input.participantId,
+    input.pairId,
+    input.sessionId,
+  );
   const current = await currentTogetherQuestion(database, input.sessionId);
   return {
     id: context.session.id,
@@ -1554,31 +1738,38 @@ export async function getTogetherSessionPlaybackForParticipant(
   database: Database,
   input: { participantId: string; pairId: string; sessionId: string },
 ) {
-  const context = await loadTogetherSessionContext(database, input.participantId, input.pairId, input.sessionId);
+  const context = await loadTogetherSessionContext(
+    database,
+    input.participantId,
+    input.pairId,
+    input.sessionId,
+  );
   const [current, activeEra] = await Promise.all([
     currentTogetherQuestion(database, input.sessionId),
     getActiveMembershipEra(database, input.pairId),
   ]);
-  const sessionIsActive = !context.session.endedAt && context.session.membershipEraId === (activeEra?.id ?? null);
+  const sessionIsActive =
+    !context.session.endedAt && context.session.membershipEraId === (activeEra?.id ?? null);
   const completedNextTransitions = current
     ? await loadCompletedTogetherNextTransitionCount(database, input.sessionId)
     : 0;
-  const pages = current && sessionIsActive
-    ? Object.fromEntries(
-        await Promise.all(
-          togetherQuestionBands.map(async (band) => [
-            band,
-            await loadTogetherQuestionPage(database, {
-              sessionId: context.session.id,
-              selectionSeed: context.session.selectionSeed,
-              relationshipType: context.pair.relationshipType,
-              category: context.session.category,
+  const pages =
+    current && sessionIsActive
+      ? (Object.fromEntries(
+          await Promise.all(
+            togetherQuestionBands.map(async (band) => [
               band,
-            }),
-          ]),
-        ),
-      ) as TogetherQuestionPools
-    : emptyTogetherQuestionPools();
+              await loadTogetherQuestionPage(database, {
+                sessionId: context.session.id,
+                selectionSeed: context.session.selectionSeed,
+                relationshipType: context.pair.relationshipType,
+                category: context.session.category,
+                band,
+              }),
+            ]),
+          ),
+        ) as TogetherQuestionPools)
+      : emptyTogetherQuestionPools();
 
   return {
     id: context.session.id,
@@ -1614,10 +1805,12 @@ export async function advanceTogetherSession(
     nextQuestionRevisionId?: string;
   },
 ) {
-  if (input.clientRequestId && !isUuid(input.clientRequestId)) throw new CloserDomainError("TOGETHER_ACTION_INVALID");
+  if (input.clientRequestId && !isUuid(input.clientRequestId))
+    throw new CloserDomainError("TOGETHER_ACTION_INVALID");
   if (
-    (input.nextQuestionId === undefined) !== (input.nextQuestionRevisionId === undefined)
-    || (input.nextQuestionId !== undefined && (!isUuid(input.nextQuestionId) || !isUuid(input.nextQuestionRevisionId!)))
+    (input.nextQuestionId === undefined) !== (input.nextQuestionRevisionId === undefined) ||
+    (input.nextQuestionId !== undefined &&
+      (!isUuid(input.nextQuestionId) || !isUuid(input.nextQuestionRevisionId!)))
   ) {
     throw new CloserDomainError("TOGETHER_ACTION_INVALID");
   }
@@ -1648,7 +1841,10 @@ export async function advanceTogetherSession(
         .limit(1);
       if (previous[0]) {
         const current = await currentTogetherQuestion(tx, input.sessionId);
-        const completedNextTransitions = await loadCompletedTogetherNextTransitionCount(tx, input.sessionId);
+        const completedNextTransitions = await loadCompletedTogetherNextTransitionCount(
+          tx,
+          input.sessionId,
+        );
         return current
           ? {
               kind: "QUESTION" as const,
@@ -1678,7 +1874,10 @@ export async function advanceTogetherSession(
       })
       .where(eq(togetherSessionQuestion.id, current.card.id));
 
-    const completedNextTransitions = await loadCompletedTogetherNextTransitionCount(tx, input.sessionId);
+    const completedNextTransitions = await loadCompletedTogetherNextTransitionCount(
+      tx,
+      input.sessionId,
+    );
     const nextQuestion = await nextTogetherQuestion(tx, {
       sessionId: input.sessionId,
       selectionSeed: session.selectionSeed,
@@ -1686,10 +1885,12 @@ export async function advanceTogetherSession(
       category: session.category,
       completedNextTransitions,
     });
-    if (!nextQuestion) return { kind: "EXHAUSTED" as const, sessionId: input.sessionId, completedNextTransitions };
+    if (!nextQuestion)
+      return { kind: "EXHAUSTED" as const, sessionId: input.sessionId, completedNextTransitions };
     if (
-      input.nextQuestionId
-      && (nextQuestion.questionId !== input.nextQuestionId || nextQuestion.questionRevisionId !== input.nextQuestionRevisionId)
+      input.nextQuestionId &&
+      (nextQuestion.questionId !== input.nextQuestionId ||
+        nextQuestion.questionRevisionId !== input.nextQuestionRevisionId)
     ) {
       throw new CloserDomainError("TOGETHER_ACTION_INVALID");
     }
@@ -1713,7 +1914,13 @@ export async function advanceTogetherSession(
 
 export async function setTogetherSessionLike(
   database: Database,
-  input: { participantId: string; pairId: string; sessionId: string; liked: boolean; currentQuestionId?: string },
+  input: {
+    participantId: string;
+    pairId: string;
+    sessionId: string;
+    liked: boolean;
+    currentQuestionId?: string;
+  },
 ) {
   await database.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
@@ -1754,16 +1961,29 @@ export async function endTogetherSession(
     const session = sessionRows[0];
     if (!session) throw new CloserDomainError("TOGETHER_SESSION_NOT_FOUND");
     if (!session.endedAt) {
-      await tx.update(togetherSession).set({ endedAt: new Date() }).where(eq(togetherSession.id, input.sessionId));
+      await tx
+        .update(togetherSession)
+        .set({ endedAt: new Date() })
+        .where(eq(togetherSession.id, input.sessionId));
     }
   });
   return getTogetherSessionForParticipant(database, input);
 }
 
-async function loadPrivateRoundContext(database: Database, participantId: string, pairId: string, roundId: string) {
+async function loadPrivateRoundContext(
+  database: Database,
+  participantId: string,
+  pairId: string,
+  roundId: string,
+) {
   const access = await requireActivePairAccess(database, participantId, pairId);
   const rows = await database
-    .select({ round: privateRound, revision: questionRevision, conversation: privateConversation, membershipEra: pairMembershipEra })
+    .select({
+      round: privateRound,
+      revision: questionRevision,
+      conversation: privateConversation,
+      membershipEra: pairMembershipEra,
+    })
     .from(privateRound)
     .innerJoin(
       privateConversation,
@@ -1795,7 +2015,12 @@ async function loadPrivateRoundContext(database: Database, participantId: string
     })
     .from(pairMembership)
     .innerJoin(participant, eq(pairMembership.participantId, participant.id))
-    .where(inArray(pairMembership.id, [result.membershipEra.firstMembershipId, result.membershipEra.secondMembershipId]));
+    .where(
+      inArray(pairMembership.id, [
+        result.membershipEra.firstMembershipId,
+        result.membershipEra.secondMembershipId,
+      ]),
+    );
   return { ...access, ...result, members };
 }
 
@@ -1804,7 +2029,12 @@ async function requireMutablePrivateRoundInTransaction(
   input: { participantId: string; pairId: string; roundId: string },
 ) {
   await tx.execute(sql`select id from "pair" where id = ${input.pairId} for update`);
-  const context = await loadPrivateRoundContext(tx, input.participantId, input.pairId, input.roundId);
+  const context = await loadPrivateRoundContext(
+    tx,
+    input.participantId,
+    input.pairId,
+    input.roundId,
+  );
   if (context.membershipEra.endedAt) throw new CloserDomainError("ROUND_NOT_FOUND");
   return context;
 }
@@ -1826,9 +2056,11 @@ export async function listEligiblePrivateQuestions(
 ) {
   assertQuestionCategory(input.category);
   const access = await requireCompletePairAccess(database, input.participantId, input.pairId);
-  const relationshipCategory = access.pair.relationshipType === "partner" ? "relationship" : "friendship";
+  const relationshipCategory =
+    access.pair.relationshipType === "partner" ? "relationship" : "friendship";
   if (input.category === "relationship" || input.category === "friendship") {
-    if (input.category !== relationshipCategory) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+    if (input.category !== relationshipCategory)
+      throw new CloserDomainError("QUESTION_UNAVAILABLE");
   }
 
   const eligibleQuestions = await database
@@ -1862,15 +2094,23 @@ export async function listEligiblePrivateQuestions(
   const usedQuestionIds = new Set(usedRows.map((row) => row.questionId));
 
   return eligibleQuestions.toSorted((left, right) => {
-    const usageDifference = Number(usedQuestionIds.has(left.id)) - Number(usedQuestionIds.has(right.id));
+    const usageDifference =
+      Number(usedQuestionIds.has(left.id)) - Number(usedQuestionIds.has(right.id));
     return usageDifference || left.id.localeCompare(right.id);
   });
 }
 
-function assertCategoryForPair(access: { pair: { relationshipType: RelationshipType } }, category: string) {
+function assertCategoryForPair(
+  access: { pair: { relationshipType: RelationshipType } },
+  category: string,
+) {
   assertQuestionCategory(category);
-  const relationshipCategory = access.pair.relationshipType === "partner" ? "relationship" : "friendship";
-  if ((category === "relationship" || category === "friendship") && category !== relationshipCategory) {
+  const relationshipCategory =
+    access.pair.relationshipType === "partner" ? "relationship" : "friendship";
+  if (
+    (category === "relationship" || category === "friendship") &&
+    category !== relationshipCategory
+  ) {
     throw new CloserDomainError("QUESTION_UNAVAILABLE");
   }
 }
@@ -1904,7 +2144,12 @@ async function eligiblePrivateQuestions(
 
 async function latestRoundForConversation(database: Database, conversationId: string) {
   const rows = await database
-    .select({ id: privateRound.id, questionId: privateRound.questionId, questionRevisionId: privateRound.questionRevisionId, questionNumber: privateRound.questionNumber })
+    .select({
+      id: privateRound.id,
+      questionId: privateRound.questionId,
+      questionRevisionId: privateRound.questionRevisionId,
+      questionNumber: privateRound.questionNumber,
+    })
     .from(privateRound)
     .where(eq(privateRound.conversationId, conversationId))
     .orderBy(desc(privateRound.questionNumber))
@@ -1927,7 +2172,7 @@ async function privateRoundIsUnresolved(database: Database, roundId: string) {
     .where(eq(privateRound.id, roundId))
     .limit(1);
   if (!round[0] || round[0].status === "declined") return false;
-  if (await answerCountForRound(database, roundId) < 2) return true;
+  if ((await answerCountForRound(database, roundId)) < 2) return true;
   const revealViews = await database
     .select({ id: privateRevealView.id })
     .from(privateRevealView)
@@ -1947,7 +2192,12 @@ async function consumedPrivateQuestionIds(database: Database, conversationId: st
   const skipped = await database
     .select({ questionId: privateQuestionCandidate.questionId })
     .from(privateQuestionCandidate)
-    .where(and(eq(privateQuestionCandidate.conversationId, conversationId), eq(privateQuestionCandidate.state, "skipped")));
+    .where(
+      and(
+        eq(privateQuestionCandidate.conversationId, conversationId),
+        eq(privateQuestionCandidate.state, "skipped"),
+      ),
+    );
   return new Set([...asked, ...skipped].map((item) => item.questionId));
 }
 
@@ -1959,7 +2209,7 @@ async function mutuallyCompletedPrivateRoundCount(database: Database, conversati
   let completed = 0;
   for (const round of rounds) {
     if (round.status === "declined") continue;
-    if (await answerCountForRound(database, round.id) !== 2) continue;
+    if ((await answerCountForRound(database, round.id)) !== 2) continue;
     const revealViews = await database
       .select({ id: privateRevealView.id })
       .from(privateRevealView)
@@ -1981,36 +2231,65 @@ async function selectPrivateQuestionCandidate(
   relationshipType: RelationshipType,
 ) {
   const latestRound = await latestRoundForConversation(database, conversation.id);
-  if (latestRound && await privateRoundIsUnresolved(database, latestRound.id)) return null;
+  if (latestRound && (await privateRoundIsUnresolved(database, latestRound.id))) return null;
   const current = await database
     .select({ candidate: privateQuestionCandidate, revision: questionRevision })
     .from(privateQuestionCandidate)
-    .innerJoin(questionRevision, eq(privateQuestionCandidate.questionRevisionId, questionRevision.id))
-    .where(and(eq(privateQuestionCandidate.conversationId, conversation.id), eq(privateQuestionCandidate.state, "unresolved")))
+    .innerJoin(
+      questionRevision,
+      eq(privateQuestionCandidate.questionRevisionId, questionRevision.id),
+    )
+    .where(
+      and(
+        eq(privateQuestionCandidate.conversationId, conversation.id),
+        eq(privateQuestionCandidate.state, "unresolved"),
+      ),
+    )
     .limit(1);
   if (current[0] && !current[0].revision.withdrawnAt) return current[0];
   if (current[0]) {
     await database
       .update(privateQuestionCandidate)
       .set({ state: "invalidated", resolvedAt: new Date() })
-      .where(and(eq(privateQuestionCandidate.id, current[0].candidate.id), eq(privateQuestionCandidate.state, "unresolved")));
+      .where(
+        and(
+          eq(privateQuestionCandidate.id, current[0].candidate.id),
+          eq(privateQuestionCandidate.state, "unresolved"),
+        ),
+      );
   }
 
-  const eligible = await eligiblePrivateQuestions(database, { relationshipType, category: conversation.category });
+  const eligible = await eligiblePrivateQuestions(database, {
+    relationshipType,
+    category: conversation.category,
+  });
   const usedQuestionIds = await consumedPrivateQuestionIds(database, conversation.id);
   const unused = eligible.filter((candidate) => !usedQuestionIds.has(candidate.id));
   if (!unused.length) return null;
 
-  const preferredIntensities = privateIntensityFallback(await mutuallyCompletedPrivateRoundCount(database, conversation.id));
-  const preferred = preferredIntensities.find((intensity) => unused.some((candidate) => candidate.intensity === intensity));
+  const preferredIntensities = privateIntensityFallback(
+    await mutuallyCompletedPrivateRoundCount(database, conversation.id),
+  );
+  const preferred = preferredIntensities.find((intensity) =>
+    unused.some((candidate) => candidate.intensity === intensity),
+  );
   const selected = unused
     .filter((candidate) => candidate.intensity === preferred)
-    .toSorted((left, right) => deterministicPrivateQuestionRank(conversation.selectionSeed, left.id).localeCompare(deterministicPrivateQuestionRank(conversation.selectionSeed, right.id)) || left.id.localeCompare(right.id))[0];
+    .toSorted(
+      (left, right) =>
+        deterministicPrivateQuestionRank(conversation.selectionSeed, left.id).localeCompare(
+          deterministicPrivateQuestionRank(conversation.selectionSeed, right.id),
+        ) || left.id.localeCompare(right.id),
+    )[0];
   if (!selected) return null;
 
   const inserted = await database
     .insert(privateQuestionCandidate)
-    .values({ conversationId: conversation.id, questionId: selected.id, questionRevisionId: selected.questionRevisionId })
+    .values({
+      conversationId: conversation.id,
+      questionId: selected.id,
+      questionRevisionId: selected.questionRevisionId,
+    })
     .onConflictDoNothing()
     .returning({ id: privateQuestionCandidate.id });
   const candidateId = inserted[0]?.id;
@@ -2018,8 +2297,16 @@ async function selectPrivateQuestionCandidate(
     const resolved = await database
       .select({ candidate: privateQuestionCandidate, revision: questionRevision })
       .from(privateQuestionCandidate)
-      .innerJoin(questionRevision, eq(privateQuestionCandidate.questionRevisionId, questionRevision.id))
-      .where(and(eq(privateQuestionCandidate.conversationId, conversation.id), eq(privateQuestionCandidate.state, "unresolved")))
+      .innerJoin(
+        questionRevision,
+        eq(privateQuestionCandidate.questionRevisionId, questionRevision.id),
+      )
+      .where(
+        and(
+          eq(privateQuestionCandidate.conversationId, conversation.id),
+          eq(privateQuestionCandidate.state, "unresolved"),
+        ),
+      )
       .limit(1);
     if (resolved[0] && !resolved[0].revision.withdrawnAt) return resolved[0];
     return null;
@@ -2027,7 +2314,10 @@ async function selectPrivateQuestionCandidate(
   const resolved = await database
     .select({ candidate: privateQuestionCandidate, revision: questionRevision })
     .from(privateQuestionCandidate)
-    .innerJoin(questionRevision, eq(privateQuestionCandidate.questionRevisionId, questionRevision.id))
+    .innerJoin(
+      questionRevision,
+      eq(privateQuestionCandidate.questionRevisionId, questionRevision.id),
+    )
     .where(eq(privateQuestionCandidate.id, candidateId))
     .limit(1);
   return resolved[0] ?? null;
@@ -2035,7 +2325,12 @@ async function selectPrivateQuestionCandidate(
 
 async function lockPairAndFindConversation(
   database: Database,
-  input: { pairId: string; category: QuestionCategory; participantId: string; membershipEraId: string },
+  input: {
+    pairId: string;
+    category: QuestionCategory;
+    participantId: string;
+    membershipEraId: string;
+  },
 ) {
   await database.execute(sql`select id from "pair" where id = ${input.pairId} for update`);
   const existing = await database
@@ -2087,20 +2382,30 @@ async function projectPrivateConversationForParticipant(
     .select({ conversation: privateConversation, era: pairMembershipEra })
     .from(privateConversation)
     .innerJoin(pairMembershipEra, eq(privateConversation.membershipEraId, pairMembershipEra.id))
-    .where(and(
-      eq(privateConversation.id, input.conversationId),
-      eq(privateConversation.pairId, input.pairId),
-      isNull(pairMembershipEra.endedAt),
-      or(eq(pairMembershipEra.firstMembershipId, access.membership.id), eq(pairMembershipEra.secondMembershipId, access.membership.id)),
-    ))
+    .where(
+      and(
+        eq(privateConversation.id, input.conversationId),
+        eq(privateConversation.pairId, input.pairId),
+        isNull(pairMembershipEra.endedAt),
+        or(
+          eq(pairMembershipEra.firstMembershipId, access.membership.id),
+          eq(pairMembershipEra.secondMembershipId, access.membership.id),
+        ),
+      ),
+    )
     .limit(1);
   const row = rows[0];
   if (!row) throw new CloserDomainError("CONVERSATION_NOT_FOUND");
 
-  const creator = access.members.find((member) => member.participantId === row.conversation.createdByParticipantId);
-  const otherParticipant = access.members.find((member) => member.participantId !== input.participantId);
+  const creator = access.members.find(
+    (member) => member.participantId === row.conversation.createdByParticipantId,
+  );
+  const otherParticipant = access.members.find(
+    (member) => member.participantId !== input.participantId,
+  );
   if (!creator || !otherParticipant) throw new CloserDomainError("CONVERSATION_NOT_FOUND");
-  const role = row.conversation.createdByParticipantId === input.participantId ? "creator" : "non-creator";
+  const role =
+    row.conversation.createdByParticipantId === input.participantId ? "creator" : "non-creator";
   const base = {
     id: row.conversation.id,
     conversationId: row.conversation.id,
@@ -2120,8 +2425,14 @@ async function projectPrivateConversationForParticipant(
     .limit(1);
   if (currentRound[0] && currentRound[0].round.status !== "declined") {
     const [answers, revealViews] = await Promise.all([
-      database.select({ participantId: privateAnswer.participantId }).from(privateAnswer).where(eq(privateAnswer.roundId, currentRound[0].round.id)),
-      database.select({ participantId: privateRevealView.participantId }).from(privateRevealView).where(eq(privateRevealView.roundId, currentRound[0].round.id)),
+      database
+        .select({ participantId: privateAnswer.participantId })
+        .from(privateAnswer)
+        .where(eq(privateAnswer.roundId, currentRound[0].round.id)),
+      database
+        .select({ participantId: privateRevealView.participantId })
+        .from(privateRevealView)
+        .where(eq(privateRevealView.roundId, currentRound[0].round.id)),
     ]);
     const isUnresolved = answers.length < 2 || revealViews.length < 2;
     if (isUnresolved) {
@@ -2141,7 +2452,9 @@ async function projectPrivateConversationForParticipant(
           state: viewerRoundState(
             answers.length,
             answers.some((answer) => answer.participantId === input.participantId),
-            revealViews.some((view) => view.participantId === input.participantId) ? new Date() : null,
+            revealViews.some((view) => view.participantId === input.participantId)
+              ? new Date()
+              : null,
             false,
           ),
           otherRevealViewed: revealViews.some((view) => view.participantId !== input.participantId),
@@ -2153,8 +2466,17 @@ async function projectPrivateConversationForParticipant(
   const unresolvedCandidate = await database
     .select({ candidate: privateQuestionCandidate, revision: questionRevision })
     .from(privateQuestionCandidate)
-    .innerJoin(questionRevision, eq(privateQuestionCandidate.questionRevisionId, questionRevision.id))
-    .where(and(eq(privateQuestionCandidate.conversationId, row.conversation.id), eq(privateQuestionCandidate.state, "unresolved"), isNull(questionRevision.withdrawnAt)))
+    .innerJoin(
+      questionRevision,
+      eq(privateQuestionCandidate.questionRevisionId, questionRevision.id),
+    )
+    .where(
+      and(
+        eq(privateQuestionCandidate.conversationId, row.conversation.id),
+        eq(privateQuestionCandidate.state, "unresolved"),
+        isNull(questionRevision.withdrawnAt),
+      ),
+    )
     .limit(1);
   if (role === "creator" && unresolvedCandidate[0]) {
     return {
@@ -2173,7 +2495,10 @@ async function projectPrivateConversationForParticipant(
       },
     };
   }
-  const eligible = await eligiblePrivateQuestions(database, { relationshipType: access.pair.relationshipType, category: row.conversation.category });
+  const eligible = await eligiblePrivateQuestions(database, {
+    relationshipType: access.pair.relationshipType,
+    category: row.conversation.category,
+  });
   const usedIds = await consumedPrivateQuestionIds(database, row.conversation.id);
   if (!eligible.some((candidate) => !usedIds.has(candidate.id))) {
     return { ...base, state: "EXHAUSTED" as const, message: "You've reached the end for now." };
@@ -2181,7 +2506,11 @@ async function projectPrivateConversationForParticipant(
   if (role === "creator" && currentRound[0]?.round.status === "open") {
     return { ...base, state: "READY_FOR_NEXT" as const };
   }
-  return { ...base, state: "WAITING_FOR_CREATOR" as const, message: `Waiting for ${creator.displayName} to choose a question.` };
+  return {
+    ...base,
+    state: "WAITING_FOR_CREATOR" as const,
+    message: `Waiting for ${creator.displayName} to choose a question.`,
+  };
 }
 
 export async function getPrivateConversationForParticipant(
@@ -2194,11 +2523,24 @@ export async function getPrivateConversationForParticipant(
 
 async function insertRoundForConversation(
   database: Database,
-  input: { pairId: string; conversationId: string; participantId: string; questionId: string; questionRevisionId: string; questionNumber: number; clientRequestId?: string },
+  input: {
+    pairId: string;
+    conversationId: string;
+    participantId: string;
+    questionId: string;
+    questionRevisionId: string;
+    questionNumber: number;
+    clientRequestId?: string;
+  },
 ) {
   if (input.clientRequestId) {
     const existing = await database
-      .select({ id: privateRound.id, conversationId: privateRound.conversationId, questionId: privateRound.questionId, questionRevisionId: privateRound.questionRevisionId })
+      .select({
+        id: privateRound.id,
+        conversationId: privateRound.conversationId,
+        questionId: privateRound.questionId,
+        questionRevisionId: privateRound.questionRevisionId,
+      })
       .from(privateRound)
       .where(
         and(
@@ -2210,10 +2552,11 @@ async function insertRoundForConversation(
       .limit(1);
     if (existing[0]) {
       if (
-        existing[0].conversationId !== input.conversationId
-        || existing[0].questionId !== input.questionId
-        || existing[0].questionRevisionId !== input.questionRevisionId
-      ) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+        existing[0].conversationId !== input.conversationId ||
+        existing[0].questionId !== input.questionId ||
+        existing[0].questionRevisionId !== input.questionRevisionId
+      )
+        throw new CloserDomainError("QUESTION_UNAVAILABLE");
       return { id: existing[0].id };
     }
   }
@@ -2235,7 +2578,12 @@ async function insertRoundForConversation(
 
   if (!input.clientRequestId) throw new Error("Private round creation did not return a round.");
   const resolved = await database
-    .select({ id: privateRound.id, conversationId: privateRound.conversationId, questionId: privateRound.questionId, questionRevisionId: privateRound.questionRevisionId })
+    .select({
+      id: privateRound.id,
+      conversationId: privateRound.conversationId,
+      questionId: privateRound.questionId,
+      questionRevisionId: privateRound.questionRevisionId,
+    })
     .from(privateRound)
     .where(
       and(
@@ -2247,10 +2595,11 @@ async function insertRoundForConversation(
     .limit(1);
   if (!resolved[0]) throw new Error("Private round creation did not resolve.");
   if (
-    resolved[0].conversationId !== input.conversationId
-    || resolved[0].questionId !== input.questionId
-    || resolved[0].questionRevisionId !== input.questionRevisionId
-  ) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+    resolved[0].conversationId !== input.conversationId ||
+    resolved[0].questionId !== input.questionId ||
+    resolved[0].questionRevisionId !== input.questionRevisionId
+  )
+    throw new CloserDomainError("QUESTION_UNAVAILABLE");
   return { id: resolved[0].id };
 }
 
@@ -2259,34 +2608,39 @@ export async function startOrResumePrivateConversation(
   input: { participantId: string; pairId: string; category: string; clientRequestId?: string },
 ) {
   const access = await requireCompletePairAccess(database, input.participantId, input.pairId);
-  if (input.clientRequestId && !isUuid(input.clientRequestId)) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+  if (input.clientRequestId && !isUuid(input.clientRequestId))
+    throw new CloserDomainError("QUESTION_UNAVAILABLE");
   assertCategoryForPair(access, input.category);
   const category = input.category as QuestionCategory;
 
-  return database.transaction(async (transaction) => {
-    const tx = transaction as unknown as Database;
-    await tx.execute(sql`select id from "pair" where id = ${input.pairId} for update`);
-    await requireCompletePairAccess(tx, input.participantId, input.pairId);
-    const activeEra = await getActiveMembershipEra(tx, input.pairId);
-    if (!activeEra) throw new CloserDomainError("PAIR_NOT_READY");
-    const conversation = await lockPairAndFindConversation(tx, {
-      pairId: input.pairId,
-      category,
-      participantId: input.participantId,
-      membershipEraId: activeEra.id,
-    });
-    const currentRound = await latestRoundForConversation(tx, conversation.id);
-    if (!currentRound || !(await privateRoundIsUnresolved(tx, currentRound.id))) {
-      if (conversation.createdByParticipantId === input.participantId) {
-        await selectPrivateQuestionCandidate(tx, conversation, access.pair.relationshipType);
+  return database
+    .transaction(async (transaction) => {
+      const tx = transaction as unknown as Database;
+      await tx.execute(sql`select id from "pair" where id = ${input.pairId} for update`);
+      await requireCompletePairAccess(tx, input.participantId, input.pairId);
+      const activeEra = await getActiveMembershipEra(tx, input.pairId);
+      if (!activeEra) throw new CloserDomainError("PAIR_NOT_READY");
+      const conversation = await lockPairAndFindConversation(tx, {
+        pairId: input.pairId,
+        category,
+        participantId: input.participantId,
+        membershipEraId: activeEra.id,
+      });
+      const currentRound = await latestRoundForConversation(tx, conversation.id);
+      if (!currentRound || !(await privateRoundIsUnresolved(tx, currentRound.id))) {
+        if (conversation.createdByParticipantId === input.participantId) {
+          await selectPrivateQuestionCandidate(tx, conversation, access.pair.relationshipType);
+        }
       }
-    }
-    return { conversationId: conversation.id };
-  }).then(({ conversationId }) => getPrivateConversationForParticipant(database, {
-    participantId: input.participantId,
-    pairId: input.pairId,
-    conversationId,
-  }));
+      return { conversationId: conversation.id };
+    })
+    .then(({ conversationId }) =>
+      getPrivateConversationForParticipant(database, {
+        participantId: input.participantId,
+        pairId: input.pairId,
+        conversationId,
+      }),
+    );
 }
 
 async function loadMutableCreatorCandidateInTransaction(
@@ -2300,25 +2654,36 @@ async function loadMutableCreatorCandidateInTransaction(
   const conversations = await tx
     .select()
     .from(privateConversation)
-    .where(and(
-      eq(privateConversation.id, input.conversationId),
-      eq(privateConversation.pairId, input.pairId),
-      eq(privateConversation.membershipEraId, activeEra.id),
-      eq(privateConversation.createdByParticipantId, input.participantId),
-    ))
+    .where(
+      and(
+        eq(privateConversation.id, input.conversationId),
+        eq(privateConversation.pairId, input.pairId),
+        eq(privateConversation.membershipEraId, activeEra.id),
+        eq(privateConversation.createdByParticipantId, input.participantId),
+      ),
+    )
     .limit(1);
   const conversation = conversations[0];
   if (!conversation) throw new CloserDomainError("CONVERSATION_NOT_FOUND");
-  await tx.execute(sql`select id from "private_conversation" where id = ${conversation.id} for update`);
-  await tx.execute(sql`select id from "private_question_candidate" where id = ${input.candidateId} for update`);
+  await tx.execute(
+    sql`select id from "private_conversation" where id = ${conversation.id} for update`,
+  );
+  await tx.execute(
+    sql`select id from "private_question_candidate" where id = ${input.candidateId} for update`,
+  );
   const candidates = await tx
     .select({ candidate: privateQuestionCandidate, revision: questionRevision })
     .from(privateQuestionCandidate)
-    .innerJoin(questionRevision, eq(privateQuestionCandidate.questionRevisionId, questionRevision.id))
-    .where(and(
-      eq(privateQuestionCandidate.id, input.candidateId),
-      eq(privateQuestionCandidate.conversationId, conversation.id),
-    ))
+    .innerJoin(
+      questionRevision,
+      eq(privateQuestionCandidate.questionRevisionId, questionRevision.id),
+    )
+    .where(
+      and(
+        eq(privateQuestionCandidate.id, input.candidateId),
+        eq(privateQuestionCandidate.conversationId, conversation.id),
+      ),
+    )
     .limit(1);
   const candidate = candidates[0];
   if (!candidate) throw new CloserDomainError("QUESTION_UNAVAILABLE");
@@ -2337,16 +2702,23 @@ async function nextPrivateRoundNumber(database: Database, conversationId: string
 
 async function assertNoCurrentPrivateRound(database: Database, conversationId: string) {
   const currentRound = await latestRoundForConversation(database, conversationId);
-  if (currentRound && await privateRoundIsUnresolved(database, currentRound.id)) {
+  if (currentRound && (await privateRoundIsUnresolved(database, currentRound.id))) {
     throw new CloserDomainError("QUESTION_UNAVAILABLE");
   }
 }
 
 export async function askPrivateQuestionCandidate(
   database: Database,
-  input: { participantId: string; pairId: string; conversationId: string; candidateId: string; clientRequestId?: string },
+  input: {
+    participantId: string;
+    pairId: string;
+    conversationId: string;
+    candidateId: string;
+    clientRequestId?: string;
+  },
 ) {
-  if (input.clientRequestId && !isUuid(input.clientRequestId)) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+  if (input.clientRequestId && !isUuid(input.clientRequestId))
+    throw new CloserDomainError("QUESTION_UNAVAILABLE");
   return database.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
     const { conversation, candidate } = await loadMutableCreatorCandidateInTransaction(tx, input);
@@ -2354,26 +2726,37 @@ export async function askPrivateQuestionCandidate(
       const rounds = await tx
         .select({ id: privateRound.id })
         .from(privateRound)
-        .where(and(
-          eq(privateRound.conversationId, conversation.id),
-          eq(privateRound.questionId, candidate.candidate.questionId),
-          eq(privateRound.questionRevisionId, candidate.candidate.questionRevisionId),
-        ))
+        .where(
+          and(
+            eq(privateRound.conversationId, conversation.id),
+            eq(privateRound.questionId, candidate.candidate.questionId),
+            eq(privateRound.questionRevisionId, candidate.candidate.questionRevisionId),
+          ),
+        )
         .limit(1);
       if (rounds[0]) return { conversationId: conversation.id, roundId: rounds[0].id };
       throw new Error("Asked candidate did not resolve to a Round.");
     }
-    if (candidate.candidate.state !== "unresolved") throw new CloserDomainError("QUESTION_UNAVAILABLE");
+    if (candidate.candidate.state !== "unresolved")
+      throw new CloserDomainError("QUESTION_UNAVAILABLE");
     await assertNoCurrentPrivateRound(tx, conversation.id);
     if (candidate.revision.withdrawnAt) {
-      await tx.update(privateQuestionCandidate).set({ state: "invalidated", resolvedAt: new Date() }).where(eq(privateQuestionCandidate.id, candidate.candidate.id));
+      await tx
+        .update(privateQuestionCandidate)
+        .set({ state: "invalidated", resolvedAt: new Date() })
+        .where(eq(privateQuestionCandidate.id, candidate.candidate.id));
       throw new CloserDomainError("QUESTION_UNAVAILABLE");
     }
 
     const updated = await tx
       .update(privateQuestionCandidate)
       .set({ state: "asked", resolvedAt: new Date() })
-      .where(and(eq(privateQuestionCandidate.id, candidate.candidate.id), eq(privateQuestionCandidate.state, "unresolved")))
+      .where(
+        and(
+          eq(privateQuestionCandidate.id, candidate.candidate.id),
+          eq(privateQuestionCandidate.state, "unresolved"),
+        ),
+      )
       .returning({ id: privateQuestionCandidate.id });
     if (!updated[0]) throw new CloserDomainError("QUESTION_UNAVAILABLE");
     const round = await insertRoundForConversation(tx, {
@@ -2395,17 +2778,26 @@ export async function skipPrivateQuestionCandidate(
 ) {
   await database.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
-    const { access, conversation, candidate } = await loadMutableCreatorCandidateInTransaction(tx, input);
+    const { access, conversation, candidate } = await loadMutableCreatorCandidateInTransaction(
+      tx,
+      input,
+    );
     if (candidate.candidate.state === "skipped") {
       await selectPrivateQuestionCandidate(tx, conversation, access.pair.relationshipType);
       return;
     }
-    if (candidate.candidate.state !== "unresolved") throw new CloserDomainError("QUESTION_UNAVAILABLE");
+    if (candidate.candidate.state !== "unresolved")
+      throw new CloserDomainError("QUESTION_UNAVAILABLE");
     await assertNoCurrentPrivateRound(tx, conversation.id);
     const updated = await tx
       .update(privateQuestionCandidate)
       .set({ state: "skipped", resolvedAt: new Date() })
-      .where(and(eq(privateQuestionCandidate.id, candidate.candidate.id), eq(privateQuestionCandidate.state, "unresolved")))
+      .where(
+        and(
+          eq(privateQuestionCandidate.id, candidate.candidate.id),
+          eq(privateQuestionCandidate.state, "unresolved"),
+        ),
+      )
       .returning({ id: privateQuestionCandidate.id });
     if (!updated[0]) throw new CloserDomainError("QUESTION_UNAVAILABLE");
     await selectPrivateQuestionCandidate(tx, conversation, access.pair.relationshipType);
@@ -2415,17 +2807,29 @@ export async function skipPrivateQuestionCandidate(
 
 export async function setPrivateQuestionCandidateLike(
   database: Database,
-  input: { participantId: string; pairId: string; conversationId: string; candidateId: string; liked: boolean },
+  input: {
+    participantId: string;
+    pairId: string;
+    conversationId: string;
+    candidateId: string;
+    liked: boolean;
+  },
 ) {
   return database.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
     const { conversation, candidate } = await loadMutableCreatorCandidateInTransaction(tx, input);
-    if (candidate.candidate.state !== "unresolved") throw new CloserDomainError("QUESTION_UNAVAILABLE");
+    if (candidate.candidate.state !== "unresolved")
+      throw new CloserDomainError("QUESTION_UNAVAILABLE");
     await assertNoCurrentPrivateRound(tx, conversation.id);
     const updated = await tx
       .update(privateQuestionCandidate)
       .set({ liked: input.liked })
-      .where(and(eq(privateQuestionCandidate.id, candidate.candidate.id), eq(privateQuestionCandidate.state, "unresolved")))
+      .where(
+        and(
+          eq(privateQuestionCandidate.id, candidate.candidate.id),
+          eq(privateQuestionCandidate.state, "unresolved"),
+        ),
+      )
       .returning({ liked: privateQuestionCandidate.liked });
     if (!updated[0]) throw new CloserDomainError("QUESTION_UNAVAILABLE");
     return updated[0];
@@ -2436,26 +2840,47 @@ export async function getPrivateRoundForParticipant(
   database: Database,
   input: { participantId: string; pairId: string; roundId: string },
 ) {
-  const context = await loadPrivateRoundContext(database, input.participantId, input.pairId, input.roundId);
+  const context = await loadPrivateRoundContext(
+    database,
+    input.participantId,
+    input.pairId,
+    input.roundId,
+  );
   const [answers, viewerReveal] = await Promise.all([
     database.select().from(privateAnswer).where(eq(privateAnswer.roundId, input.roundId)),
     database
       .select({ viewedAt: privateRevealView.viewedAt })
       .from(privateRevealView)
-      .where(and(eq(privateRevealView.roundId, input.roundId), eq(privateRevealView.participantId, input.participantId)))
+      .where(
+        and(
+          eq(privateRevealView.roundId, input.roundId),
+          eq(privateRevealView.participantId, input.participantId),
+        ),
+      )
       .limit(1),
   ]);
-  const viewerAnswer = answers.find((answer) => answer.participantId === input.participantId) ?? null;
+  const viewerAnswer =
+    answers.find((answer) => answer.participantId === input.participantId) ?? null;
   const isDeclined = context.round.status === "declined";
   const isRevealReady = !isDeclined && answers.length === 2;
   const revealViewedAt = viewerReveal[0]?.viewedAt ?? null;
-  const otherMember = context.members.find((member) => member.participantId !== input.participantId);
+  const otherMember = context.members.find(
+    (member) => member.participantId !== input.participantId,
+  );
   if (!otherMember) throw new CloserDomainError("ROUND_NOT_FOUND");
-  const otherRevealViewed = (await database
-    .select({ id: privateRevealView.id })
-    .from(privateRevealView)
-    .where(and(eq(privateRevealView.roundId, input.roundId), eq(privateRevealView.participantId, otherMember.participantId)))
-    .limit(1)).length > 0;
+  const otherRevealViewed =
+    (
+      await database
+        .select({ id: privateRevealView.id })
+        .from(privateRevealView)
+        .where(
+          and(
+            eq(privateRevealView.roundId, input.roundId),
+            eq(privateRevealView.participantId, otherMember.participantId),
+          ),
+        )
+        .limit(1)
+    ).length > 0;
 
   const result = {
     id: context.round.id,
@@ -2481,8 +2906,19 @@ export async function getPrivateRoundForParticipant(
   } as {
     id: string;
     pairId: string;
-    conversation: { id: string; category: QuestionCategory; questionNumber: number; isCreator: boolean };
-    question: { id: string; questionRevisionId: string; text: string; category: QuestionCategory; intensity: QuestionIntensity };
+    conversation: {
+      id: string;
+      category: QuestionCategory;
+      questionNumber: number;
+      isCreator: boolean;
+    };
+    question: {
+      id: string;
+      questionRevisionId: string;
+      text: string;
+      category: QuestionCategory;
+      intensity: QuestionIntensity;
+    };
     otherParticipant: { id: string; displayName: string };
     yourAnswer: string | null;
     state: "YOUR_TURN" | "WAITING" | "REVEAL_READY" | "REVEAL_VIEWED" | "DECLINED";
@@ -2496,7 +2932,9 @@ export async function getPrivateRoundForParticipant(
   // Deliberately do not put another participant's answer anywhere in this projection until this participant explicitly Reveals.
   if (!isRevealReady || !revealViewedAt) return result;
 
-  const memberNames = new Map(context.members.map((member) => [member.participantId, member.displayName]));
+  const memberNames = new Map(
+    context.members.map((member) => [member.participantId, member.displayName]),
+  );
   const [reactions, replies] = await Promise.all([
     database.select().from(privateReaction).where(eq(privateReaction.roundId, input.roundId)),
     database.select().from(privateReply).where(eq(privateReply.roundId, input.roundId)),
@@ -2531,8 +2969,7 @@ export async function getPrivateRoundStatusForParticipant(
 export async function listActivePrivateConversations(
   database: Database,
   input: { participantId: string; pairId: string },
-)
- {
+) {
   const access = await requireCompletePairAccess(database, input.participantId, input.pairId);
   const conversations = await database
     .select({
@@ -2556,30 +2993,46 @@ export async function listActivePrivateConversations(
     .orderBy(desc(privateConversation.createdAt));
   if (!conversations.length) return [];
 
-  return Promise.all(conversations.map(async (conversation) => {
-    const projection = await projectPrivateConversationForParticipant(database, {
-      participantId: input.participantId,
-      pairId: input.pairId,
-      conversationId: conversation.id,
-    }, access);
-    const rounds = await database
-      .select({ id: privateRound.id })
-      .from(privateRound)
-      .where(eq(privateRound.conversationId, conversation.id));
-    if (projection.state === "CURRENT_ROUND") {
-      const state: "YOUR_TURN" | "WAITING" | "REVEAL_READY" | "DECLINED" | "WAITING_FOR_REVEAL" | "READY_FOR_NEXT" | "WAITING_FOR_CREATOR" = projection.currentRound.state === "REVEAL_VIEWED"
-        ? projection.role === "creator"
-          ? projection.currentRound.otherRevealViewed ? "READY_FOR_NEXT" : "WAITING_FOR_REVEAL"
-          : "WAITING_FOR_CREATOR"
-        : projection.currentRound.state;
-      return {
-        ...projection,
-        questionCount: rounds.length,
-        state,
-      };
-    }
-    return { ...projection, questionCount: rounds.length };
-  }));
+  return Promise.all(
+    conversations.map(async (conversation) => {
+      const projection = await projectPrivateConversationForParticipant(
+        database,
+        {
+          participantId: input.participantId,
+          pairId: input.pairId,
+          conversationId: conversation.id,
+        },
+        access,
+      );
+      const rounds = await database
+        .select({ id: privateRound.id })
+        .from(privateRound)
+        .where(eq(privateRound.conversationId, conversation.id));
+      if (projection.state === "CURRENT_ROUND") {
+        const state:
+          | "YOUR_TURN"
+          | "WAITING"
+          | "REVEAL_READY"
+          | "DECLINED"
+          | "WAITING_FOR_REVEAL"
+          | "READY_FOR_NEXT"
+          | "WAITING_FOR_CREATOR" =
+          projection.currentRound.state === "REVEAL_VIEWED"
+            ? projection.role === "creator"
+              ? projection.currentRound.otherRevealViewed
+                ? "READY_FOR_NEXT"
+                : "WAITING_FOR_REVEAL"
+              : "WAITING_FOR_CREATOR"
+            : projection.currentRound.state;
+        return {
+          ...projection,
+          questionCount: rounds.length,
+          state,
+        };
+      }
+      return { ...projection, questionCount: rounds.length };
+    }),
+  );
 }
 
 /** @deprecated Pair Home must use conversation summaries. */
@@ -2604,23 +3057,38 @@ export async function getFormerEraHistoryForParticipant(
     database
       .select({ id: pairMembership.id })
       .from(pairMembership)
-      .where(and(eq(pairMembership.pairId, input.pairId), eq(pairMembership.participantId, input.participantId))),
+      .where(
+        and(
+          eq(pairMembership.pairId, input.pairId),
+          eq(pairMembership.participantId, input.participantId),
+        ),
+      ),
   ]);
   if (!formerPair) throw new CloserDomainError("PAIR_NOT_FOUND");
   const viewerMembershipIds = new Set(viewerMemberships.map((membership) => membership.id));
   if (!viewerMembershipIds.size) throw new CloserDomainError("PAIR_NOT_FOUND");
 
-  const eras = (await database
-    .select({
-      id: pairMembershipEra.id,
-      firstMembershipId: pairMembershipEra.firstMembershipId,
-      secondMembershipId: pairMembershipEra.secondMembershipId,
-      endedAt: pairMembershipEra.endedAt,
-    })
-    .from(pairMembershipEra)
-    .where(and(eq(pairMembershipEra.pairId, input.pairId), sql`${pairMembershipEra.endedAt} is not null`))
-    .orderBy(desc(pairMembershipEra.endedAt)))
-    .filter((era) => viewerMembershipIds.has(era.firstMembershipId) || viewerMembershipIds.has(era.secondMembershipId));
+  const eras = (
+    await database
+      .select({
+        id: pairMembershipEra.id,
+        firstMembershipId: pairMembershipEra.firstMembershipId,
+        secondMembershipId: pairMembershipEra.secondMembershipId,
+        endedAt: pairMembershipEra.endedAt,
+      })
+      .from(pairMembershipEra)
+      .where(
+        and(
+          eq(pairMembershipEra.pairId, input.pairId),
+          sql`${pairMembershipEra.endedAt} is not null`,
+        ),
+      )
+      .orderBy(desc(pairMembershipEra.endedAt))
+  ).filter(
+    (era) =>
+      viewerMembershipIds.has(era.firstMembershipId) ||
+      viewerMembershipIds.has(era.secondMembershipId),
+  );
 
   const eraIds = eras.map((era) => era.id);
   const eraMembershipIds = eras.flatMap((era) => [era.firstMembershipId, era.secondMembershipId]);
@@ -2632,48 +3100,55 @@ export async function getFormerEraHistoryForParticipant(
       endedAt: togetherSession.endedAt,
     })
     .from(togetherSession)
-    .where(and(
-      eq(togetherSession.pairId, input.pairId),
-      isNull(togetherSession.membershipEraId),
-      eq(togetherSession.startedByParticipantId, input.participantId),
-      sql`${togetherSession.endedAt} is not null`,
-    ))
+    .where(
+      and(
+        eq(togetherSession.pairId, input.pairId),
+        isNull(togetherSession.membershipEraId),
+        eq(togetherSession.startedByParticipantId, input.participantId),
+        sql`${togetherSession.endedAt} is not null`,
+      ),
+    )
     .orderBy(desc(togetherSession.startedAt));
   const membersPromise = eraMembershipIds.length
     ? database
-      .select({
-        id: pairMembership.id,
-        participantId: pairMembership.participantId,
-        displayName: sql<string>`coalesce(${pairMembership.endedDisplayName}, ${participant.displayName})`,
-      })
-      .from(pairMembership)
-      .innerJoin(participant, eq(pairMembership.participantId, participant.id))
-      .where(inArray(pairMembership.id, eraMembershipIds))
+        .select({
+          id: pairMembership.id,
+          participantId: pairMembership.participantId,
+          displayName: sql<string>`coalesce(${pairMembership.endedDisplayName}, ${participant.displayName})`,
+        })
+        .from(pairMembership)
+        .innerJoin(participant, eq(pairMembership.participantId, participant.id))
+        .where(inArray(pairMembership.id, eraMembershipIds))
     : Promise.resolve([]);
   const conversationsPromise = eraIds.length
     ? database
-      .select({
-        id: privateConversation.id,
-        membershipEraId: privateConversation.membershipEraId,
-        category: privateConversation.category,
-        createdAt: privateConversation.createdAt,
-      })
-      .from(privateConversation)
-      .where(and(eq(privateConversation.pairId, input.pairId), inArray(privateConversation.membershipEraId, eraIds)))
-      .orderBy(desc(privateConversation.createdAt))
+        .select({
+          id: privateConversation.id,
+          membershipEraId: privateConversation.membershipEraId,
+          category: privateConversation.category,
+          createdAt: privateConversation.createdAt,
+        })
+        .from(privateConversation)
+        .where(
+          and(
+            eq(privateConversation.pairId, input.pairId),
+            inArray(privateConversation.membershipEraId, eraIds),
+          ),
+        )
+        .orderBy(desc(privateConversation.createdAt))
     : Promise.resolve([]);
   const sessionsPromise = eraIds.length
     ? database
-      .select({
-        id: togetherSession.id,
-        membershipEraId: togetherSession.membershipEraId,
-        category: togetherSession.category,
-        startedAt: togetherSession.startedAt,
-        endedAt: togetherSession.endedAt,
-      })
-      .from(togetherSession)
-      .where(inArray(togetherSession.membershipEraId, eraIds))
-      .orderBy(desc(togetherSession.startedAt))
+        .select({
+          id: togetherSession.id,
+          membershipEraId: togetherSession.membershipEraId,
+          category: togetherSession.category,
+          startedAt: togetherSession.startedAt,
+          endedAt: togetherSession.endedAt,
+        })
+        .from(togetherSession)
+        .where(inArray(togetherSession.membershipEraId, eraIds))
+        .orderBy(desc(togetherSession.startedAt))
     : Promise.resolve([]);
   const [members, conversations, sessions, preClaimSessions] = await Promise.all([
     membersPromise,
@@ -2688,34 +3163,37 @@ export async function getFormerEraHistoryForParticipant(
   const [roundRows, cardRows] = await Promise.all([
     conversationIds.length
       ? database
-        .select({
-          id: privateRound.id,
-          conversationId: privateRound.conversationId,
-          questionNumber: privateRound.questionNumber,
-          status: privateRound.status,
-          text: questionRevision.text,
-          category: questionRevision.category,
-        })
-        .from(privateRound)
-        .innerJoin(questionRevision, eq(privateRound.questionRevisionId, questionRevision.id))
-        .where(inArray(privateRound.conversationId, conversationIds))
-        .orderBy(asc(privateRound.questionNumber))
+          .select({
+            id: privateRound.id,
+            conversationId: privateRound.conversationId,
+            questionNumber: privateRound.questionNumber,
+            status: privateRound.status,
+            text: questionRevision.text,
+            category: questionRevision.category,
+          })
+          .from(privateRound)
+          .innerJoin(questionRevision, eq(privateRound.questionRevisionId, questionRevision.id))
+          .where(inArray(privateRound.conversationId, conversationIds))
+          .orderBy(asc(privateRound.questionNumber))
       : Promise.resolve([]),
     sessionIds.length
       ? database
-        .select({
-          id: togetherSessionQuestion.id,
-          sessionId: togetherSessionQuestion.sessionId,
-          position: togetherSessionQuestion.position,
-          text: questionRevision.text,
-          likedAt: togetherSessionQuestion.likedAt,
-          skippedAt: togetherSessionQuestion.skippedAt,
-          advancedAt: togetherSessionQuestion.advancedAt,
-        })
-        .from(togetherSessionQuestion)
-        .innerJoin(questionRevision, eq(togetherSessionQuestion.questionRevisionId, questionRevision.id))
-        .where(inArray(togetherSessionQuestion.sessionId, sessionIds))
-        .orderBy(asc(togetherSessionQuestion.position))
+          .select({
+            id: togetherSessionQuestion.id,
+            sessionId: togetherSessionQuestion.sessionId,
+            position: togetherSessionQuestion.position,
+            text: questionRevision.text,
+            likedAt: togetherSessionQuestion.likedAt,
+            skippedAt: togetherSessionQuestion.skippedAt,
+            advancedAt: togetherSessionQuestion.advancedAt,
+          })
+          .from(togetherSessionQuestion)
+          .innerJoin(
+            questionRevision,
+            eq(togetherSessionQuestion.questionRevisionId, questionRevision.id),
+          )
+          .where(inArray(togetherSessionQuestion.sessionId, sessionIds))
+          .orderBy(asc(togetherSessionQuestion.position))
       : Promise.resolve([]),
   ]);
 
@@ -2723,21 +3201,33 @@ export async function getFormerEraHistoryForParticipant(
   const [answerRows, reactionRows, replyRows] = await Promise.all([
     roundIds.length
       ? database
-        .select({ roundId: privateAnswer.roundId, participantId: privateAnswer.participantId, body: privateAnswer.body })
-        .from(privateAnswer)
-        .where(inArray(privateAnswer.roundId, roundIds))
+          .select({
+            roundId: privateAnswer.roundId,
+            participantId: privateAnswer.participantId,
+            body: privateAnswer.body,
+          })
+          .from(privateAnswer)
+          .where(inArray(privateAnswer.roundId, roundIds))
       : Promise.resolve([]),
     roundIds.length
       ? database
-        .select({ roundId: privateReaction.roundId, participantId: privateReaction.participantId, value: privateReaction.value })
-        .from(privateReaction)
-        .where(inArray(privateReaction.roundId, roundIds))
+          .select({
+            roundId: privateReaction.roundId,
+            participantId: privateReaction.participantId,
+            value: privateReaction.value,
+          })
+          .from(privateReaction)
+          .where(inArray(privateReaction.roundId, roundIds))
       : Promise.resolve([]),
     roundIds.length
       ? database
-        .select({ roundId: privateReply.roundId, participantId: privateReply.participantId, body: privateReply.body })
-        .from(privateReply)
-        .where(inArray(privateReply.roundId, roundIds))
+          .select({
+            roundId: privateReply.roundId,
+            participantId: privateReply.participantId,
+            body: privateReply.body,
+          })
+          .from(privateReply)
+          .where(inArray(privateReply.roundId, roundIds))
       : Promise.resolve([]),
   ]);
 
@@ -2797,43 +3287,63 @@ export async function getFormerEraHistoryForParticipant(
   const erasWithHistory = eras.map((era) => {
     const firstMember = memberByMembershipId.get(era.firstMembershipId);
     const secondMember = memberByMembershipId.get(era.secondMembershipId);
-    const membersForEra = [firstMember, secondMember].filter((member): member is NonNullable<typeof member> => Boolean(member));
+    const membersForEra = [firstMember, secondMember].filter(
+      (member): member is NonNullable<typeof member> => Boolean(member),
+    );
     const memberIds = new Set(membersForEra.map((member) => member.participantId));
-    const memberNames = new Map(membersForEra.map((member) => [member.participantId, member.displayName]));
-    const privateConversations = (conversationsByEra.get(era.id) ?? []).map((conversation) => {
-      const rounds = (roundsByConversation.get(conversation.id) ?? []).map((round) => {
-        const answers = (answersByRound.get(round.id) ?? []).filter((answer) => memberIds.has(answer.participantId));
-        const mutuallyAnswered = round.status !== "declined" && answers.length === 2;
-        const visibleAnswers = mutuallyAnswered ? answers : answers.filter((answer) => answer.participantId === input.participantId);
-        const reactions = mutuallyAnswered ? (reactionsByRound.get(round.id) ?? []).filter((reaction) => memberIds.has(reaction.participantId)) : [];
-        const replies = mutuallyAnswered ? (repliesByRound.get(round.id) ?? []).filter((reply) => memberIds.has(reply.participantId)) : [];
-        return {
-          id: round.id,
-          questionNumber: round.questionNumber,
-          question: { text: round.text, category: round.category },
-          status: round.status === "declined" ? "passed" as const : "answered" as const,
-          answers: visibleAnswers.map((answer) => ({
-            participantId: answer.participantId,
-            displayName: memberNames.get(answer.participantId) ?? "Participant",
-            body: answer.body,
-          })),
-          reactions: reactions.map((reaction) => ({
-            participantId: reaction.participantId,
-            displayName: memberNames.get(reaction.participantId) ?? "Participant",
-            value: reaction.value,
-          })),
-          replies: replies.map((reply) => ({
-            participantId: reply.participantId,
-            displayName: memberNames.get(reply.participantId) ?? "Participant",
-            body: reply.body,
-          })),
-        };
-      });
-      return { id: conversation.id, category: conversation.category, rounds };
-    }).filter((conversation) => conversation.rounds.length > 0);
+    const memberNames = new Map(
+      membersForEra.map((member) => [member.participantId, member.displayName]),
+    );
+    const privateConversations = (conversationsByEra.get(era.id) ?? [])
+      .map((conversation) => {
+        const rounds = (roundsByConversation.get(conversation.id) ?? []).map((round) => {
+          const answers = (answersByRound.get(round.id) ?? []).filter((answer) =>
+            memberIds.has(answer.participantId),
+          );
+          const mutuallyAnswered = round.status !== "declined" && answers.length === 2;
+          const visibleAnswers = mutuallyAnswered
+            ? answers
+            : answers.filter((answer) => answer.participantId === input.participantId);
+          const reactions = mutuallyAnswered
+            ? (reactionsByRound.get(round.id) ?? []).filter((reaction) =>
+                memberIds.has(reaction.participantId),
+              )
+            : [];
+          const replies = mutuallyAnswered
+            ? (repliesByRound.get(round.id) ?? []).filter((reply) =>
+                memberIds.has(reply.participantId),
+              )
+            : [];
+          return {
+            id: round.id,
+            questionNumber: round.questionNumber,
+            question: { text: round.text, category: round.category },
+            status: round.status === "declined" ? ("passed" as const) : ("answered" as const),
+            answers: visibleAnswers.map((answer) => ({
+              participantId: answer.participantId,
+              displayName: memberNames.get(answer.participantId) ?? "Participant",
+              body: answer.body,
+            })),
+            reactions: reactions.map((reaction) => ({
+              participantId: reaction.participantId,
+              displayName: memberNames.get(reaction.participantId) ?? "Participant",
+              value: reaction.value,
+            })),
+            replies: replies.map((reply) => ({
+              participantId: reply.participantId,
+              displayName: memberNames.get(reply.participantId) ?? "Participant",
+              body: reply.body,
+            })),
+          };
+        });
+        return { id: conversation.id, category: conversation.category, rounds };
+      })
+      .filter((conversation) => conversation.rounds.length > 0);
     return {
       privateConversations,
-      togetherSessions: sessions.filter((session) => session.membershipEraId === era.id).map(projectSession),
+      togetherSessions: sessions
+        .filter((session) => session.membershipEraId === era.id)
+        .map(projectSession),
     };
   });
 
@@ -2866,7 +3376,12 @@ export async function submitPrivateAnswer(
       const existing = await tx
         .select({ body: privateAnswer.body })
         .from(privateAnswer)
-        .where(and(eq(privateAnswer.roundId, input.roundId), eq(privateAnswer.participantId, input.participantId)))
+        .where(
+          and(
+            eq(privateAnswer.roundId, input.roundId),
+            eq(privateAnswer.participantId, input.participantId),
+          ),
+        )
         .limit(1);
       if (!existing[0]) throw new Error("Private answer submission did not resolve.");
       if (existing[0].body !== body) throw new CloserDomainError("ANSWER_IMMUTABLE");
@@ -2891,13 +3406,20 @@ export async function declinePrivateRound(
       .select({ participantId: privateAnswer.participantId })
       .from(privateAnswer)
       .where(eq(privateAnswer.roundId, input.roundId));
-    if (answers.some((answer) => answer.participantId === input.participantId) || answers.length >= 2) {
+    if (
+      answers.some((answer) => answer.participantId === input.participantId) ||
+      answers.length >= 2
+    ) {
       throw new CloserDomainError("QUESTION_UNAVAILABLE");
     }
 
     const declined = await tx
       .update(privateRound)
-      .set({ status: "declined", declinedByParticipantId: input.participantId, declinedAt: new Date() })
+      .set({
+        status: "declined",
+        declinedByParticipantId: input.participantId,
+        declinedAt: new Date(),
+      })
       .where(and(eq(privateRound.id, input.roundId), eq(privateRound.status, "open")))
       .returning({ id: privateRound.id });
     if (!declined[0]) throw new CloserDomainError("QUESTION_UNAVAILABLE");
@@ -2916,17 +3438,24 @@ export async function markPrivateRevealViewed(
   await database.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
     const context = await requireMutablePrivateRoundInTransaction(tx, input);
-    if (context.round.status !== "open" || await answerCountForRound(tx, input.roundId) !== 2) {
+    if (context.round.status !== "open" || (await answerCountForRound(tx, input.roundId)) !== 2) {
       throw new CloserDomainError("REVEAL_NOT_READY");
     }
-    await tx.insert(privateRevealView).values({ roundId: input.roundId, participantId: input.participantId }).onConflictDoNothing();
+    await tx
+      .insert(privateRevealView)
+      .values({ roundId: input.roundId, participantId: input.participantId })
+      .onConflictDoNothing();
   });
   return getPrivateRoundForParticipant(database, input);
 }
 
-async function requireRevealViewed(database: Database, input: { participantId: string; pairId: string; roundId: string }) {
+async function requireRevealViewed(
+  database: Database,
+  input: { participantId: string; pairId: string; roundId: string },
+) {
   const view = await getPrivateRoundForParticipant(database, input);
-  if (!view.answers || view.state !== "REVEAL_VIEWED") throw new CloserDomainError("REVEAL_NOT_READY");
+  if (!view.answers || view.state !== "REVEAL_VIEWED")
+    throw new CloserDomainError("REVEAL_NOT_READY");
 }
 
 export async function setPrivateReaction(
@@ -2939,9 +3468,13 @@ export async function setPrivateReaction(
     await requireMutablePrivateRoundInTransaction(tx, input);
     await requireRevealViewed(tx, input);
     const value = input.value as ReactionValue;
-    await tx.insert(privateReaction).values({ roundId: input.roundId, participantId: input.participantId, value }).onConflictDoUpdate({
-      target: [privateReaction.roundId, privateReaction.participantId], set: { value, updatedAt: new Date() },
-    });
+    await tx
+      .insert(privateReaction)
+      .values({ roundId: input.roundId, participantId: input.participantId, value })
+      .onConflictDoUpdate({
+        target: [privateReaction.roundId, privateReaction.participantId],
+        set: { value, updatedAt: new Date() },
+      });
   });
   return getPrivateRoundForParticipant(database, input);
 }
@@ -2954,7 +3487,14 @@ export async function removePrivateReaction(
     const tx = transaction as unknown as Database;
     await requireMutablePrivateRoundInTransaction(tx, input);
     await requireRevealViewed(tx, input);
-    await tx.delete(privateReaction).where(and(eq(privateReaction.roundId, input.roundId), eq(privateReaction.participantId, input.participantId)));
+    await tx
+      .delete(privateReaction)
+      .where(
+        and(
+          eq(privateReaction.roundId, input.roundId),
+          eq(privateReaction.participantId, input.participantId),
+        ),
+      );
   });
   return getPrivateRoundForParticipant(database, input);
 }
@@ -2968,9 +3508,13 @@ export async function setPrivateReply(
     const tx = transaction as unknown as Database;
     await requireMutablePrivateRoundInTransaction(tx, input);
     await requireRevealViewed(tx, input);
-    await tx.insert(privateReply).values({ roundId: input.roundId, participantId: input.participantId, body }).onConflictDoUpdate({
-      target: [privateReply.roundId, privateReply.participantId], set: { body, updatedAt: new Date() },
-    });
+    await tx
+      .insert(privateReply)
+      .values({ roundId: input.roundId, participantId: input.participantId, body })
+      .onConflictDoUpdate({
+        target: [privateReply.roundId, privateReply.participantId],
+        set: { body, updatedAt: new Date() },
+      });
   });
   return getPrivateRoundForParticipant(database, input);
 }
@@ -2983,7 +3527,14 @@ export async function removePrivateReply(
     const tx = transaction as unknown as Database;
     await requireMutablePrivateRoundInTransaction(tx, input);
     await requireRevealViewed(tx, input);
-    await tx.delete(privateReply).where(and(eq(privateReply.roundId, input.roundId), eq(privateReply.participantId, input.participantId)));
+    await tx
+      .delete(privateReply)
+      .where(
+        and(
+          eq(privateReply.roundId, input.roundId),
+          eq(privateReply.participantId, input.participantId),
+        ),
+      );
   });
   return getPrivateRoundForParticipant(database, input);
 }

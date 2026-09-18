@@ -19,7 +19,9 @@ mock.module("@/lib/closer-server", () => ({
 mock.module("@/components/private-picker", () => ({ default: "private-picker" }));
 
 mock.module("next/navigation", () => ({
-  notFound: () => { throw new Error("notFound"); },
+  notFound: () => {
+    throw new Error("notFound");
+  },
   redirect,
   unstable_rethrow: (error: unknown) => {
     if (error instanceof Error && error.message.startsWith("redirect:")) throw error;
@@ -30,6 +32,8 @@ const { default: PrivatePickerPage } = await import("./page");
 
 describe("Private picker route", () => {
   test("routes an unclaimed Space to the lazy connection flow", async () => {
-    await expect(PrivatePickerPage({ params: Promise.resolve({ pairId: "pair-1" }) })).rejects.toThrow("redirect:/pair/pair-1/invite?reason=private");
+    await expect(
+      PrivatePickerPage({ params: Promise.resolve({ pairId: "pair-1" }) }),
+    ).rejects.toThrow("redirect:/pair/pair-1/invite?reason=private");
   });
 });

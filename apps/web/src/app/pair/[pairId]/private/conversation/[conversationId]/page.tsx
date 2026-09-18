@@ -7,12 +7,20 @@ import { getCurrentParticipant } from "@/lib/closer-server";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-export default async function PrivateConversationPage({ params }: { params: Promise<{ pairId: string; conversationId: string }> }) {
+export default async function PrivateConversationPage({
+  params,
+}: {
+  params: Promise<{ pairId: string; conversationId: string }>;
+}) {
   const { pairId, conversationId } = await params;
   const currentParticipant = await getCurrentParticipant();
   if (!currentParticipant) notFound();
   try {
-    const view = await getPrivateConversationForParticipant(db, { participantId: currentParticipant.id, pairId, conversationId });
+    const view = await getPrivateConversationForParticipant(db, {
+      participantId: currentParticipant.id,
+      pairId,
+      conversationId,
+    });
     if (view.state === "CURRENT_ROUND") {
       redirect(`/pair/${pairId}/private/round/${view.roundId}` as never);
     }

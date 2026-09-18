@@ -68,10 +68,10 @@ The replacement receives no pre-membership Private or Together content. The cont
 
 Initial claim and guest replacement are therefore distinct:
 
-| Boundary | Before | After | History granted to entrant |
-| --- | --- | --- | --- |
-| Initial claim | Slot 2 empty | First slot-2 membership; first two-member era | None from pre-claim Together activity |
-| Guest replacement | Slot occupied by eligible guest | Old membership/era end; new membership/era begin | None from former era |
+| Boundary          | Before                          | After                                            | History granted to entrant            |
+| ----------------- | ------------------------------- | ------------------------------------------------ | ------------------------------------- |
+| Initial claim     | Slot 2 empty                    | First slot-2 membership; first two-member era    | None from pre-claim Together activity |
+| Guest replacement | Slot occupied by eligible guest | Old membership/era end; new membership/era begin | None from former era                  |
 
 Issuance, redemption, expiry, revocation, Pair state, target membership, duplicate-Pair detection, and membership transition are enforced server-side and transactionally. Token possession is necessary but not sufficient authority.
 

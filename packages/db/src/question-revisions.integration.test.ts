@@ -42,13 +42,22 @@ const pairIds: string[] = [];
 async function createParticipant(name = "Question test participant") {
   const authUserId = randomUUID();
   authUserIds.push(authUserId);
-  await db.insert(user).values({ id: authUserId, name, email: `${authUserId}@question.closer.invalid`, isAnonymous: true });
+  await db.insert(user).values({
+    id: authUserId,
+    name,
+    email: `${authUserId}@question.closer.invalid`,
+    isAnonymous: true,
+  });
   return resolveOrCreateParticipant(db, { authUserId, displayName: name });
 }
 
 async function createUnclaimedPair() {
   const creator = await createParticipant();
-  const created = await createPairForParticipant(db, { participantId: creator.id, intendedPersonName: "Their person", relationshipType: "partner" });
+  const created = await createPairForParticipant(db, {
+    participantId: creator.id,
+    intendedPersonName: "Their person",
+    relationshipType: "partner",
+  });
   pairIds.push(created.pair.id);
   return { creator, pair: created.pair };
 }
@@ -56,7 +65,10 @@ async function createUnclaimedPair() {
 async function createJoinedPair() {
   const first = await createUnclaimedPair();
   const second = await createParticipant("Question test partner");
-  const invite = await issueOrReuseInitialInvite(db, { participantId: first.creator.id, pairId: first.pair.id });
+  const invite = await issueOrReuseInitialInvite(db, {
+    participantId: first.creator.id,
+    pairId: first.pair.id,
+  });
   if (invite.state !== "issued") throw new Error("Question test invite was not issued.");
   await redeemInitialInvite(db, { token: invite.token, participantId: second.id });
   return { pairId: first.pair.id, first: first.creator, second };
@@ -110,14 +122,26 @@ describe("Ticket 06 logical Questions and immutable revisions", () => {
     expect(first.revision.category).toBe("fun");
     expect(first.revision.intensity).toBe("light");
     expect(second.question.currentRevisionId).toBe(second.revision.id);
-    expect((await db.select().from(questionRevision).where(eq(questionRevision.id, first.revision.id)))[0]?.text).toBe("A first immutable question");
+    expect(
+      (
+        await db.select().from(questionRevision).where(eq(questionRevision.id, first.revision.id))
+      )[0]?.text,
+    ).toBe("A first immutable question");
   });
 
   test("deactivation and withdrawal remove content from new occurrence selection without rewriting revisions", async () => {
     const { question: logicalQuestion, revision } = await createTestQuestion();
     const { creator, pair: pairRecord } = await createUnclaimedPair();
     await withdrawQuestionRevision(db, revision.id);
-    expect((await listEligibleTogetherQuestions(db, { participantId: creator.id, pairId: pairRecord.id, category: "fun" })).some((item) => item.id === logicalQuestion.id)).toBe(false);
+    expect(
+      (
+        await listEligibleTogetherQuestions(db, {
+          participantId: creator.id,
+          pairId: pairRecord.id,
+          category: "fun",
+        })
+      ).some((item) => item.id === logicalQuestion.id),
+    ).toBe(false);
 
     const activeRevision = await createQuestionRevision(db, {
       questionId: logicalQuestion.id,
@@ -128,35 +152,107 @@ describe("Ticket 06 logical Questions and immutable revisions", () => {
       intensity: "medium",
     });
     await deactivateQuestion(db, logicalQuestion.id);
-    expect((await listEligibleTogetherQuestions(db, { participantId: creator.id, pairId: pairRecord.id, category: "fun" })).some((item) => item.id === logicalQuestion.id)).toBe(false);
-    expect((await db.select().from(questionRevision).where(eq(questionRevision.id, revision.id)))[0]?.text).toBe("A first immutable question");
+    expect(
+      (
+        await listEligibleTogetherQuestions(db, {
+          participantId: creator.id,
+          pairId: pairRecord.id,
+          category: "fun",
+        })
+      ).some((item) => item.id === logicalQuestion.id),
+    ).toBe(false);
+    expect(
+      (await db.select().from(questionRevision).where(eq(questionRevision.id, revision.id)))[0]
+        ?.text,
+    ).toBe("A first immutable question");
     expect(activeRevision.revision.questionId).toBe(logicalQuestion.id);
   });
 
   test("Together shown-question records keep their exact revision while logical identity stays stable", async () => {
     const { question: logicalQuestion, revision } = await createTestQuestion();
     const { creator, pair: pairRecord } = await createUnclaimedPair();
-    const [session] = await db.insert(togetherSession).values({ pairId: pairRecord.id, category: "fun", startedByParticipantId: creator.id }).returning();
+    const [session] = await db
+      .insert(togetherSession)
+      .values({ pairId: pairRecord.id, category: "fun", startedByParticipantId: creator.id })
+      .returning();
     if (!session) throw new Error("Together test session was not created.");
-    await db.insert(togetherSessionQuestion).values({ sessionId: session.id, questionId: logicalQuestion.id, questionRevisionId: revision.id, position: 1 });
+    await db.insert(togetherSessionQuestion).values({
+      sessionId: session.id,
+      questionId: logicalQuestion.id,
+      questionRevisionId: revision.id,
+      position: 1,
+    });
 
-    await createQuestionRevision(db, { questionId: logicalQuestion.id, text: "Future wording", category: "fun", relationshipFit: "both", modeFit: "both", intensity: "deep" });
-    const view = await getTogetherSessionForParticipant(db, { participantId: creator.id, pairId: pairRecord.id, sessionId: session.id });
-    expect(view.question).toMatchObject({ id: logicalQuestion.id, questionRevisionId: revision.id, text: "A first immutable question" });
+    await createQuestionRevision(db, {
+      questionId: logicalQuestion.id,
+      text: "Future wording",
+      category: "fun",
+      relationshipFit: "both",
+      modeFit: "both",
+      intensity: "deep",
+    });
+    const view = await getTogetherSessionForParticipant(db, {
+      participantId: creator.id,
+      pairId: pairRecord.id,
+      sessionId: session.id,
+    });
+    expect(view.question).toMatchObject({
+      id: logicalQuestion.id,
+      questionRevisionId: revision.id,
+      text: "A first immutable question",
+    });
   });
 
   test("Private Rounds keep their exact revision while later revisions become current", async () => {
     const { question: logicalQuestion, revision } = await createTestQuestion();
     const { pairId, first, second } = await createJoinedPair();
-    const era = (await db.select().from(pairMembershipEra).where(and(eq(pairMembershipEra.pairId, pairId), isNull(pairMembershipEra.endedAt))))[0];
+    const era = (
+      await db
+        .select()
+        .from(pairMembershipEra)
+        .where(and(eq(pairMembershipEra.pairId, pairId), isNull(pairMembershipEra.endedAt)))
+    )[0];
     if (!era) throw new Error("Private test era was not created.");
-    const [conversation] = await db.insert(privateConversation).values({ pairId, category: "fun", createdByParticipantId: first.id, membershipEraId: era.id }).returning();
+    const [conversation] = await db
+      .insert(privateConversation)
+      .values({
+        pairId,
+        category: "fun",
+        createdByParticipantId: first.id,
+        membershipEraId: era.id,
+      })
+      .returning();
     if (!conversation) throw new Error("Private test conversation was not created.");
-    const [round] = await db.insert(privateRound).values({ pairId, conversationId: conversation.id, questionId: logicalQuestion.id, questionRevisionId: revision.id, questionNumber: 1, initiatorParticipantId: first.id }).returning();
+    const [round] = await db
+      .insert(privateRound)
+      .values({
+        pairId,
+        conversationId: conversation.id,
+        questionId: logicalQuestion.id,
+        questionRevisionId: revision.id,
+        questionNumber: 1,
+        initiatorParticipantId: first.id,
+      })
+      .returning();
     if (!round) throw new Error("Private test round was not created.");
 
-    await createQuestionRevision(db, { questionId: logicalQuestion.id, text: "Future private wording", category: "fun", relationshipFit: "both", modeFit: "private", intensity: "deep" });
-    const view = await getPrivateRoundForParticipant(db, { participantId: second.id, pairId, roundId: round.id });
-    expect(view.question).toMatchObject({ id: logicalQuestion.id, questionRevisionId: revision.id, text: "A first immutable question" });
+    await createQuestionRevision(db, {
+      questionId: logicalQuestion.id,
+      text: "Future private wording",
+      category: "fun",
+      relationshipFit: "both",
+      modeFit: "private",
+      intensity: "deep",
+    });
+    const view = await getPrivateRoundForParticipant(db, {
+      participantId: second.id,
+      pairId,
+      roundId: round.id,
+    });
+    expect(view.question).toMatchObject({
+      id: logicalQuestion.id,
+      questionRevisionId: revision.id,
+      text: "A first immutable question",
+    });
   });
 });

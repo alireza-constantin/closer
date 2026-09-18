@@ -22,7 +22,11 @@ export default function SignInForm({ onSwitchToSignUp }: { onSwitchToSignUp: () 
   const router = useRouter();
   const queryClient = useQueryClient();
   const { isPending } = authClient.useSession();
-  const form = useForm<SignInValues>({ defaultValues: { email: "", password: "" }, mode: "onChange", resolver: zodResolver(signInSchema) });
+  const form = useForm<SignInValues>({
+    defaultValues: { email: "", password: "" },
+    mode: "onChange",
+    resolver: zodResolver(signInSchema),
+  });
 
   async function onSubmit(values: SignInValues) {
     form.clearErrors("root.server");
@@ -46,27 +50,63 @@ export default function SignInForm({ onSwitchToSignUp }: { onSwitchToSignUp: () 
   const emailError = form.formState.errors.email;
   const passwordError = form.formState.errors.password;
   return (
-    <main className="flex min-h-svh items-center justify-center bg-closer-cream px-6 py-8 text-closer-navy">
-      <section className="w-full max-w-md rounded-closer-panel bg-white/70 p-6 shadow-closer-soft">
+    <main className="bg-closer-cream text-closer-navy flex min-h-svh items-center justify-center px-6 py-8">
+      <section className="rounded-closer-panel shadow-closer-soft w-full max-w-md bg-white/70 p-6">
         <CloserEyebrow className="text-center">Welcome back to Closer</CloserEyebrow>
         <h1 className="mt-3 text-center text-3xl font-extrabold tracking-[-.05em]">Welcome back</h1>
         <form className="mt-6" onSubmit={form.handleSubmit(onSubmit)}>
           <FieldGroup>
             <Field data-invalid={!!emailError}>
               <FieldLabel htmlFor="email">Email</FieldLabel>
-              <Input {...form.register("email")} aria-describedby={emailError ? "sign-in-email-error" : undefined} aria-invalid={!!emailError} autoComplete="email" id="email" type="email" />
+              <Input
+                {...form.register("email")}
+                aria-describedby={emailError ? "sign-in-email-error" : undefined}
+                aria-invalid={!!emailError}
+                autoComplete="email"
+                id="email"
+                type="email"
+              />
               <FieldError errors={emailError ? [emailError] : undefined} id="sign-in-email-error" />
             </Field>
             <Field data-invalid={!!passwordError}>
               <FieldLabel htmlFor="password">Password</FieldLabel>
-              <Input {...form.register("password")} aria-describedby={passwordError ? "sign-in-password-error" : undefined} aria-invalid={!!passwordError} autoComplete="current-password" id="password" type="password" />
-              <FieldError errors={passwordError ? [passwordError] : undefined} id="sign-in-password-error" />
+              <Input
+                {...form.register("password")}
+                aria-describedby={passwordError ? "sign-in-password-error" : undefined}
+                aria-invalid={!!passwordError}
+                autoComplete="current-password"
+                id="password"
+                type="password"
+              />
+              <FieldError
+                errors={passwordError ? [passwordError] : undefined}
+                id="sign-in-password-error"
+              />
             </Field>
           </FieldGroup>
-          {form.formState.errors.root?.server?.message ? <FormServerError>{form.formState.errors.root.server.message}</FormServerError> : null}
-          <AsyncButton className="mt-5 w-full" disabled={!form.formState.isValid} pending={form.formState.isSubmitting} pendingText="Signing in…" size="lg" type="submit">Sign in</AsyncButton>
+          {form.formState.errors.root?.server?.message ? (
+            <FormServerError>{form.formState.errors.root.server.message}</FormServerError>
+          ) : null}
+          <AsyncButton
+            className="mt-5 w-full"
+            disabled={!form.formState.isValid}
+            pending={form.formState.isSubmitting}
+            pendingText="Signing in…"
+            size="lg"
+            type="submit"
+          >
+            Sign in
+          </AsyncButton>
         </form>
-        <Button className="mx-auto mt-4 block" onClick={onSwitchToSignUp} size="sm" type="button" variant="link">Need an account? Sign up</Button>
+        <Button
+          className="mx-auto mt-4 block"
+          onClick={onSwitchToSignUp}
+          size="sm"
+          type="button"
+          variant="link"
+        >
+          Need an account? Sign up
+        </Button>
       </section>
     </main>
   );

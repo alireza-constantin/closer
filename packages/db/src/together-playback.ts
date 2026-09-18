@@ -19,13 +19,18 @@ export type TogetherQuestionPage = {
 
 export type TogetherQuestionPools = Record<TogetherQuestionBand, TogetherQuestionPage>;
 
-export function togetherIntensityFallback(completedNextTransitions: number): TogetherQuestionBand[] {
+export function togetherIntensityFallback(
+  completedNextTransitions: number,
+): TogetherQuestionBand[] {
   if (completedNextTransitions >= 4) return ["deep", "medium", "light"];
   if (completedNextTransitions >= 2) return ["medium", "light", "deep"];
   return ["light", "medium", "deep"];
 }
 
-export function chooseBufferedTogetherQuestion(pools: TogetherQuestionPools, completedNextTransitions: number):
+export function chooseBufferedTogetherQuestion(
+  pools: TogetherQuestionPools,
+  completedNextTransitions: number,
+):
   | { kind: "question"; band: TogetherQuestionBand; question: TogetherLoadedQuestion }
   | { kind: "loading"; band: TogetherQuestionBand }
   | { kind: "exhausted" } {

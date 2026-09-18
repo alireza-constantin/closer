@@ -18,11 +18,13 @@ const { POST } = await import("./route");
 
 describe("participant onboarding route", () => {
   test("returns the resolved participant and delegates identity-safe idempotency to the domain layer", async () => {
-    const response = await POST(new Request("http://localhost/api/onboarding", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ displayName: "  Ari  " }),
-    }));
+    const response = await POST(
+      new Request("http://localhost/api/onboarding", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ displayName: "  Ari  " }),
+      }),
+    );
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ participantId: "participant-1", displayName: "Ari" });
@@ -30,10 +32,12 @@ describe("participant onboarding route", () => {
   });
 
   test("rejects malformed requests before persistence", async () => {
-    const response = await POST(new Request("http://localhost/api/onboarding", {
-      method: "POST",
-      body: JSON.stringify({}),
-    }));
+    const response = await POST(
+      new Request("http://localhost/api/onboarding", {
+        method: "POST",
+        body: JSON.stringify({}),
+      }),
+    );
 
     expect(response.status).toBe(400);
     expect(resolveOrCreateParticipant).toHaveBeenCalledTimes(1);

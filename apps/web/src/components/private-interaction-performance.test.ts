@@ -11,7 +11,7 @@ describe("Private interaction performance boundaries", () => {
   test("keeps Ask optimistic only with the already-authorized candidate occurrence", async () => {
     const screen = await source("private-conversation-screen.tsx");
 
-    expect(screen).toContain('question: { id: string; questionRevisionId: string; text: string }');
+    expect(screen).toContain("question: { id: string; questionRevisionId: string; text: string }");
     expect(screen).toContain("setOptimisticAskQuestion(candidate.question)");
     expect(screen).toContain("Your answer");
     expect(screen).toContain("setOptimisticAskQuestion(null)");
@@ -46,12 +46,16 @@ describe("Private interaction performance boundaries", () => {
 
   test("uses the authorized Reveal response and query recovery without fabricating answers", async () => {
     const screen = await source("private-round-screen.tsx");
-    const revealRoute = await source("../app/api/pairs/[pairId]/private-rounds/[roundId]/reveal/route.ts");
+    const revealRoute = await source(
+      "../app/api/pairs/[pairId]/private-rounds/[roundId]/reveal/route.ts",
+    );
     const roundRoute = await source("../app/api/pairs/[pairId]/private-rounds/[roundId]/route.ts");
 
     expect(screen).toContain('fetch(`${baseUrl}/reveal`, { method: "POST" })');
     expect(screen).toContain("!next || !next.answers");
-    expect(screen).toContain("queryKey: closerKeys.privateRound(initialRound.pairId, initialRound.id)");
+    expect(screen).toContain(
+      "queryKey: closerKeys.privateRound(initialRound.pairId, initialRound.id)",
+    );
     expect(screen).toContain("refetchInterval: 30_000");
     expect(revealRoute).toContain("markPrivateRevealViewed");
     expect(roundRoute).toContain("hideUnviewedReveal");

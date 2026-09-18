@@ -22,7 +22,11 @@ export default function SignUpForm({ onSwitchToSignIn }: { onSwitchToSignIn: () 
   const router = useRouter();
   const queryClient = useQueryClient();
   const { isPending } = authClient.useSession();
-  const form = useForm<SignUpValues>({ defaultValues: { email: "", password: "", name: "" }, mode: "onChange", resolver: zodResolver(signUpSchema) });
+  const form = useForm<SignUpValues>({
+    defaultValues: { email: "", password: "", name: "" },
+    mode: "onChange",
+    resolver: zodResolver(signUpSchema),
+  });
 
   async function onSubmit(values: SignUpValues) {
     form.clearErrors("root.server");
@@ -38,7 +42,9 @@ export default function SignUpForm({ onSwitchToSignIn }: { onSwitchToSignIn: () 
         },
       });
     } catch {
-      form.setError("root.server", { message: "We couldn’t create your account. Please try again." });
+      form.setError("root.server", {
+        message: "We couldn’t create your account. Please try again.",
+      });
     }
   }
 
@@ -47,32 +53,76 @@ export default function SignUpForm({ onSwitchToSignIn }: { onSwitchToSignIn: () 
   const emailError = form.formState.errors.email;
   const passwordError = form.formState.errors.password;
   return (
-    <main className="flex min-h-svh items-center justify-center bg-closer-cream px-6 py-8 text-closer-navy">
-      <section className="w-full max-w-md rounded-closer-panel bg-white/70 p-6 shadow-closer-soft">
+    <main className="bg-closer-cream text-closer-navy flex min-h-svh items-center justify-center px-6 py-8">
+      <section className="rounded-closer-panel shadow-closer-soft w-full max-w-md bg-white/70 p-6">
         <CloserEyebrow className="text-center">Keep your Closer space close</CloserEyebrow>
-        <h1 className="mt-3 text-center text-3xl font-extrabold tracking-[-.05em]">Create an account</h1>
+        <h1 className="mt-3 text-center text-3xl font-extrabold tracking-[-.05em]">
+          Create an account
+        </h1>
         <form className="mt-6" onSubmit={form.handleSubmit(onSubmit)}>
           <FieldGroup>
             <Field data-invalid={!!nameError}>
               <FieldLabel htmlFor="name">Name</FieldLabel>
-              <Input {...form.register("name")} aria-describedby={nameError ? "sign-up-name-error" : undefined} aria-invalid={!!nameError} autoComplete="name" id="name" />
+              <Input
+                {...form.register("name")}
+                aria-describedby={nameError ? "sign-up-name-error" : undefined}
+                aria-invalid={!!nameError}
+                autoComplete="name"
+                id="name"
+              />
               <FieldError errors={nameError ? [nameError] : undefined} id="sign-up-name-error" />
             </Field>
             <Field data-invalid={!!emailError}>
               <FieldLabel htmlFor="email">Email</FieldLabel>
-              <Input {...form.register("email")} aria-describedby={emailError ? "sign-up-email-error" : undefined} aria-invalid={!!emailError} autoComplete="email" id="email" type="email" />
+              <Input
+                {...form.register("email")}
+                aria-describedby={emailError ? "sign-up-email-error" : undefined}
+                aria-invalid={!!emailError}
+                autoComplete="email"
+                id="email"
+                type="email"
+              />
               <FieldError errors={emailError ? [emailError] : undefined} id="sign-up-email-error" />
             </Field>
             <Field data-invalid={!!passwordError}>
               <FieldLabel htmlFor="password">Password</FieldLabel>
-              <Input {...form.register("password")} aria-describedby={passwordError ? "sign-up-password-error" : undefined} aria-invalid={!!passwordError} autoComplete="new-password" id="password" type="password" />
-              <FieldError errors={passwordError ? [passwordError] : undefined} id="sign-up-password-error" />
+              <Input
+                {...form.register("password")}
+                aria-describedby={passwordError ? "sign-up-password-error" : undefined}
+                aria-invalid={!!passwordError}
+                autoComplete="new-password"
+                id="password"
+                type="password"
+              />
+              <FieldError
+                errors={passwordError ? [passwordError] : undefined}
+                id="sign-up-password-error"
+              />
             </Field>
           </FieldGroup>
-          {form.formState.errors.root?.server?.message ? <FormServerError>{form.formState.errors.root.server.message}</FormServerError> : null}
-          <AsyncButton className="mt-5 w-full" disabled={!form.formState.isValid} pending={form.formState.isSubmitting} pendingText="Creating account…" size="lg" type="submit">Sign up</AsyncButton>
+          {form.formState.errors.root?.server?.message ? (
+            <FormServerError>{form.formState.errors.root.server.message}</FormServerError>
+          ) : null}
+          <AsyncButton
+            className="mt-5 w-full"
+            disabled={!form.formState.isValid}
+            pending={form.formState.isSubmitting}
+            pendingText="Creating account…"
+            size="lg"
+            type="submit"
+          >
+            Sign up
+          </AsyncButton>
         </form>
-        <Button className="mx-auto mt-4 block" onClick={onSwitchToSignIn} size="sm" type="button" variant="link">Already have an account? Sign in</Button>
+        <Button
+          className="mx-auto mt-4 block"
+          onClick={onSwitchToSignIn}
+          size="sm"
+          type="button"
+          variant="link"
+        >
+          Already have an account? Sign in
+        </Button>
       </section>
     </main>
   );

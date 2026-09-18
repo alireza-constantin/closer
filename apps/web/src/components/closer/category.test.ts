@@ -9,7 +9,17 @@ describe("categoriesForRelationship", () => {
   });
 
   test("keeps relationship-specific labels out of the other Pair type", () => {
-    expect(categoriesForRelationship("partner").map(categoryLabel)).toEqual(["Fun", "Deep", "Memories", "Relationship"]);
-    expect(categoriesForRelationship("friend").map(categoryLabel)).toEqual(["Fun", "Deep", "Memories", "Friendship"]);
+    expect(categoriesForRelationship("partner").map(categoryLabel)).toEqual([
+      "Fun",
+      "Deep",
+      "Memories",
+      "Relationship",
+    ]);
+    expect(categoriesForRelationship("friend").map(categoryLabel)).toEqual([
+      "Fun",
+      "Deep",
+      "Memories",
+      "Friendship",
+    ]);
   });
 });

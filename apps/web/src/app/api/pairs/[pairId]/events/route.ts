@@ -33,16 +33,25 @@ export async function GET(request: Request, context: { params: Promise<{ pairId:
       const close = () => {
         if (heartbeat) clearInterval(heartbeat);
         unsubscribe?.();
-        try { controller.close(); } catch { /* already closed */ }
+        try {
+          controller.close();
+        } catch {
+          /* already closed */
+        }
       };
       unsubscribe = getRealtimeBus().subscribe(pairId, (event: RealtimeEvent) => {
-        controller.enqueue(encoder.encode(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`));
+        controller.enqueue(
+          encoder.encode(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`),
+        );
       });
       controller.enqueue(encoder.encode(": connected\n\n"));
       heartbeat = setInterval(() => controller.enqueue(encoder.encode(": heartbeat\n\n")), 20_000);
       request.signal.addEventListener("abort", close, { once: true });
     },
-    cancel() { if (heartbeat) clearInterval(heartbeat); unsubscribe?.(); },
+    cancel() {
+      if (heartbeat) clearInterval(heartbeat);
+      unsubscribe?.();
+    },
   });
   return new Response(stream, { headers });
 }

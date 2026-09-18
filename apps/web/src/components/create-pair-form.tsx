@@ -19,27 +19,17 @@ import { cn } from "@Closer/ui/lib/utils";
 
 import { AsyncButton } from "@/components/closer/async-button";
 import { CloserModeCard } from "@/components/closer/navigation";
-import {
-  OnboardingIcon,
-  OnboardingSurface,
-} from "@/components/closer/onboarding-surface";
+import { OnboardingIcon, OnboardingSurface } from "@/components/closer/onboarding-surface";
 import { FormServerError } from "@/components/closer/feedback";
 import { CloserEyebrow } from "@/components/closer/typography";
-import {
-  togetherPickerPath,
-  type PairRelationshipType,
-} from "@/lib/together-picker-path";
+import { togetherPickerPath, type PairRelationshipType } from "@/lib/together-picker-path";
 import { createPairSchema, type CreatePairValues } from "@/lib/validation";
 
 import { Input } from "@Closer/ui/components/input";
 
 type PairCreation = { pairId: string; relationshipType: PairRelationshipType };
 
-export default function CreatePairForm({
-  isFirstSpace = true,
-}: {
-  isFirstSpace?: boolean;
-}) {
+export default function CreatePairForm({ isFirstSpace = true }: { isFirstSpace?: boolean }) {
   const [result, setResult] = useState<PairCreation | null>(null);
   const creationRequestIdRef = useRef<string | null>(null);
   const form = useForm<CreatePairValues>({
@@ -66,15 +56,9 @@ export default function CreatePairForm({
         !("pairId" in body) ||
         typeof body.pairId !== "string"
       ) {
-        const message =
-          body && typeof body === "object" && "error" in body
-            ? body.error
-            : null;
+        const message = body && typeof body === "object" && "error" in body ? body.error : null;
         form.setError("root.server", {
-          message:
-            typeof message === "string"
-              ? message
-              : "We could not create your space.",
+          message: typeof message === "string" ? message : "We could not create your space.",
         });
         return;
       }
@@ -96,12 +80,12 @@ export default function CreatePairForm({
           <Sparkles aria-hidden="true" />
         </OnboardingIcon>
         <CloserEyebrow className="mt-4">Your space is ready</CloserEyebrow>
-        <h1 className="mt-3 max-w-[12ch] text-balance text-[clamp(2rem,8.8vw,2.55rem)] font-extrabold leading-[1.03] tracking-[-.055em]">
+        <h1 className="mt-3 max-w-[12ch] text-[clamp(2rem,8.8vw,2.55rem)] leading-[1.03] font-extrabold tracking-[-.055em] text-balance">
           How do you want to connect?
         </h1>
-        <p className="mt-3 max-w-[31ch] text-[.98rem] leading-relaxed text-closer-muted">
-          Choose the kind of moment you want right now. You can bring your
-          person in when you’re ready.
+        <p className="text-closer-muted mt-3 max-w-[31ch] text-[.98rem] leading-relaxed">
+          Choose the kind of moment you want right now. You can bring your person in when you’re
+          ready.
         </p>
         <div className="mt-6 flex w-full flex-col gap-3 text-left">
           <CloserModeCard
@@ -122,16 +106,14 @@ export default function CreatePairForm({
           />
         </div>
         <Link
-          className="mt-5 text-sm font-bold text-closer-muted underline-offset-4 hover:text-closer-navy hover:underline"
+          className="text-closer-muted hover:text-closer-navy mt-5 text-sm font-bold underline-offset-4 hover:underline"
           href={`/pair/${result.pairId}` as never}
           prefetch
         >
           I’ll choose later
         </Link>
         {form.formState.errors.root?.server?.message ? (
-          <FormServerError>
-            {form.formState.errors.root.server.message}
-          </FormServerError>
+          <FormServerError>{form.formState.errors.root.server.message}</FormServerError>
         ) : null}
       </OnboardingSurface>
     );
@@ -145,25 +127,21 @@ export default function CreatePairForm({
       <CloserEyebrow className="mt-4">
         {isFirstSpace ? "A space for two" : "Make room for another connection"}
       </CloserEyebrow>
-      <h1 className="mt-3 max-w-[12ch] text-balance text-4xl font-extrabold leading-[1.03] tracking-[-.055em]">
+      <h1 className="mt-3 max-w-[12ch] text-4xl leading-[1.03] font-extrabold tracking-[-.055em] text-balance">
         {isFirstSpace ? "Let’s create your space" : "Create another space"}
       </h1>
-      <p className="mt-3 max-w-[31ch] text-[.98rem] leading-relaxed text-closer-muted">
+      <p className="text-closer-muted mt-3 max-w-[31ch] text-[.98rem] leading-relaxed">
         {isFirstSpace
           ? "A gentle place for the conversations that matter."
           : "A separate little place for another person who matters."}
       </p>
       <FieldGroup className="mt-6 gap-4">
         <Field data-invalid={!!form.formState.errors.intendedPersonName}>
-          <FieldLabel htmlFor="intended-person-name">
-            Who is this space for?
-          </FieldLabel>
+          <FieldLabel htmlFor="intended-person-name">Who is this space for?</FieldLabel>
           <Input
             {...form.register("intendedPersonName")}
             aria-describedby={
-              form.formState.errors.intendedPersonName
-                ? "intended-person-name-error"
-                : undefined
+              form.formState.errors.intendedPersonName ? "intended-person-name-error" : undefined
             }
             aria-invalid={!!form.formState.errors.intendedPersonName}
             autoComplete="off"
@@ -181,9 +159,7 @@ export default function CreatePairForm({
           />
         </Field>
         <FieldSet data-invalid={!!form.formState.errors.relationshipType}>
-          <FieldLegend variant="label">
-            Who are you creating this with?
-          </FieldLegend>
+          <FieldLegend variant="label">Who are you creating this with?</FieldLegend>
           <Controller
             control={form.control}
             name="relationshipType"
@@ -204,10 +180,8 @@ export default function CreatePairForm({
                   <Field key={value}>
                     <FieldLabel
                       className={cn(
-                        "min-h-22 w-full cursor-pointer flex-col justify-center rounded-4xl border-2 border-transparent p-3 px-1 transition-[transform,border-color] hover:-translate-y-0.5 focus-within:ring-2 focus-within:ring-closer-lavender focus-within:ring-offset-2 focus-within:ring-offset-closer-cream",
-                        value === "partner"
-                          ? "bg-closer-peach"
-                          : "bg-closer-lavender-soft",
+                        "focus-within:ring-closer-lavender focus-within:ring-offset-closer-cream min-h-22 w-full cursor-pointer flex-col justify-center rounded-4xl border-2 border-transparent p-3 px-1 transition-[transform,border-color] focus-within:ring-2 focus-within:ring-offset-2 hover:-translate-y-0.5",
+                        value === "partner" ? "bg-closer-peach" : "bg-closer-lavender-soft",
                         field.value === value && "border-closer-navy",
                       )}
                     >
@@ -219,10 +193,8 @@ export default function CreatePairForm({
                       <span className="font-extrabold">
                         {value === "partner" ? "Partner" : "Friend"}
                       </span>
-                      <small className="text-xs text-closer-navy/70 text-center">
-                        {value === "partner"
-                          ? "For the two of you"
-                          : "For close friends"}
+                      <small className="text-closer-navy/70 text-center text-xs">
+                        {value === "partner" ? "For the two of you" : "For close friends"}
                       </small>
                     </FieldLabel>
                   </Field>
@@ -240,16 +212,12 @@ export default function CreatePairForm({
         </FieldSet>
       </FieldGroup>
       {form.formState.errors.root?.server?.message ? (
-        <FormServerError>
-          {form.formState.errors.root.server.message}
-        </FormServerError>
+        <FormServerError>{form.formState.errors.root.server.message}</FormServerError>
       ) : null}
       <AsyncButton
         className="mt-5 w-full"
         pending={form.formState.isSubmitting}
-        pendingText={
-          isFirstSpace ? "Creating your space…" : "Creating another space…"
-        }
+        pendingText={isFirstSpace ? "Creating your space…" : "Creating another space…"}
         size="lg"
         type="submit"
       >

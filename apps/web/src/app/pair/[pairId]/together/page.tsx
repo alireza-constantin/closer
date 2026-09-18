@@ -7,7 +7,11 @@ import { togetherPickerPath } from "@/lib/together-picker-path";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-export default async function LegacyTogetherPickerPage({ params }: { params: Promise<{ pairId: string }> }) {
+export default async function LegacyTogetherPickerPage({
+  params,
+}: {
+  params: Promise<{ pairId: string }>;
+}) {
   const { pairId } = await params;
   const currentParticipant = await getCurrentParticipant();
   if (!currentParticipant) notFound();

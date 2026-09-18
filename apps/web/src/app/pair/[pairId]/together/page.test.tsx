@@ -24,10 +24,15 @@ mock.module("next/navigation", () => ({
 const { default: LegacyTogetherPickerPage } = await import("./page");
 
 describe("legacy Together picker route", () => {
-  test.each(["partner", "friend"] as const)("redirects an authorized %s Pair to its type-specific picker", async (type) => {
-    relationshipType = type;
+  test.each(["partner", "friend"] as const)(
+    "redirects an authorized %s Pair to its type-specific picker",
+    async (type) => {
+      relationshipType = type;
 
-    await expect(LegacyTogetherPickerPage({ params: Promise.resolve({ pairId: "pair-1" }) })).rejects.toThrow(`redirect:/pair/pair-1/together/${type}`);
-    expect(getPairForParticipant).toHaveBeenLastCalledWith({}, "participant-1", "pair-1");
-  });
+      await expect(
+        LegacyTogetherPickerPage({ params: Promise.resolve({ pairId: "pair-1" }) }),
+      ).rejects.toThrow(`redirect:/pair/pair-1/together/${type}`);
+      expect(getPairForParticipant).toHaveBeenLastCalledWith({}, "participant-1", "pair-1");
+    },
+  );
 });

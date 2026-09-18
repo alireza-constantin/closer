@@ -1,4 +1,11 @@
-import { CloserDomainError, db, getParticipantByAuthUserId, publishRealtimeEvent, redeemInitialInvite, resolveOrCreateParticipant } from "@Closer/auth/closer";
+import {
+  CloserDomainError,
+  db,
+  getParticipantByAuthUserId,
+  publishRealtimeEvent,
+  redeemInitialInvite,
+  resolveOrCreateParticipant,
+} from "@Closer/auth/closer";
 
 import { getAuthUserIdFromRequest } from "@/lib/closer-server";
 import { joinPairSchema } from "@/lib/validation";
