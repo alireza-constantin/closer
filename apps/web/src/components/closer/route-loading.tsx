@@ -8,14 +8,7 @@ import {
 } from "@/components/closer/category";
 import { CloserPageShell, CloserTopbar } from "@/components/closer/page-shell";
 
-type RouteLoadingVariant =
-  | "form"
-  | "history"
-  | "home"
-  | "private-conversation"
-  | "private-picker"
-  | "private-round"
-  | "together-question";
+type RouteLoadingVariant = "form" | "history" | "home" | "together-question";
 
 const loadingCategories = categoriesForRelationship("partner");
 
@@ -96,26 +89,6 @@ function FormSkeleton() {
   );
 }
 
-function PrivatePickerSkeleton() {
-  return (
-    <>
-      <LoadingBackButton />
-      <section className="pt-10" aria-hidden="true">
-        <LoadingModeBadge mode="private" />
-        <LoadingLine className="mt-6 h-10 w-[78%] max-w-[18rem]" />
-        <LoadingLine className="mt-3 h-10 w-[52%] max-w-[12rem]" />
-        <LoadingLine className="mt-3 h-4 w-[88%] max-w-[20rem]" />
-        <LoadingLine className="mt-2 h-4 w-[66%] max-w-[15rem]" />
-        <div className="mt-6 grid gap-2.5">
-          {loadingCategories.map((category) => (
-            <LoadingCategoryCard category={category} key={category} />
-          ))}
-        </div>
-      </section>
-    </>
-  );
-}
-
 export function TogetherPickerLoading() {
   return (
     <div aria-busy="true" aria-live="polite">
@@ -126,58 +99,6 @@ export function TogetherPickerLoading() {
         ))}
       </div>
     </div>
-  );
-}
-
-function PrivateConversationSkeleton() {
-  return (
-    <>
-      <LoadingBackButton />
-      <section className="pt-10" aria-hidden="true">
-        <LoadingModeBadge mode="private" />
-        <LoadingLine className="mt-6 h-3 w-20" />
-        <LoadingLine className="mt-4 h-10 w-[82%] max-w-[18rem]" />
-        <LoadingLine className="mt-2 h-10 w-[68%] max-w-[15rem]" />
-        <LoadingLine className="mt-2 h-10 w-[52%] max-w-[12rem]" />
-        <LoadingLine className="mt-4 h-4 w-[88%] max-w-[20rem]" />
-        <LoadingLine className="mt-2 h-4 w-[66%] max-w-[15rem]" />
-        <div className="mt-8 grid gap-3">
-          <Skeleton className="bg-closer-coral-soft h-12 rounded-[1.05rem]" />
-          <div className="grid grid-cols-2 gap-3">
-            <Skeleton className="h-12 rounded-[1.05rem] bg-white/90" />
-            <Skeleton className="bg-closer-lavender-soft h-12 rounded-[1.05rem]" />
-          </div>
-        </div>
-      </section>
-    </>
-  );
-}
-
-function PrivateRoundSkeleton() {
-  return (
-    <>
-      <header className="flex min-h-[42px] items-center justify-between" aria-hidden="true">
-        <LoadingBackButton />
-        <LoadingModeBadge mode="private" />
-        <span className="w-[38px]" />
-      </header>
-      <section
-        className="flex min-h-[calc(100svh-100px)] flex-col items-center pt-6"
-        aria-hidden="true"
-      >
-        <Skeleton className="bg-closer-yellow h-9 w-[76px] rounded-full" />
-        <LoadingLine className="mt-3 h-3 w-36" />
-        <LoadingLine className="mt-7 h-10 w-[88%] max-w-[18rem]" />
-        <LoadingLine className="mt-2 h-10 w-[72%] max-w-[15rem]" />
-        <LoadingLine className="mt-2 h-10 w-[56%] max-w-[12rem]" />
-        <div className="mt-auto flex w-full flex-col pt-7">
-          <Skeleton className="min-h-[132px] w-full rounded-[1.05rem] bg-white/90" />
-          <Skeleton className="bg-closer-coral-soft mt-[18px] h-12 w-full rounded-[1.05rem]" />
-          <Skeleton className="mt-3 h-12 w-full rounded-[1.05rem] bg-white/65" />
-          <LoadingLine className="mx-auto mt-4 h-3 w-56 max-w-full" />
-        </div>
-      </section>
-    </>
   );
 }
 
@@ -240,13 +161,9 @@ function HistorySkeleton() {
 
 export function CloserRouteLoading({ variant }: { variant: RouteLoadingVariant }) {
   const shellClassName =
-    variant === "private-picker" ||
-    variant === "private-conversation" ||
-    variant === "private-round"
-      ? "pt-5"
-      : variant === "together-question"
-        ? "flex min-h-svh flex-col pb-[max(28px,env(safe-area-inset-bottom))]"
-        : undefined;
+    variant === "together-question"
+      ? "flex min-h-svh flex-col pb-[max(28px,env(safe-area-inset-bottom))]"
+      : undefined;
 
   return (
     <CloserPageShell aria-busy="true" aria-live="polite" className={shellClassName}>
@@ -255,9 +172,6 @@ export function CloserRouteLoading({ variant }: { variant: RouteLoadingVariant }
       {variant === "home" ? <HomeSkeleton /> : null}
       {variant === "form" ? <FormSkeleton /> : null}
       {variant === "history" ? <HistorySkeleton /> : null}
-      {variant === "private-picker" ? <PrivatePickerSkeleton /> : null}
-      {variant === "private-conversation" ? <PrivateConversationSkeleton /> : null}
-      {variant === "private-round" ? <PrivateRoundSkeleton /> : null}
       {variant === "together-question" ? <TogetherQuestionSkeleton /> : null}
     </CloserPageShell>
   );

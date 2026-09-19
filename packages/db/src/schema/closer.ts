@@ -42,10 +42,9 @@ export const privateReactionValue = pgEnum("private_reaction_value", [
 export const privateQuestionCandidateState = pgEnum("private_question_candidate_state", [
   "unresolved",
   "asked",
-  "skipped",
   "invalidated",
 ]);
-export const privateRoundStatus = pgEnum("private_round_status", ["open", "declined"]);
+export const privateRoundStatus = pgEnum("private_round_status", ["open", "retired"]);
 
 export const participant = pgTable(
   "participant",
@@ -259,7 +258,6 @@ export const privateQuestionCandidate = pgTable(
       .notNull()
       .references(() => questionRevision.id, { onDelete: "restrict" }),
     state: privateQuestionCandidateState("state").notNull().default("unresolved"),
-    liked: boolean("liked").notNull().default(false),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     resolvedAt: timestamp("resolved_at"),
   },
@@ -296,10 +294,14 @@ export const privateRound = pgTable(
       .references(() => participant.id, { onDelete: "restrict" }),
     clientRequestId: uuid("client_request_id"),
     status: privateRoundStatus("status").default("open").notNull(),
-    declinedByParticipantId: uuid("declined_by_participant_id").references(() => participant.id, {
+    // A selected Shared Open question exists before it becomes a durable exchange.
+    // `committedAt` is written with the first answer under the Pair lock.
+    committedAt: timestamp("committed_at"),
+    provisionalExpiresAt: timestamp("provisional_expires_at"),
+    retiredByParticipantId: uuid("retired_by_participant_id").references(() => participant.id, {
       onDelete: "restrict",
     }),
-    declinedAt: timestamp("declined_at"),
+    retiredAt: timestamp("retired_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
@@ -321,8 +323,8 @@ export const privateRound = pgTable(
     ),
     check("private_round_question_number_positive", sql`${table.questionNumber} > 0`),
     check(
-      "private_round_decline_audit_consistent",
-      sql`(${table.status} = 'open' and ${table.declinedByParticipantId} is null and ${table.declinedAt} is null) or (${table.status} = 'declined' and ${table.declinedByParticipantId} is not null and ${table.declinedAt} is not null)`,
+      "private_round_retirement_audit_consistent",
+      sql`(${table.status} = 'open' and ${table.retiredByParticipantId} is null and ${table.retiredAt} is null) or (${table.status} in ('declined', 'retired') and ${table.retiredByParticipantId} is not null and ${table.retiredAt} is not null)`,
     ),
     uniqueIndex("private_round_idempotency_uidx")
       .on(table.pairId, table.initiatorParticipantId, table.clientRequestId)

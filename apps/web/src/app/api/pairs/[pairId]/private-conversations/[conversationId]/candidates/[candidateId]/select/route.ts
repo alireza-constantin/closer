@@ -1,4 +1,4 @@
-import { db, setPrivateQuestionCandidateLike } from "@Closer/auth/closer";
+import { db, publishRealtimeEvent, selectSharedOpenPrivateCandidate } from "@Closer/auth/closer";
 
 import {
   noStoreHeaders,
@@ -6,7 +6,7 @@ import {
   requireRequestParticipant,
 } from "@/server/http/private-http";
 
-export async function PUT(
+export async function POST(
   request: Request,
   context: { params: Promise<{ pairId: string; conversationId: string; candidateId: string }> },
 ) {
@@ -17,21 +17,23 @@ export async function PUT(
       { status: 401, headers: noStoreHeaders },
     );
   const body: unknown = await request.json().catch(() => null);
-  const liked = body && typeof body === "object" && "liked" in body ? body.liked : null;
-  if (typeof liked !== "boolean")
+  const clientRequestId =
+    body && typeof body === "object" && "clientRequestId" in body
+      ? body.clientRequestId
+      : undefined;
+  if (clientRequestId !== undefined && typeof clientRequestId !== "string")
     return Response.json({ error: "Invalid request." }, { status: 400, headers: noStoreHeaders });
   const { pairId, conversationId, candidateId } = await context.params;
   try {
-    return Response.json(
-      await setPrivateQuestionCandidateLike(db, {
-        participantId: participant.id,
-        pairId,
-        conversationId,
-        candidateId,
-        liked,
-      }),
-      { headers: noStoreHeaders },
-    );
+    const result = await selectSharedOpenPrivateCandidate(db, {
+      participantId: participant.id,
+      pairId,
+      conversationId,
+      candidateId,
+      clientRequestId,
+    });
+    await publishRealtimeEvent(pairId, "private.changed");
+    return Response.json(result, { status: 201, headers: noStoreHeaders });
   } catch (error) {
     return privateDomainErrorResponse(error);
   }

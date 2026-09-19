@@ -9,16 +9,22 @@ describe("App Router navigation feedback", () => {
     "onboarding/loading.tsx",
     "join/[token]/loading.tsx",
     "rejoin/[token]/loading.tsx",
-    "pair/[pairId]/loading.tsx",
     "pair/[pairId]/invite/loading.tsx",
     "pair/[pairId]/rejoin/loading.tsx",
     "pair/[pairId]/together/[sessionId]/loading.tsx",
-    "pair/[pairId]/private/loading.tsx",
     "pair/[pairId]/private/conversation/[conversationId]/loading.tsx",
     "pair/[pairId]/private/round/[roundId]/loading.tsx",
     "pair/[pairId]/history/loading.tsx",
   ])("provides an immediate loading boundary for %s", async (routeFile) => {
     expect(await Bun.file(join(appDirectory, routeFile)).exists()).toBe(true);
+  });
+
+  test("keeps the Pair Home fallback local so it cannot mask descendant destinations", async () => {
+    const pairLoading = Bun.file(join(appDirectory, "pair/[pairId]/loading.tsx"));
+    const pairPage = await Bun.file(join(appDirectory, "pair/[pairId]/page.tsx")).text();
+
+    expect(await pairLoading.exists()).toBe(false);
+    expect(pairPage).toContain('<Suspense fallback={<CloserRouteLoading variant="home" />}>');
   });
 
   test("renders static Together picker routes without an authorization or Pair projection", async () => {

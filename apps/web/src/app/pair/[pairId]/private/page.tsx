@@ -1,26 +1,15 @@
-import { notFound, redirect, unstable_rethrow } from "next/navigation";
+import { Suspense } from "react";
 
-import PrivatePicker from "@/features/private-conversation/components/private-picker";
-import { getCurrentParticipant } from "@/server/auth/current-participant";
-import { getAuthorizedPair } from "@/server/modules/pairs/pair.service";
+import PrivatePickerPageContent from "./_components/private-picker-page-content";
+import { PrivatePickerSkeleton } from "@/features/private-conversation/components/private-route-skeletons";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-export default async function PrivatePickerPage({
-  params,
-}: {
-  params: Promise<{ pairId: string }>;
-}) {
-  const { pairId } = await params;
-  const currentParticipant = await getCurrentParticipant();
-  if (!currentParticipant) notFound();
-  try {
-    const pairView = await getAuthorizedPair(currentParticipant.id, pairId);
-    if (pairView.members.length !== 2) redirect(`/pair/${pairId}/invite?reason=private` as never);
-    return <PrivatePicker pairId={pairId} relationshipType={pairView.pair.relationshipType} />;
-  } catch (error) {
-    unstable_rethrow(error);
-    notFound();
-  }
+export default function PrivatePickerPage({ params }: { params: Promise<{ pairId: string }> }) {
+  return (
+    <Suspense fallback={<PrivatePickerSkeleton />}>
+      <PrivatePickerPageContent params={params} />
+    </Suspense>
+  );
 }

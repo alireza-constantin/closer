@@ -1,6 +1,56 @@
-# ADR 003: Creator-owned Private Conversations with mutual reveal
+# ADR 003: Shared Open Private Conversations with explicit reveal
 
-**Status:** Accepted
+**Status:** Accepted — amended 2026-09-19
+
+> This amendment supersedes every creator-only, Ask/Skip/Like, Decline, and
+> creator-progression rule below. The retained historical discussion documents
+> why the old storage existed; it is not an active product rule.
+
+## 2026-09-19 Shared Open amendment
+
+Private Conversations remain one persistent `(Pair, membership era, category)`
+resource. `created_by_participant_id` is historical creation metadata only; it
+never grants continuing social or progression authority.
+
+Each free category exposes the same persisted deterministic candidate to both
+active members. Either may select it. Selection atomically creates one shared
+provisional `private_round`, pinning the revision and initiator. It is visible
+to both immediately and both can answer concurrently. It has no notification,
+consumption, durable-history, category-commitment, or initiator-slot effect
+until its first answer atomically writes `committed_at`.
+
+An unanswered provisional records a 30-minute cleanup-eligibility time, but a
+clock never deletes a question from an open viewer. Submission remains valid
+after that time and commits under the Pair lock. Until an explicit
+viewer-safe abandonment operation exists, later category entry resumes the
+same provisional rather than removing it beneath a participant who may be
+reading or typing.
+
+The same Pair lock serializes category selection, first-answer commitment,
+retirement, Pair lifecycle, and cross-category races. A participant can have
+only one active self-initiated provisional; another generative selection
+resumes that provisional instead of creating a second one. At commitment it checks
+that the initiator has no other committed unresolved open round in that Pair.
+Participation in another initiator's round does not count. A category has only
+one unresolved open round, and the resulting maximum is two committed
+unresolved rounds per Pair, one per participant.
+
+Exactly one answer permits either participant to retire the round. The answer
+is permanently sealed; the Question remains consumed; the initiator slot and
+category become available. With two answers retirement is rejected. Both
+answers remain absent from every projection until that viewer explicitly opens
+Reveal. Reveal Views remain viewer-local authorization records. A fully
+revealed round can lead to the same category's normal candidate selection,
+another category, or Pair Home; there is no automatic advance.
+
+The UI never attributes a selection to either participant and never presents
+chooser, turn, quota, pending, debt, or waiting-for-a-person language. Private
+entry routes only receptive work (an answerable open round or reveal-ready
+round); otherwise it opens the category hub. The hub presents calm category
+state, never counts, badges, timestamps, or obligations. The existing
+`private.changed` SSE event refreshes active clients after selection, answer,
+retirement, and reveal. Background notification begins with first answer, not
+candidate selection, using the existing notification seam when configured.
 
 ## Context
 

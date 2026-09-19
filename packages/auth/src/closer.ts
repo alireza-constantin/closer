@@ -3,9 +3,9 @@ export { getRealtimeBus, publishRealtimeEvent } from "@Closer/db";
 export type { RealtimeEvent, RealtimeEventType } from "@Closer/db";
 export {
   CloserDomainError,
-  declinePrivateRound,
+  retireSharedOpenPrivateRound,
   advanceTogetherSession,
-  askPrivateQuestionCandidate,
+  selectSharedOpenPrivateCandidate,
   createPairForParticipant,
   getPairEntryForParticipant,
   getPairForParticipant,
@@ -39,9 +39,7 @@ export {
   replaceInitialInvite,
   revokeRejoinInvites,
   setPrivateReaction,
-  setPrivateQuestionCandidateLike,
   setPrivateReply,
-  skipPrivateQuestionCandidate,
   setTogetherSessionLike,
   terminatePair,
   startOrResumePrivateConversation,

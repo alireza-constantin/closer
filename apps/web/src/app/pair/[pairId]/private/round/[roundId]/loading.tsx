@@ -1,5 +1,5 @@
-import { CloserRouteLoading } from "@/components/closer/route-loading";
+import { PrivateRoundSkeleton } from "@/features/private-conversation/components/private-route-skeletons";
 
 export default function Loading() {
-  return <CloserRouteLoading variant="private-round" />;
+  return <PrivateRoundSkeleton />;
 }

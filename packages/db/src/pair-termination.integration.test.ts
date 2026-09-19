@@ -10,10 +10,10 @@ const { createDb } = await import("./index");
 const {
   CloserDomainError,
   advanceTogetherSession,
-  askPrivateQuestionCandidate,
+  selectSharedOpenPrivateCandidate: askPrivateQuestionCandidate,
   createQuestion,
   createPairForParticipant,
-  declinePrivateRound,
+  retireSharedOpenPrivateRound: declinePrivateRound,
   getFormerEraHistoryForParticipant,
   getInitialInviteLanding,
   getRejoinInviteLanding,

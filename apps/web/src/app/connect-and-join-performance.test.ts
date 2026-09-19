@@ -6,7 +6,9 @@ const source = (path: string) => Bun.file(join(appDirectory, path)).text();
 
 describe("Connect and invitation-join streaming boundaries", () => {
   test("keeps the unclaimed Private route read-only and directs Pair Home to the current-state-safe Connect entry", async () => {
-    const privatePage = await source("pair/[pairId]/private/page.tsx");
+    const privatePage = await source(
+      "pair/[pairId]/private/_components/private-picker-page-content.tsx",
+    );
     const pairHome = await source("../features/pair/components/pair-home.tsx");
 
     expect(privatePage).toContain("redirect(`/pair/${pairId}/invite?reason=private` as never)");
@@ -28,18 +30,14 @@ describe("Connect and invitation-join streaming boundaries", () => {
     expect(frame).toContain("Private questions work when you can each answer");
   });
 
-  test("uses a Connect-shaped fallback instead of Private category copy", async () => {
-    const privateLoading = await source("pair/[pairId]/private/loading.tsx");
+  test("keeps Connect loading at the invite destination instead of the complete Private route", async () => {
+    const privateLoading = Bun.file(join(appDirectory, "pair/[pairId]/private/loading.tsx"));
+    const inviteLoading = await source("pair/[pairId]/invite/loading.tsx");
     const connectLoading = await source("../features/invite/components/connect-route-loading.tsx");
-    const inviteSkeleton = await source("../features/invite/components/invite-controls.tsx");
 
-    expect(privateLoading).toContain("ConnectRouteLoading");
-    expect(privateLoading).not.toContain("private-picker");
+    expect(await privateLoading.exists()).toBe(false);
+    expect(inviteLoading).toContain("ConnectRouteLoading");
     expect(connectLoading).toContain("ConnectPageFrame");
-    expect(inviteSkeleton).toContain("InviteControlsSkeleton");
-    expect(inviteSkeleton).toContain("size-[min(224px,62vw)]");
-    expect(inviteSkeleton).toContain("grid-cols-2");
-    expect(inviteSkeleton).toContain("h-10 w-full");
   });
 
   test("keeps the invite lookup inert and limits issue/reuse to mounted Connect interaction", async () => {

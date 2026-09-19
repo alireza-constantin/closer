@@ -63,7 +63,7 @@ mock.module("@/features/pair/components/pair-home", () => ({ default: "pair-home
 mock.module("@/features/pair/components/terminated-pair-screen", () => ({
   default: "terminated-pair-screen",
 }));
-const { default: PairPage } = await import("./page");
+const { default: PairPageContent } = await import("./_components/pair-page-content");
 
 describe("Pair route entry", () => {
   test.each(["partner", "friend"] as const)(
@@ -71,7 +71,7 @@ describe("Pair route entry", () => {
     async (type) => {
       entryState = "active";
       relationshipType = type;
-      const element = await PairPage({ params: Promise.resolve({ pairId: "pair-1" }) });
+      const element = await PairPageContent({ params: Promise.resolve({ pairId: "pair-1" }) });
 
       expect(element.type).toBe("pair-home");
       expect(element.props).toMatchObject({
@@ -86,15 +86,15 @@ describe("Pair route entry", () => {
 
   test("renders the ended Space state for a former participant of a terminated Pair", async () => {
     entryState = "terminated";
-    const element = await PairPage({ params: Promise.resolve({ pairId: "pair-1" }) });
+    const element = await PairPageContent({ params: Promise.resolve({ pairId: "pair-1" }) });
 
     expect(element.type).toBe("terminated-pair-screen");
   });
 
   test("preserves not-found behavior for an unrelated participant", async () => {
     entryState = "unauthorized";
-    await expect(PairPage({ params: Promise.resolve({ pairId: "pair-1" }) })).rejects.toThrow(
-      "notFound",
-    );
+    await expect(
+      PairPageContent({ params: Promise.resolve({ pairId: "pair-1" }) }),
+    ).rejects.toThrow("notFound");
   });
 });

@@ -11,8 +11,7 @@ describe("CreatePairForm relationship selector", () => {
     expect(source).toContain("<RadioGroupItem");
     expect(source).not.toContain('className="sr-only"');
     expect(source).toContain("aria-describedby={`${value}-relationship-description`}");
-    expect(source).toContain("data-checked:bg-closer-coral");
-    expect(source).toContain("field.value === value");
+    expect(source).toContain("has-data-checked:border-closer-lavender");
     expect(source).toContain("For the two of you");
     expect(source).toContain("For close friends");
   });

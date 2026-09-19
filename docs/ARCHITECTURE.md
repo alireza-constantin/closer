@@ -6,6 +6,14 @@ This document defines the canonical V1 domain boundaries, invariants, authorizat
 
 The repository implementation predates parts of this contract. [`IMPLEMENTATION-GAPS.md`](./IMPLEMENTATION-GAPS.md) records the known differences; those differences are not alternative behavior.
 
+> **Shared Open amendment (2026-09-20).** ADR 003 and the PRD Shared Open
+> section supersede the creator-owned Private rules and legacy Ask/Skip/Like/
+> Decline descriptions in this document. Private Conversations remain era- and
+> category-scoped, but both members see deterministic candidates, either may
+> select, the first answer commits, one self-initiated provisional and one
+> committed unresolved initiation are permitted per member, exactly-one-answer
+> retirement is symmetric, and Reveal remains viewer-authorized.
+
 ## 1. Runtime architecture
 
 Closer is a Bun workspace whose Next.js App Router application is the full-stack application and server boundary.

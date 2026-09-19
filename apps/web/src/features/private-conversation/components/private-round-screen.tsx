@@ -34,7 +34,7 @@ type ReactionValue = "heart" | "laugh" | "tender" | "surprised";
 type RoundView = {
   id: string;
   pairId: string;
-  conversation: { id: string; category: string; questionNumber: number; isCreator: boolean };
+  conversation: { id: string; category: string; questionNumber: number };
   question: {
     id: string;
     questionRevisionId: string;
@@ -44,7 +44,8 @@ type RoundView = {
   };
   otherParticipant: { id: string; displayName: string };
   yourAnswer: string | null;
-  state: "YOUR_TURN" | "WAITING" | "REVEAL_READY" | "REVEAL_VIEWED" | "DECLINED";
+  hasOtherAnswer: boolean;
+  state: "YOUR_TURN" | "WAITING" | "REVEAL_READY" | "REVEAL_VIEWED" | "RETIRED";
   revealViewedAt: string | null;
   otherRevealViewed: boolean;
   answers?: Array<{ participantId: string; displayName: string; body: string }>;
@@ -74,6 +75,7 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
     undefined,
   );
   const [error, setError] = useState<string | null>(null);
+  const [retiredDraft, setRetiredDraft] = useState<string | null>(null);
   const answerForm = useForm<PrivateAnswerValues>({
     defaultValues: { body: initialRound.yourAnswer ?? "" },
     mode: "onChange",
@@ -100,8 +102,14 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
     refetchInterval: 30_000,
   });
   useEffect(() => {
-    if (roundQuery.data) setRound(roundQuery.data);
-  }, [roundQuery.data]);
+    if (!roundQuery.data) return;
+    if (roundQuery.data.state === "RETIRED" && round.state === "YOUR_TURN") {
+      const draft = answerForm.getValues("body");
+      if (draft) setRetiredDraft(draft);
+      setError("This question was closed. Your unsent words are still here to copy.");
+    }
+    setRound(roundQuery.data);
+  }, [answerForm, round.state, roundQuery.data]);
 
   async function reconcileRound(fallback: RoundView) {
     try {
@@ -156,9 +164,9 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
     setError(null);
     const previousRound = round;
     setIsPassing(true);
-    setRound({ ...round, state: "DECLINED" });
+    setRound({ ...round, state: "RETIRED" });
     try {
-      const response = await fetch(`${baseUrl}/decline`, { method: "POST" });
+      const response = await fetch(`${baseUrl}/retire`, { method: "POST" });
       const next = parseRound(await response.json());
       if (!response.ok || !next) throw new Error();
       setRound(next);
@@ -289,17 +297,19 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
             >
               Save my answer
             </AsyncButton>
-            <AsyncButton
-              className="mt-3 w-full"
-              onClick={() => void passQuestion()}
-              pending={isPassing}
-              pendingText="Passing…"
-              size="lg"
-              type="button"
-              variant="ghost"
-            >
-              Pass this question
-            </AsyncButton>
+            {round.hasOtherAnswer ? (
+              <AsyncButton
+                className="mt-3 w-full"
+                onClick={() => void passQuestion()}
+                pending={isPassing}
+                pendingText="Letting go…"
+                size="lg"
+                type="button"
+                variant="ghost"
+              >
+                Not this one
+              </AsyncButton>
+            ) : null}
           </form>
           {error ? <ActionError>{error}</ActionError> : null}
           <p
@@ -323,13 +333,21 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
           <h1 className="text-[2.25rem] leading-tight font-extrabold tracking-[-.048em]">
             Answer saved
           </h1>
-          <h2 className="mt-1 text-[1.35rem] font-extrabold">
-            Waiting for {round.otherParticipant.displayName}
-          </h2>
+          <h2 className="mt-1 text-[1.35rem] font-extrabold">Your answer is in</h2>
           <p className="text-closer-muted mx-auto my-6 max-w-[27ch] leading-relaxed">
-            You’ll both see your answers when {round.otherParticipant.displayName} responds.
+            The other answer is already in when you&apos;re both ready to continue.
           </p>
           <div className="grid justify-items-center gap-3">
+            <AsyncButton
+              onClick={() => void passQuestion()}
+              pending={isPassing}
+              pendingText="Letting go…"
+              size="sm"
+              type="button"
+              variant="ghost"
+            >
+              Let this one go
+            </AsyncButton>
             <Link
               className={buttonVariants({ size: "sm", variant: "ghost" })}
               href={`/pair/${round.pairId}` as never}
@@ -385,31 +403,34 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
     );
   }
 
-  if (round.state === "DECLINED") {
+  if (round.state === "RETIRED") {
     return (
       <CloserPageShell className="pt-5">
         {header}
         <section className="flex min-h-[calc(100svh-110px)] flex-col items-center justify-center pb-9 text-center">
           <CloserCompanions className="mb-7" />
           <h1 className="text-[2.25rem] leading-tight font-extrabold tracking-[-.048em]">
-            Question passed
+            Let this one go
           </h1>
           <p className="text-closer-muted mx-auto my-6 max-w-[27ch] leading-relaxed">
-            This question is complete without a reveal.
+            This question stays private. You can leave it here.
           </p>
-          {round.conversation.isCreator ? (
-            <Link
-              className={buttonVariants({ size: "lg" })}
-              href={`/pair/${round.pairId}/private` as never}
-              prefetch
-            >
-              Choose next question
-            </Link>
-          ) : (
-            <p className="text-closer-muted text-sm leading-relaxed">
-              Waiting for {round.otherParticipant.displayName} to choose a question.
-            </p>
-          )}
+          {retiredDraft ? (
+            <Textarea
+              aria-label="Your unsent answer"
+              className="mb-4 min-h-28"
+              readOnly
+              value={retiredDraft}
+            />
+          ) : null}
+          {error ? <ActionError>{error}</ActionError> : null}
+          <Link
+            className={buttonVariants({ size: "lg" })}
+            href={`/pair/${round.pairId}/private` as never}
+            prefetch
+          >
+            Something else
+          </Link>
           <Link
             className={cn(buttonVariants({ size: "sm", variant: "ghost" }), "mt-3")}
             href={`/pair/${round.pairId}` as never}
@@ -438,16 +459,6 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
           Your answers
         </h1>
         <p className="text-closer-muted mt-2 text-center">Two perspectives. A closer us.</p>
-        {round.conversation.isCreator && !round.otherRevealViewed ? (
-          <p className="text-closer-muted mt-3 text-center text-sm leading-relaxed">
-            Waiting for {round.otherParticipant.displayName} to view the reveal.
-          </p>
-        ) : null}
-        {!round.conversation.isCreator ? (
-          <p className="text-closer-muted mt-3 text-center text-sm leading-relaxed">
-            Waiting for {round.otherParticipant.displayName} to choose a question.
-          </p>
-        ) : null}
         <div className="mt-7 grid gap-3">
           {round.answers?.map((item, index) => {
             const partnerReaction = round.reactions?.find(
@@ -581,13 +592,13 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
               <strong className="text-closer-navy">{item.displayName}</strong> {item.body}
             </p>
           ))}
-        {round.conversation.isCreator && round.otherRevealViewed ? (
+        {round.otherRevealViewed ? (
           <Link
             className={cn(buttonVariants({ size: "lg", variant: "secondary" }), "mt-2.5 w-full")}
             href={`/pair/${round.pairId}/private` as never}
             prefetch
           >
-            Choose next question
+            Ask another
           </Link>
         ) : null}
         <Link

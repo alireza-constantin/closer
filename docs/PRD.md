@@ -104,7 +104,35 @@ Existing Participants keep their own display name. New users choose their Partic
 
 Claim is rejected if the claimant is already the active occupant of the Pair's other slot or if the two Participants already share another active, fully claimed Pair. A rejected claim leaves the invitation usable. A successful initial claim fills the same Pair rather than creating another one.
 
-## 7. Private mode and Conversation ownership
+## 7. Private mode and Shared Open protocol
+
+> The following Shared Open contract supersedes legacy creator-owned wording in
+> sections 7–10 and 12. It is the authoritative Private protocol.
+
+Private Conversations are persistent category resources, unique per Pair,
+membership era, and category. Either active member may select a shared,
+deterministic candidate. Selection creates one question visible to both; both
+may answer at once without seeing the other answer. The selection is
+provisional until the first answer commits it. A participant may have only one
+self-initiated provisional at a time; later generative selection resumes it.
+The 30-minute provisional marker is cleanup eligibility, never an automatic
+visible disappearance: a later entry preserves a still-referenceable question
+and first-answer submission remains valid. An explicitly abandoned unanswered
+provisional has no history or consumption.
+
+At most one committed unresolved Shared Open round exists per category. Each
+participant may initiate at most one committed unresolved round across the
+Pair; answering another member's round does not consume that initiator slot.
+One answer permits either member to quietly retire the question, sealing that
+answer forever while consuming the Question and freeing the initiator slot.
+Two answers require explicit Reveal and cannot be unilaterally retired.
+
+Private does not label who selected a question, permanent askers, chooser
+rotation, control requests, quotas, question totals, pending work, or answer
+debt. The category hub is a mood choice: it routes receptive work when one is
+already present, otherwise lets the member choose a category. Selecting alone
+sends no push; first answer and second-answer/reveal-ready transitions use the
+existing notification architecture without reminders or nudges.
 
 Private requires both Pair slots to have active Participants. If the second slot is unclaimed, entering Private opens the connection flow and lazily creates or reuses the initial invitation.
 

@@ -1,4 +1,4 @@
-import { db, publishRealtimeEvent, skipPrivateQuestionCandidate } from "@Closer/auth/closer";
+import { db, publishRealtimeEvent, retireSharedOpenPrivateRound } from "@Closer/auth/closer";
 
 import {
   noStoreHeaders,
@@ -8,7 +8,7 @@ import {
 
 export async function POST(
   request: Request,
-  context: { params: Promise<{ pairId: string; conversationId: string; candidateId: string }> },
+  context: { params: Promise<{ pairId: string; roundId: string }> },
 ) {
   const participant = await requireRequestParticipant(request);
   if (!participant)
@@ -16,13 +16,12 @@ export async function POST(
       { error: "Sign in is required." },
       { status: 401, headers: noStoreHeaders },
     );
-  const { pairId, conversationId, candidateId } = await context.params;
+  const { pairId, roundId } = await context.params;
   try {
-    const result = await skipPrivateQuestionCandidate(db, {
+    const result = await retireSharedOpenPrivateRound(db, {
       participantId: participant.id,
       pairId,
-      conversationId,
-      candidateId,
+      roundId,
     });
     await publishRealtimeEvent(pairId, "private.changed");
     return Response.json(result, { headers: noStoreHeaders });

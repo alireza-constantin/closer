@@ -9,8 +9,8 @@ dotenv.config({ path: new URL("../../../apps/web/.env", import.meta.url) });
 const { createDb } = await import("./index");
 const {
   CloserDomainError,
-  askPrivateQuestionCandidate,
-  declinePrivateRound,
+  selectSharedOpenPrivateCandidate: askPrivateQuestionCandidate,
+  retireSharedOpenPrivateRound: declinePrivateRound,
   createQuestion,
   createPairForParticipant,
   getPrivateRoundForParticipant,
@@ -28,9 +28,7 @@ const {
   removePrivateReply,
   resolveOrCreateParticipant,
   setPrivateReaction,
-  setPrivateQuestionCandidateLike,
   setPrivateReply,
-  skipPrivateQuestionCandidate,
   submitPrivateAnswer,
   startOrResumePrivateConversation,
   reviseQuestion,

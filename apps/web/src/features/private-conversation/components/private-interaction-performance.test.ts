@@ -8,7 +8,7 @@ async function source(file: string) {
 }
 
 describe("Private interaction performance boundaries", () => {
-  test("keeps Ask optimistic only with the already-authorized candidate occurrence", async () => {
+  test("keeps Shared Open selection optimistic only with the already-authorized candidate", async () => {
     const screen = await source("private-conversation-screen.tsx");
 
     expect(screen).toContain("question: { id: string; questionRevisionId: string; text: string }");
@@ -18,28 +18,31 @@ describe("Private interaction performance boundaries", () => {
     expect(screen).not.toContain("selectPrivateQuestionCandidate");
   });
 
-  test("renders the persisted Skip response directly and never refreshes the whole route", async () => {
+  test("uses one explicit Shared Open selection request and never refreshes the whole route", async () => {
     const screen = await source("private-conversation-screen.tsx");
 
-    expect(screen).toContain("const next = parseConversation(await response.json())");
-    expect(screen).toContain("setConversation(next)");
+    expect(screen).toContain("fetch(`${candidateBaseUrl}/select`");
+    expect(screen).toContain(
+      "router.push(`/pair/${view.pairId}/private/round/${result.roundId}` as never)",
+    );
     expect(screen).toContain("await reconcileConversation()");
     expect(screen).not.toContain("router.refresh()");
   });
 
-  test("makes Like immediate while guarding it against a newer candidate", async () => {
+  test("does not retain obsolete Like or Skip client protocol", async () => {
     const screen = await source("private-conversation-screen.tsx");
 
-    expect(screen).toContain("const candidateId = conversation.candidate?.id");
-    expect(screen).toContain("setLiked(nextLiked)");
-    expect(screen).toContain("currentCandidateIdRef.current === candidateId");
+    expect(screen).not.toContain("likeQuestion");
+    expect(screen).not.toContain("skipQuestion");
+    expect(screen).not.toContain("/like");
+    expect(screen).not.toContain("/skip");
   });
 
   test("uses only safe local Private states while answer and Pass persist", async () => {
     const screen = await source("private-round-screen.tsx");
 
     expect(screen).toContain('setRound({ ...round, state: "WAITING", yourAnswer: values.body })');
-    expect(screen).toContain('setRound({ ...round, state: "DECLINED" })');
+    expect(screen).toContain('setRound({ ...round, state: "RETIRED" })');
     expect(screen).toContain("await reconcileRound(previousRound)");
     expect(screen).not.toContain("router.refresh()");
   });

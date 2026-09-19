@@ -3,8 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
-import { Heart } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Button, buttonVariants } from "@Closer/ui/components/button";
 import { Textarea } from "@Closer/ui/components/textarea";
@@ -21,14 +20,11 @@ type ConversationProjection = {
   id: string;
   pairId: string;
   category: string;
-  creator: { displayName: string };
-  role: "creator" | "non-creator";
-  state: "CANDIDATE" | "CURRENT_ROUND" | "READY_FOR_NEXT" | "WAITING_FOR_CREATOR" | "EXHAUSTED";
+  state: "CANDIDATE" | "CURRENT_ROUND" | "READY_FOR_NEXT" | "EXHAUSTED";
   message?: string;
   roundId?: string;
   candidate?: {
     id: string;
-    liked: boolean;
     question: { id: string; questionRevisionId: string; text: string };
   };
 };
@@ -42,21 +38,12 @@ function parseConversation(value: unknown): ConversationProjection | null {
 export default function PrivateConversationScreen({ view }: { view: ConversationProjection }) {
   const router = useRouter();
   const [conversation, setConversation] = useState(view);
-  const [liked, setLiked] = useState(view.candidate?.liked ?? false);
   const [isAsking, setIsAsking] = useState(false);
-  const [isSkipping, setIsSkipping] = useState(false);
-  const [isLiking, setIsLiking] = useState(false);
   const [optimisticAskQuestion, setOptimisticAskQuestion] = useState<
     NonNullable<ConversationProjection["candidate"]>["question"] | null
   >(null);
   const [error, setError] = useState<string | null>(null);
-  const currentCandidateIdRef = useRef(conversation.candidate?.id);
-  currentCandidateIdRef.current = conversation.candidate?.id;
   useEffect(() => setConversation(view), [view]);
-  useEffect(
-    () => setLiked(conversation.candidate?.liked ?? false),
-    [conversation.candidate?.id, conversation.candidate?.liked],
-  );
   const question = conversation.candidate?.question.text;
   const candidateBaseUrl = conversation.candidate
     ? `/api/pairs/${encodeURIComponent(conversation.pairId)}/private-conversations/${encodeURIComponent(conversation.id)}/candidates/${encodeURIComponent(conversation.candidate.id)}`
@@ -92,29 +79,6 @@ export default function PrivateConversationScreen({ view }: { view: Conversation
     }
   }
 
-  async function likeQuestion() {
-    if (!candidateBaseUrl) return;
-    const nextLiked = !liked;
-    const candidateId = conversation.candidate?.id;
-    setError(null);
-    setLiked(nextLiked);
-    setIsLiking(true);
-    try {
-      const response = await fetch(`${candidateBaseUrl}/like`, {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ liked: nextLiked }),
-      });
-      if (!response.ok) throw new Error();
-    } catch {
-      const authoritative = await reconcileConversation();
-      if (!authoritative && currentCandidateIdRef.current === candidateId) setLiked(!nextLiked);
-      setError("We couldn’t save that Like. Please try again.");
-    } finally {
-      setIsLiking(false);
-    }
-  }
-
   async function askQuestion() {
     if (!candidateBaseUrl) return;
     const candidate = conversation.candidate;
@@ -125,7 +89,7 @@ export default function PrivateConversationScreen({ view }: { view: Conversation
     // it never selects or serializes another candidate while Ask is in flight.
     setOptimisticAskQuestion(candidate.question);
     try {
-      const response = await fetch(`${candidateBaseUrl}/ask`, {
+      const response = await fetch(`${candidateBaseUrl}/select`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ clientRequestId: crypto.randomUUID() }),
@@ -155,26 +119,6 @@ export default function PrivateConversationScreen({ view }: { view: Conversation
     }
   }
 
-  async function skipQuestion() {
-    if (!candidateBaseUrl) return;
-    setError(null);
-    setIsSkipping(true);
-    try {
-      const response = await fetch(`${candidateBaseUrl}/skip`, { method: "POST" });
-      const next = parseConversation(await response.json());
-      if (!response.ok || !next) throw new Error();
-      // The server selects and persists the next candidate before it is returned.
-      // Nothing future is kept in the client before this response arrives.
-      setConversation(next);
-    } catch {
-      // A timeout can mean the server committed Skip but its response was lost.
-      // The focused, viewer-relative projection corrects that stale candidate.
-      await reconcileConversation();
-      setError("We couldn’t skip that question. Please try again.");
-    } finally {
-      setIsSkipping(false);
-    }
-  }
   return (
     <CloserPageShell className="pt-5">
       <CloserBackLink href={`/pair/${conversation.pairId}`} />
@@ -215,46 +159,18 @@ export default function PrivateConversationScreen({ view }: { view: Conversation
               {question}
             </h1>
             <p className="text-closer-muted mt-4 max-w-[32ch] leading-relaxed">
-              This question is waiting for you to choose what happens next.
+              Choose a question to answer together, in your own words.
             </p>
             <div className="mt-8 grid gap-3">
               <AsyncButton
                 onClick={() => void askQuestion()}
                 pending={isAsking}
-                pendingText="Asking…"
+                pendingText="Opening…"
                 size="lg"
                 type="button"
               >
-                Ask this question
+                Choose this question
               </AsyncButton>
-              <div className="grid grid-cols-2 gap-3">
-                <AsyncButton
-                  aria-pressed={liked}
-                  onClick={() => void likeQuestion()}
-                  pending={isLiking}
-                  pendingText="Saving…"
-                  size="lg"
-                  type="button"
-                  variant={liked ? "secondary" : "outline"}
-                >
-                  <Heart
-                    aria-hidden="true"
-                    className="size-4"
-                    fill={liked ? "currentColor" : "none"}
-                  />
-                  {liked ? "Liked" : "Like"}
-                </AsyncButton>
-                <AsyncButton
-                  onClick={() => void skipQuestion()}
-                  pending={isSkipping}
-                  pendingText="Skipping…"
-                  size="lg"
-                  type="button"
-                  variant="secondary"
-                >
-                  Skip
-                </AsyncButton>
-              </div>
             </div>
             {error ? <ActionError>{error}</ActionError> : null}
           </>
@@ -280,8 +196,7 @@ export default function PrivateConversationScreen({ view }: { view: Conversation
           </h1>
         ) : (
           <h1 className="mt-4 max-w-[18ch] text-[2.25rem] leading-tight font-extrabold tracking-[-.048em] text-balance">
-            {conversation.message ??
-              `Waiting for ${conversation.creator.displayName} to choose a question.`}
+            {conversation.message ?? "Choose a category whenever it feels right."}
           </h1>
         )}
       </section>

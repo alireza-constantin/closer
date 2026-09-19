@@ -41,12 +41,13 @@ mock.module("next/navigation", () => ({
   },
 }));
 
-const { default: PrivatePickerPage } = await import("./page");
+const { default: PrivatePickerPageContent } =
+  await import("./_components/private-picker-page-content");
 
 describe("Private picker route", () => {
   test("routes an unclaimed Space to the lazy connection flow", async () => {
     await expect(
-      PrivatePickerPage({ params: Promise.resolve({ pairId: "pair-1" }) }),
+      PrivatePickerPageContent({ params: Promise.resolve({ pairId: "pair-1" }) }),
     ).rejects.toThrow("redirect:/pair/pair-1/invite?reason=private");
   });
 });

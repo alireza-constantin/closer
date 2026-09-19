@@ -14,10 +14,9 @@ This glossary records the product language used across the PRD and architecture 
 - **Together Session**: one bounded use of Together with a start and an end.
 - **Private**: the independent-answer mode. Both pair slots must be actively connected because each participant answers on their own device.
 - **Private Conversation**: a persistent, resumable category-specific sequence in Private within one Pair membership era. It has no user-triggered finish or restart lifecycle in V1; it becomes read-only when its era ends, and leaving its UI does not end it.
-- **Conversation creator**: the Participant who creates a Private Conversation and exclusively controls its pre-round question candidates and progression to later rounds.
-  _Avoid_: Pair creator, space owner
-- **Private question candidate**: one server-backed eligible question shown only to the Conversation creator before the next Private Round exists.
-- **Private Round**: one numbered Question Asked within a Private Conversation. A Declined Round remains a Round, while a candidate Skip creates no Round.
+- **Conversation creator**: historical metadata for the Participant who first created a Private Conversation. It conveys no continuing selection or progression authority.
+- **Private question candidate**: one server-backed deterministic eligible question shared with both active members before either selects it.
+- **Private Round**: one numbered Shared Open Question in a Private Conversation. It is provisional before its first answer and committed thereafter.
 - **Private Answer**: one immutable answer submitted by a Participant for an Asked Private Round. Before both answers exist, each Participant may read only their own.
 - **Reveal View**: the persisted fact that one Participant explicitly opened a reveal-ready Private Round. Both Participants' Reveal Views are required for creator progression, but there is no global `REVEALED` state.
 - **Private reaction**: one Participant's post-reveal reaction to the other Participant's answer in a Private Round.

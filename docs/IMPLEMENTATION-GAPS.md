@@ -109,7 +109,10 @@ Schema design for these steps should be planned as one coherent migration sequen
 - **Suggested order:** 7, together with Conversation changes.
 - **Blocking dependencies:** Conversation era identity, Question revision model, deterministic selector.
 
-## 9. Ask, Skip, and Private question Like
+## 9. Historical Ask, Skip, and Private question Like
+
+> Superseded by Shared Open; retained only as historical implementation-gap
+> context. It is not an active requirement.
 
 - **Current behavior:** Private has no distinct Ask, candidate Skip, or candidate Like. The deprecated direct-round route still exists, and Conversation start/next creates a Round directly. Current Private selection considers only Round usage, so skipped candidates cannot be consumed.
 - **Required behavior:** Creator-only idempotent Ask/Skip commands resolve one candidate mutually exclusively. Ask creates the next numbered Round; Skip consumes without a Round/number and selects another. Like toggles only while unresolved, remains creator-only/internal, freezes on resolution, and never affects selection or history.
@@ -119,7 +122,9 @@ Schema design for these steps should be planned as one coherent migration sequen
 - **Suggested order:** 8.
 - **Blocking dependencies:** Candidate model, immutable creator, Round numbering, logical Question identity.
 
-## 10. Private Decline
+## 10. Historical Private Decline
+
+> Superseded by Shared Open retirement; retained only as historical context.
 
 - **Current behavior:** No Declined state or command exists. A Round remains waiting until both answers exist. Round numbering is derived from creation order rather than stored as an explicit stable number; post-answer reaction/reply logic assumes all terminally useful Rounds become reveal-ready.
 - **Required behavior:** Either unanswered Participant may terminally `Pass this question` while fewer than two answers exist. Answer/Decline races serialize. Decline keeps its Round number and Asked count, permits no reveal/reaction/reply, preserves a lone answer only for its author, shows neutral immutable history, and lets the creator continue.
@@ -129,7 +134,9 @@ Schema design for these steps should be planned as one coherent migration sequen
 - **Suggested order:** 8.
 - **Blocking dependencies:** Candidate/Ask model, stable Round numbering, former-history projection.
 
-## 11. Reveal progression
+## 11. Historical creator progression
+
+> Superseded by Shared Open; retained only as historical context.
 
 - **Current behavior:** The system stores independent Reveal Views and protects answers before both are persisted. However, `createNextPrivateRound` checks only that two answers exist and does not verify creator authority or both Reveal Views. The UI shows `Next question` to any Participant after their own reveal. Pair Home treats a Participant's own reveal view as ready to continue.
 - **Required behavior:** Both answers make Reveal available, but only the immutable creator may progress, and only after both Participants have recorded Reveal Views. There is no timeout or override. The creator polls/waits after revealing first; the non-creator never selects the next candidate.
