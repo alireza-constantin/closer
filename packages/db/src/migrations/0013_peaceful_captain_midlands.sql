@@ -1,6 +1,0 @@
-CREATE TYPE "public"."private_round_status" AS ENUM('open', 'declined');--> statement-breakpoint
-ALTER TABLE "private_round" ADD COLUMN "status" "private_round_status" DEFAULT 'open' NOT NULL;--> statement-breakpoint
-ALTER TABLE "private_round" ADD COLUMN "declined_by_participant_id" uuid;--> statement-breakpoint
-ALTER TABLE "private_round" ADD COLUMN "declined_at" timestamp;--> statement-breakpoint
-ALTER TABLE "private_round" ADD CONSTRAINT "private_round_declined_by_participant_id_participant_id_fk" FOREIGN KEY ("declined_by_participant_id") REFERENCES "public"."participant"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "private_round" ADD CONSTRAINT "private_round_decline_audit_consistent" CHECK (("private_round"."status" = 'open' and "private_round"."declined_by_participant_id" is null and "private_round"."declined_at" is null) or ("private_round"."status" = 'declined' and "private_round"."declined_by_participant_id" is not null and "private_round"."declined_at" is not null));

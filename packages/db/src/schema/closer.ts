@@ -324,7 +324,7 @@ export const privateRound = pgTable(
     check("private_round_question_number_positive", sql`${table.questionNumber} > 0`),
     check(
       "private_round_retirement_audit_consistent",
-      sql`(${table.status} = 'open' and ${table.retiredByParticipantId} is null and ${table.retiredAt} is null) or (${table.status} in ('declined', 'retired') and ${table.retiredByParticipantId} is not null and ${table.retiredAt} is not null)`,
+      sql`(${table.status} = 'open' and ${table.retiredByParticipantId} is null and ${table.retiredAt} is null) or (${table.status} = 'retired' and ${table.retiredByParticipantId} is not null and ${table.retiredAt} is not null)`,
     ),
     uniqueIndex("private_round_idempotency_uidx")
       .on(table.pairId, table.initiatorParticipantId, table.clientRequestId)

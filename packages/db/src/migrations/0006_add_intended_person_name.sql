@@ -1,2 +1,0 @@
-ALTER TABLE "pair" ADD COLUMN "intended_person_name" text;--> statement-breakpoint
-ALTER TABLE "pair" ADD CONSTRAINT "pair_intended_person_name_valid" CHECK ("pair"."intended_person_name" is null or (char_length("pair"."intended_person_name") between 1 and 40 and "pair"."intended_person_name" = btrim("pair"."intended_person_name")));

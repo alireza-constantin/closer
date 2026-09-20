@@ -14,8 +14,8 @@ This glossary records the product language used across the PRD and architecture 
 - **Together Session**: one bounded use of Together with a start and an end.
 - **Private**: the independent-answer mode. Both pair slots must be actively connected because each participant answers on their own device.
 - **Private Conversation**: a persistent, resumable category-specific sequence in Private within one Pair membership era. It has no user-triggered finish or restart lifecycle in V1; it becomes read-only when its era ends, and leaving its UI does not end it.
-- **Conversation creator**: historical metadata for the Participant who first created a Private Conversation. It conveys no continuing selection or progression authority.
-- **Private question candidate**: one server-backed deterministic eligible question shared with both active members before either selects it.
+- **Conversation creator**: the Participant who first created a Private Conversation and who owns its unresolved candidate control. Creator authority ends at the candidate stage; it does not limit shared Private Round participation, answering, Reveal, Decline, or authorized history.
+- **Private question candidate**: one server-backed deterministic eligible question pinned for a Private Conversation's creator before a Private Round exists. The non-creator receives only a waiting projection and never receives unresolved candidate content.
 - **Private Round**: one numbered Shared Open Question in a Private Conversation. It is provisional before its first answer and committed thereafter.
 - **Private Answer**: one immutable answer submitted by a Participant for an Asked Private Round. Before both answers exist, each Participant may read only their own.
 - **Reveal View**: the persisted fact that one Participant explicitly opened a reveal-ready Private Round. Both Participants' Reveal Views are required for creator progression, but there is no global `REVEALED` state.
@@ -23,10 +23,10 @@ This glossary records the product language used across the PRD and architecture 
 - **Private reply**: one Participant's optional post-reveal reply in a Private Round.
 - **Mutually completed Private Round**: a Private Round for which both answers and both participants' Reveal views are persisted.
 - **Private Ask**: the creator's action that consumes the current candidate by turning it into the next numbered Private Round.
-- **Private Skip**: the creator's action that consumes the current candidate without creating a Private Round.
+- **Private Skip**: the creator's action that consumes the current candidate without creating a Private Round. It is a terminal candidate-stage action.
 - **Private Decline**: either participant's action, before submitting their own answer, that terminally passes an already-Asked Private Round without mutual reveal.
   _Avoid_: Private Skip, answer retraction
-- **Private question Like**: the creator's occurrence-specific, non-public content feedback on a candidate. It neither consumes the candidate nor creates a Private Round.
+- **Private question Like**: the creator's occurrence-specific, non-public content feedback on an unresolved candidate. It neither consumes the candidate nor creates a Private Round.
   _Avoid_: Together Like, Private reaction
 - **Consumed Private question**: a question that was asked as a round or skipped in one Private Conversation and therefore cannot be offered again in that conversation.
 - **Question**: the stable logical identity of one curated prompt across its revisions.

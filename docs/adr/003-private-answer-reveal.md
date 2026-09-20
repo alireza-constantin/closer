@@ -1,12 +1,41 @@
 # ADR 003: Shared Open Private Conversations with explicit reveal
 
-**Status:** Accepted — amended 2026-09-19
+**Status:** Accepted — amended 2026-09-20
+
+## 2026-09-20 Creator-owned candidate-control amendment
+
+This amendment supersedes only the **candidate-stage authority** portions of
+the 2026-09-19 Shared Open amendment below. The older amendment is retained as
+historical context; its shared Private Round, answer, Reveal, Decline,
+retirement, membership-era, and history rules remain in force unless this
+amendment explicitly replaces them.
+
+Each Private Conversation has an immutable creator. While an unresolved
+candidate exists, that creator alone may receive its wording and metadata,
+select it, Ask, Skip, Like, and begin the next candidate when progression is
+allowed. Candidate selection remains deterministic and persisted, but it is
+creator-owned rather than shared.
+
+The non-creator receives only a waiting projection while a candidate is
+unresolved. The server must not serialize candidate wording, question or
+revision identity, or candidate metadata to that participant through routes,
+Server Component props, client state, caches, polling, logs, or events.
+
+Ask atomically creates a Private Round with the exact pinned Revision. From
+that point, the established shared Private Round rules apply: both
+participants' answering, answer confidentiality, Reveal Views, Decline,
+retirement, and authorized history remain unchanged. This amendment changes no
+Round-stage authority or behavior.
+
+The earlier statements that either participant may select an unresolved
+candidate, that the candidate is visible to both, and that the UI never has a
+waiting-for-the-creator state are superseded.
+
+## Historical: 2026-09-19 Shared Open amendment
 
 > This amendment supersedes every creator-only, Ask/Skip/Like, Decline, and
 > creator-progression rule below. The retained historical discussion documents
 > why the old storage existed; it is not an active product rule.
-
-## 2026-09-19 Shared Open amendment
 
 Private Conversations remain one persistent `(Pair, membership era, category)`
 resource. `created_by_participant_id` is historical creation metadata only; it

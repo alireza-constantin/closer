@@ -47,6 +47,26 @@ describe("Private interaction performance boundaries", () => {
     expect(screen).not.toContain("router.refresh()");
   });
 
+  test("continues a completed Round in its existing category lane instead of reopening the picker", async () => {
+    const screen = await source("private-round-screen.tsx");
+    const continuation = await source("../hooks/use-continue-private-conversation.ts");
+
+    expect(screen).toContain("useContinuePrivateConversation");
+    expect(screen).toContain("round.canContinue");
+    expect(screen).toContain("Something else");
+    expect(screen).toContain("Leave it here");
+    expect(continuation).toContain(
+      "`/api/pairs/${encodeURIComponent(pairId)}/private-conversations`",
+    );
+    expect(continuation).toContain(
+      "body: JSON.stringify({ category, clientRequestId: crypto.randomUUID() })",
+    );
+    expect(continuation).toContain(
+      "router.push(`/pair/${pairId}/private/conversation/${conversationId}` as never)",
+    );
+    expect(continuation).not.toContain("router.refresh()");
+  });
+
   test("uses the authorized Reveal response and query recovery without fabricating answers", async () => {
     const screen = await source("private-round-screen.tsx");
     const revealRoute = await source(

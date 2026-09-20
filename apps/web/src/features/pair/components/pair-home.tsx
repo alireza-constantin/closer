@@ -73,6 +73,7 @@ type ActiveConversation = {
     | "REVEAL_READY"
     | "RETIRED"
     | "WAITING_FOR_REVEAL"
+    | "WAITING_FOR_CREATOR"
     | "READY_FOR_NEXT"
     | "CANDIDATE"
     | "EXHAUSTED";
@@ -97,6 +98,7 @@ function parseActiveConversations(value: unknown): ActiveConversation[] | null {
         "REVEAL_READY",
         "RETIRED",
         "WAITING_FOR_REVEAL",
+        "WAITING_FOR_CREATOR",
         "READY_FOR_NEXT",
         "CANDIDATE",
         "EXHAUSTED",
@@ -114,6 +116,8 @@ function statusCopy(conversation: ActiveConversation) {
   if (conversation.state === "REVEAL_READY") return "Answers are ready";
   if (conversation.state === "RETIRED") return "Leave it here";
   if (conversation.state === "WAITING_FOR_REVEAL") return "Answers are ready";
+  if (conversation.state === "WAITING_FOR_CREATOR")
+    return `Waiting for ${conversation.otherParticipantDisplayName}`;
   if (conversation.state === "READY_FOR_NEXT") return "Leave it here, or ask another";
   if (conversation.state === "CANDIDATE") return "Choose together";
   if (conversation.state === "EXHAUSTED") return "You've reached the end for now.";
@@ -130,6 +134,7 @@ const stateDotClasses: Record<ActiveConversation["state"], string> = {
   REVEAL_READY: "bg-closer-lavender",
   RETIRED: "bg-closer-muted",
   WAITING_FOR_REVEAL: "bg-closer-warning",
+  WAITING_FOR_CREATOR: "bg-closer-warning",
   READY_FOR_NEXT: "bg-closer-success",
   CANDIDATE: "bg-closer-coral",
   EXHAUSTED: "bg-closer-muted",

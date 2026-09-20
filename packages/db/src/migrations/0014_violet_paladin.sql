@@ -1,1 +1,0 @@
-ALTER TABLE "pair" ADD COLUMN "terminated_at" timestamp;

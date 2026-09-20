@@ -15,12 +15,14 @@ import { CloserBackLink } from "@/components/closer/navigation";
 import { CloserPageShell } from "@/components/closer/page-shell";
 import { ModeBadge } from "@/components/closer/mode-badge";
 import { closerKeys } from "@/lib/query/closer-query-keys";
+import { useContinuePrivateConversation } from "@/features/private-conversation/hooks/use-continue-private-conversation";
 
 type ConversationProjection = {
   id: string;
   pairId: string;
   category: string;
-  state: "CANDIDATE" | "CURRENT_ROUND" | "READY_FOR_NEXT" | "EXHAUSTED";
+  otherParticipantDisplayName: string;
+  state: "CANDIDATE" | "CURRENT_ROUND" | "READY_FOR_NEXT" | "WAITING_FOR_CREATOR" | "EXHAUSTED";
   message?: string;
   roundId?: string;
   candidate?: {
@@ -43,6 +45,11 @@ export default function PrivateConversationScreen({ view }: { view: Conversation
     NonNullable<ConversationProjection["candidate"]>["question"] | null
   >(null);
   const [error, setError] = useState<string | null>(null);
+  const { continueConversation, isContinuing } = useContinuePrivateConversation({
+    pairId: view.pairId,
+    conversationId: view.id,
+    category: view.category,
+  });
   useEffect(() => setConversation(view), [view]);
   const question = conversation.candidate?.question.text;
   const candidateBaseUrl = conversation.candidate
@@ -119,6 +126,12 @@ export default function PrivateConversationScreen({ view }: { view: Conversation
     }
   }
 
+  async function askAnother() {
+    setError(null);
+    if (!(await continueConversation()))
+      setError("We couldn’t continue this conversation. Please try again.");
+  }
+
   return (
     <CloserPageShell className="pt-5">
       <CloserBackLink href={`/pair/${conversation.pairId}`} />
@@ -177,23 +190,72 @@ export default function PrivateConversationScreen({ view }: { view: Conversation
         ) : conversation.state === "READY_FOR_NEXT" ? (
           <>
             <h1 className="mt-4 max-w-[18ch] text-[2.25rem] leading-tight font-extrabold tracking-[-.048em] text-balance">
-              Choose the next question
+              Ready for another?
             </h1>
             <p className="text-closer-muted mt-4 max-w-[32ch] leading-relaxed">
               You can continue once you&apos;re ready.
             </p>
+            <AsyncButton
+              className="mt-8"
+              onClick={() => void askAnother()}
+              pending={isContinuing}
+              pendingText="Finding the next one…"
+              size="lg"
+              type="button"
+            >
+              Ask another
+            </AsyncButton>
             <Link
-              className={cn(buttonVariants({ size: "lg" }), "mt-8")}
+              className={cn(buttonVariants({ size: "sm", variant: "ghost" }), "mt-3")}
               href={`/pair/${conversation.pairId}/private` as never}
               prefetch
             >
-              Choose next question
+              Something else
+            </Link>
+            <Link
+              className={cn(buttonVariants({ size: "sm", variant: "ghost" }), "mt-2")}
+              href={`/pair/${conversation.pairId}` as never}
+              prefetch
+            >
+              Leave it here
+            </Link>
+          </>
+        ) : conversation.state === "WAITING_FOR_CREATOR" ? (
+          <>
+            <h1 className="mt-4 max-w-[18ch] text-[2.25rem] leading-tight font-extrabold tracking-[-.048em] text-balance">
+              Waiting for {conversation.otherParticipantDisplayName}
+            </h1>
+            <p className="text-closer-muted mt-4 max-w-[32ch] leading-relaxed">
+              They&apos;ll choose the next question when they&apos;re ready.
+            </p>
+            <Link
+              className={cn(buttonVariants({ size: "sm", variant: "ghost" }), "mt-6")}
+              href={`/pair/${conversation.pairId}` as never}
+              prefetch
+            >
+              Leave it here
             </Link>
           </>
         ) : conversation.state === "EXHAUSTED" ? (
-          <h1 className="mt-4 max-w-[18ch] text-[2.25rem] leading-tight font-extrabold tracking-[-.048em] text-balance">
-            You&apos;ve reached the end for now.
-          </h1>
+          <>
+            <h1 className="mt-4 max-w-[18ch] text-[2.25rem] leading-tight font-extrabold tracking-[-.048em] text-balance">
+              You&apos;ve reached the end for now.
+            </h1>
+            <Link
+              className={cn(buttonVariants({ size: "sm", variant: "ghost" }), "mt-6")}
+              href={`/pair/${conversation.pairId}/private` as never}
+              prefetch
+            >
+              Something else
+            </Link>
+            <Link
+              className={cn(buttonVariants({ size: "sm", variant: "ghost" }), "mt-2")}
+              href={`/pair/${conversation.pairId}` as never}
+              prefetch
+            >
+              Leave it here
+            </Link>
+          </>
         ) : (
           <h1 className="mt-4 max-w-[18ch] text-[2.25rem] leading-tight font-extrabold tracking-[-.048em] text-balance">
             {conversation.message ?? "Choose a category whenever it feels right."}

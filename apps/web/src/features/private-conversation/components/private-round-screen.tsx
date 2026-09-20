@@ -23,6 +23,7 @@ import {
   CloserRoundHeader,
 } from "@/components/closer/page-shell";
 import { closerKeys } from "@/lib/query/closer-query-keys";
+import { useContinuePrivateConversation } from "@/features/private-conversation/hooks/use-continue-private-conversation";
 import {
   privateAnswerSchema,
   privateReplySchema,
@@ -48,6 +49,7 @@ type RoundView = {
   state: "YOUR_TURN" | "WAITING" | "REVEAL_READY" | "REVEAL_VIEWED" | "RETIRED";
   revealViewedAt: string | null;
   otherRevealViewed: boolean;
+  canContinue: boolean;
   answers?: Array<{ participantId: string; displayName: string; body: string }>;
   reactions?: Array<{ participantId: string; displayName: string; value: ReactionValue }>;
   replies?: Array<{ participantId: string; displayName: string; body: string; isOwner: boolean }>;
@@ -76,6 +78,11 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
   );
   const [error, setError] = useState<string | null>(null);
   const [retiredDraft, setRetiredDraft] = useState<string | null>(null);
+  const { continueConversation, isContinuing } = useContinuePrivateConversation({
+    pairId: initialRound.pairId,
+    conversationId: initialRound.conversation.id,
+    category: initialRound.conversation.category,
+  });
   const answerForm = useForm<PrivateAnswerValues>({
     defaultValues: { body: initialRound.yourAnswer ?? "" },
     mode: "onChange",
@@ -176,6 +183,12 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
     } finally {
       setIsPassing(false);
     }
+  }
+
+  async function askAnother() {
+    setError(null);
+    if (!(await continueConversation()))
+      setError("We couldn’t continue this conversation. Please try again.");
   }
 
   async function updateReaction(value: ReactionValue) {
@@ -592,24 +605,40 @@ export default function PrivateRoundScreen({ initialRound }: { initialRound: Rou
               <strong className="text-closer-navy">{item.displayName}</strong> {item.body}
             </p>
           ))}
-        {round.otherRevealViewed ? (
-          <Link
-            className={cn(buttonVariants({ size: "lg", variant: "secondary" }), "mt-2.5 w-full")}
-            href={`/pair/${round.pairId}/private` as never}
-            prefetch
-          >
-            Ask another
-          </Link>
+        {round.canContinue ? (
+          <>
+            <AsyncButton
+              className="mt-2.5 w-full"
+              onClick={() => void askAnother()}
+              pending={isContinuing}
+              pendingText="Finding the next one…"
+              size="lg"
+              type="button"
+              variant="secondary"
+            >
+              Ask another
+            </AsyncButton>
+            <Link
+              className={cn(
+                buttonVariants({ size: "sm", variant: "ghost" }),
+                "mx-auto mt-3 flex w-fit",
+              )}
+              href={`/pair/${round.pairId}/private` as never}
+              prefetch
+            >
+              Something else
+            </Link>
+          </>
         ) : null}
         <Link
           className={cn(
             buttonVariants({ size: "sm", variant: "ghost" }),
-            "mx-auto mt-2 flex w-fit",
+            "mx-auto mt-3 flex w-fit",
           )}
           href={`/pair/${round.pairId}` as never}
           prefetch
         >
-          Back to Closer
+          Leave it here
         </Link>
         {error ? <ActionError>{error}</ActionError> : null}
       </section>

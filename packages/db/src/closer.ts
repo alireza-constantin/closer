@@ -2218,6 +2218,29 @@ async function privateRoundIsUnresolved(database: Database, roundId: string) {
   return revealViews.length < 2;
 }
 
+async function activeUnresolvedPrivateRoundForPair(
+  database: Database,
+  pairId: string,
+  membershipEraId: string,
+) {
+  const rounds = await database
+    .select({ id: privateRound.id, conversationId: privateRound.conversationId })
+    .from(privateRound)
+    .innerJoin(privateConversation, eq(privateRound.conversationId, privateConversation.id))
+    .where(
+      and(
+        eq(privateRound.pairId, pairId),
+        eq(privateConversation.membershipEraId, membershipEraId),
+        eq(privateRound.status, "open"),
+      ),
+    )
+    .orderBy(desc(privateRound.createdAt));
+  for (const round of rounds) {
+    if (await privateRoundIsUnresolved(database, round.id)) return round;
+  }
+  return null;
+}
+
 function deterministicPrivateQuestionRank(seed: string, questionId: string) {
   return createHash("sha256").update(`${seed}:${questionId}`).digest("hex");
 }
@@ -2503,6 +2526,8 @@ async function projectPrivateConversationForParticipant(
     )
     .limit(1);
   if (unresolvedCandidate[0]) {
+    if (row.conversation.createdByParticipantId !== input.participantId)
+      return { ...base, state: "WAITING_FOR_CREATOR" as const };
     return {
       ...base,
       state: "CANDIDATE" as const,
@@ -2526,7 +2551,13 @@ async function projectPrivateConversationForParticipant(
   if (!eligible.some((candidate) => !usedIds.has(candidate.id))) {
     return { ...base, state: "EXHAUSTED" as const, message: "You've reached the end for now." };
   }
-  return { ...base, state: "READY_FOR_NEXT" as const };
+  return {
+    ...base,
+    state:
+      row.conversation.createdByParticipantId === input.participantId
+        ? ("READY_FOR_NEXT" as const)
+        : ("WAITING_FOR_CREATOR" as const),
+  };
 }
 
 export async function getPrivateConversationForParticipant(
@@ -2636,6 +2667,8 @@ export async function startOrResumePrivateConversation(
       await requireCompletePairAccess(tx, input.participantId, input.pairId);
       const activeEra = await getActiveMembershipEra(tx, input.pairId);
       if (!activeEra) throw new CloserDomainError("PAIR_NOT_READY");
+      const activeRound = await activeUnresolvedPrivateRoundForPair(tx, input.pairId, activeEra.id);
+      if (activeRound) return { conversationId: activeRound.conversationId };
       const conversation = await lockPairAndFindConversation(tx, {
         pairId: input.pairId,
         category,
@@ -2643,7 +2676,10 @@ export async function startOrResumePrivateConversation(
         membershipEraId: activeEra.id,
       });
       const currentRound = await latestRoundForConversation(tx, conversation.id);
-      if (!currentRound || !(await privateRoundIsUnresolved(tx, currentRound.id)))
+      if (
+        conversation.createdByParticipantId === input.participantId &&
+        (!currentRound || !(await privateRoundIsUnresolved(tx, currentRound.id)))
+      )
         await selectPrivateQuestionCandidate(tx, conversation, access.pair.relationshipType);
       return { conversationId: conversation.id };
     })
@@ -2699,7 +2735,9 @@ async function loadMutableCreatorCandidateInTransaction(
     .limit(1);
   const candidate = candidates[0];
   if (!candidate) throw new CloserDomainError("QUESTION_UNAVAILABLE");
-  return { access, conversation, candidate };
+  if (conversation.createdByParticipantId !== input.participantId)
+    throw new CloserDomainError("QUESTION_UNAVAILABLE");
+  return { access, activeEra, conversation, candidate };
 }
 
 async function nextPrivateRoundNumber(database: Database, conversationId: string) {
@@ -2710,13 +2748,6 @@ async function nextPrivateRoundNumber(database: Database, conversationId: string
     .orderBy(desc(privateRound.questionNumber))
     .limit(1);
   return (latest[0]?.questionNumber ?? 0) + 1;
-}
-
-async function assertNoCurrentPrivateRound(database: Database, conversationId: string) {
-  const currentRound = await latestRoundForConversation(database, conversationId);
-  if (currentRound && (await privateRoundIsUnresolved(database, currentRound.id))) {
-    throw new CloserDomainError("QUESTION_UNAVAILABLE");
-  }
 }
 
 async function activeProvisionalRoundForInitiator(
@@ -2753,7 +2784,10 @@ export async function selectSharedOpenPrivateCandidate(
     throw new CloserDomainError("QUESTION_UNAVAILABLE");
   return database.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
-    const { conversation, candidate } = await loadMutableCreatorCandidateInTransaction(tx, input);
+    const { activeEra, conversation, candidate } = await loadMutableCreatorCandidateInTransaction(
+      tx,
+      input,
+    );
     if (candidate.candidate.state === "asked") {
       const rounds = await tx
         .select({ id: privateRound.id })
@@ -2771,7 +2805,8 @@ export async function selectSharedOpenPrivateCandidate(
     }
     if (candidate.candidate.state !== "unresolved")
       throw new CloserDomainError("QUESTION_UNAVAILABLE");
-    await assertNoCurrentPrivateRound(tx, conversation.id);
+    if (await activeUnresolvedPrivateRoundForPair(tx, input.pairId, activeEra.id))
+      throw new CloserDomainError("QUESTION_UNAVAILABLE");
     const activeProvisional = await activeProvisionalRoundForInitiator(
       tx,
       input.pairId,
@@ -2887,6 +2922,11 @@ export async function getPrivateRoundForParticipant(
     state: viewerRoundState(answers.length, viewerAnswer !== null, revealViewedAt, isRetired),
     revealViewedAt: revealViewedAt?.toISOString() ?? null,
     otherRevealViewed,
+    canContinue:
+      context.conversation.createdByParticipantId === input.participantId &&
+      isRevealReady &&
+      revealViewedAt !== null &&
+      otherRevealViewed,
   } as {
     id: string;
     pairId: string;
@@ -2908,6 +2948,7 @@ export async function getPrivateRoundForParticipant(
     state: "YOUR_TURN" | "WAITING" | "REVEAL_READY" | "REVEAL_VIEWED" | "RETIRED";
     revealViewedAt: string | null;
     otherRevealViewed: boolean;
+    canContinue: boolean;
     answers?: Array<{ participantId: string; displayName: string; body: string }>;
     reactions?: Array<{ participantId: string; displayName: string; value: ReactionValue }>;
     replies?: Array<{ participantId: string; displayName: string; body: string; isOwner: boolean }>;

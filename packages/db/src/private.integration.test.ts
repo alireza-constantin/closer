@@ -175,10 +175,13 @@ async function createRound(
   return { id: inserted[0].id, conversationId: conversation.id };
 }
 
-async function createPrivateTestQuestion(intensity: "light" | "medium" | "deep") {
+async function createPrivateTestQuestion(
+  intensity: "light" | "medium" | "deep",
+  category: "deep" | "fun" = "deep",
+) {
   const created = await createQuestion(db, {
-    text: `Ticket 09 ${intensity} candidate ${randomUUID()}`,
-    category: "deep",
+    text: `Ticket 09 ${category} ${intensity} candidate ${randomUUID()}`,
+    category,
     relationshipFit: "both",
     modeFit: "private",
     intensity,
@@ -795,6 +798,175 @@ describe("Closer Slice 01B Private rounds", () => {
     )[0];
     expect(firstSummary?.state).toBe("READY_FOR_NEXT");
     expect(secondSummary?.state).toBe("WAITING_FOR_CREATOR");
+  });
+
+  test("the creator continues the completed Conversation in its lane without exposing its next candidate", async () => {
+    await Promise.all([createPrivateTestQuestion("light"), createPrivateTestQuestion("medium")]);
+    const { pairId, first, second } = await createJoinedPair();
+    const started = await startOrResumePrivateConversation(db, {
+      pairId,
+      participantId: first.id,
+      category: "deep",
+      clientRequestId: randomUUID(),
+    });
+    if (started.state !== "CANDIDATE") throw new Error("Expected the first Deep candidate.");
+    const firstAsked = await askPrivateQuestionCandidate(db, {
+      pairId,
+      participantId: first.id,
+      conversationId: started.id,
+      candidateId: started.candidate.id,
+      clientRequestId: randomUUID(),
+    });
+    await submitPrivateAnswer(db, {
+      pairId,
+      participantId: first.id,
+      roundId: firstAsked.roundId,
+      body: "Ali's first answer",
+    });
+    await submitPrivateAnswer(db, {
+      pairId,
+      participantId: second.id,
+      roundId: firstAsked.roundId,
+      body: "Fafa's first answer",
+    });
+    await markPrivateRevealViewed(db, {
+      pairId,
+      participantId: first.id,
+      roundId: firstAsked.roundId,
+    });
+
+    const blockedBeforeMutualReveal = await startOrResumePrivateConversation(db, {
+      pairId,
+      participantId: first.id,
+      category: "deep",
+      clientRequestId: randomUUID(),
+    });
+    expect(blockedBeforeMutualReveal).toMatchObject({
+      id: started.id,
+      state: "CURRENT_ROUND",
+      roundId: firstAsked.roundId,
+    });
+
+    await markPrivateRevealViewed(db, {
+      pairId,
+      participantId: second.id,
+      roundId: firstAsked.roundId,
+    });
+    const next = await startOrResumePrivateConversation(db, {
+      pairId,
+      participantId: first.id,
+      category: "deep",
+      clientRequestId: randomUUID(),
+    });
+    if (next.state !== "CANDIDATE") throw new Error("Expected the next Deep candidate.");
+    expect(next).toMatchObject({ id: started.id, category: "deep" });
+
+    const waitingForCreator = await getPrivateConversationForParticipant(db, {
+      pairId,
+      participantId: second.id,
+      conversationId: started.id,
+    });
+    expect(waitingForCreator).toMatchObject({
+      id: started.id,
+      category: "deep",
+      state: "WAITING_FOR_CREATOR",
+    });
+    expect("candidate" in waitingForCreator).toBe(false);
+    expect(
+      await capture(
+        askPrivateQuestionCandidate(db, {
+          pairId,
+          participantId: second.id,
+          conversationId: started.id,
+          candidateId: next.candidate.id,
+          clientRequestId: randomUUID(),
+        }),
+      ),
+    ).toMatchObject({ code: "QUESTION_UNAVAILABLE" });
+
+    const secondAsked = await askPrivateQuestionCandidate(db, {
+      pairId,
+      participantId: first.id,
+      conversationId: next.id,
+      candidateId: next.candidate.id,
+      clientRequestId: randomUUID(),
+    });
+    const rounds = await db
+      .select({
+        conversationId: privateRound.conversationId,
+        questionNumber: privateRound.questionNumber,
+      })
+      .from(privateRound)
+      .where(eq(privateRound.conversationId, started.id))
+      .orderBy(privateRound.questionNumber);
+    expect(secondAsked.conversationId).toBe(started.id);
+    expect(rounds).toEqual([
+      { conversationId: started.id, questionNumber: 1 },
+      { conversationId: started.id, questionNumber: 2 },
+    ]);
+    expect(
+      (
+        await db
+          .select({ createdByParticipantId: privateConversation.createdByParticipantId })
+          .from(privateConversation)
+          .where(eq(privateConversation.id, started.id))
+          .limit(1)
+      )[0]?.createdByParticipantId,
+    ).toBe(first.id);
+  });
+
+  test("a completed lane changes only through a new explicit category selection", async () => {
+    await Promise.all([
+      createPrivateTestQuestion("light"),
+      createPrivateTestQuestion("medium"),
+      createPrivateTestQuestion("light", "fun"),
+    ]);
+    const { pairId, first, second } = await createJoinedPair();
+    const deep = await startOrResumePrivateConversation(db, {
+      pairId,
+      participantId: first.id,
+      category: "deep",
+      clientRequestId: randomUUID(),
+    });
+    if (deep.state !== "CANDIDATE") throw new Error("Expected the Deep candidate.");
+    const asked = await askPrivateQuestionCandidate(db, {
+      pairId,
+      participantId: first.id,
+      conversationId: deep.id,
+      candidateId: deep.candidate.id,
+      clientRequestId: randomUUID(),
+    });
+    await submitPrivateAnswer(db, {
+      pairId,
+      participantId: first.id,
+      roundId: asked.roundId,
+      body: "Ali's answer",
+    });
+    await submitPrivateAnswer(db, {
+      pairId,
+      participantId: second.id,
+      roundId: asked.roundId,
+      body: "Fafa's answer",
+    });
+    await markPrivateRevealViewed(db, { pairId, participantId: first.id, roundId: asked.roundId });
+    await markPrivateRevealViewed(db, { pairId, participantId: second.id, roundId: asked.roundId });
+
+    const fun = await startOrResumePrivateConversation(db, {
+      pairId,
+      participantId: first.id,
+      category: "fun",
+      clientRequestId: randomUUID(),
+    });
+    if (fun.state !== "CANDIDATE") throw new Error("Expected the Fun candidate.");
+    expect(fun).toMatchObject({ category: "fun" });
+    expect(fun.id).not.toBe(deep.id);
+    expect(
+      await getPrivateConversationForParticipant(db, {
+        pairId,
+        participantId: first.id,
+        conversationId: deep.id,
+      }),
+    ).toMatchObject({ id: deep.id, category: "deep", state: "READY_FOR_NEXT" });
   });
 
   test("a participant outside the pair cannot read or operate on its round", async () => {
