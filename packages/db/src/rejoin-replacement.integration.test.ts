@@ -11,6 +11,7 @@ const {
   CloserDomainError,
   advanceTogetherSession,
   selectSharedOpenPrivateCandidate: askPrivateQuestionCandidate,
+  createQuestion,
   createQuestionRevision,
   createPairForParticipant,
   retireSharedOpenPrivateRound: declinePrivateRound,
@@ -33,6 +34,7 @@ const {
   setPrivateReply,
   skipPrivateQuestionCandidate,
   submitPrivateAnswer,
+  terminatePair,
 } = await import("./closer");
 const {
   pair,
@@ -42,6 +44,7 @@ const {
   privateConversation,
   privateQuestionCandidate,
   privateRound,
+  question,
   questionRevision,
   togetherSession,
   togetherSessionQuestion,
@@ -52,6 +55,22 @@ const { user } = await import("./schema/auth");
 const db = createDb();
 const userIds: string[] = [];
 const pairIds: string[] = [];
+const testQuestionIds: string[] = [];
+
+async function createTestQuestion(
+  category: "deep" | "fun" | "memories" | "relationship",
+  modeFit: "both" | "private" | "together" = "private",
+) {
+  const created = await createQuestion(db, {
+    text: `Rejoin regression ${category} ${randomUUID()}`,
+    category,
+    relationshipFit: category === "relationship" ? "partner" : "both",
+    modeFit,
+    intensity: "light",
+  });
+  testQuestionIds.push(created.question.id);
+  return created;
+}
 
 async function createGuestAuthUser(displayName: string) {
   const id = randomUUID();
@@ -138,8 +157,17 @@ afterEach(async () => {
     await db.delete(participant).where(inArray(participant.authUserId, userIds));
     await db.delete(user).where(inArray(user.id, userIds));
   }
+  if (testQuestionIds.length) {
+    await db
+      .update(question)
+      .set({ currentRevisionId: null })
+      .where(inArray(question.id, testQuestionIds));
+    await db.delete(questionRevision).where(inArray(questionRevision.questionId, testQuestionIds));
+    await db.delete(question).where(inArray(question.id, testQuestionIds));
+  }
   pairIds.length = 0;
   userIds.length = 0;
+  testQuestionIds.length = 0;
 });
 
 afterAll(async () => {
@@ -419,19 +447,34 @@ test("replacement serializes concurrent redemption and Pair-scoped Together and 
 });
 
 test("former-era history is participant-relative, revision-pinned, and immutable", async () => {
+  await Promise.all([
+    createTestQuestion("deep", "both"),
+    createTestQuestion("fun"),
+    createTestQuestion("fun"),
+    createTestQuestion("memories"),
+    createTestQuestion("relationship"),
+  ]);
   const { pairId, continuing, former } = await createJoinedPair();
-  const mutualWithoutReveal = await createLegacyPrivateRound(pairId, continuing.id);
+  const mutualPair = await createJoinedPair();
+  const mutualWithoutReveal = await createLegacyPrivateRound(
+    mutualPair.pairId,
+    mutualPair.continuing.id,
+  );
   await submitPrivateAnswer(db, {
-    pairId,
-    participantId: continuing.id,
+    pairId: mutualPair.pairId,
+    participantId: mutualPair.continuing.id,
     roundId: mutualWithoutReveal.roundId,
     body: "Continuing's unseen answer.",
   });
   await submitPrivateAnswer(db, {
-    pairId,
-    participantId: former.id,
+    pairId: mutualPair.pairId,
+    participantId: mutualPair.former.id,
     roundId: mutualWithoutReveal.roundId,
     body: "Former's unseen answer.",
+  });
+  await terminatePair(db, {
+    pairId: mutualPair.pairId,
+    participantId: mutualPair.continuing.id,
   });
 
   const revealedRound = await createLegacyPrivateRound(pairId, continuing.id, "fun");
@@ -484,6 +527,11 @@ test("former-era history is participant-relative, revision-pinned, and immutable
     participantId: former.id,
     roundId: loneAnswer.roundId,
     body: "Only Former may read this.",
+  });
+  await declinePrivateRound(db, {
+    pairId,
+    participantId: continuing.id,
+    roundId: loneAnswer.roundId,
   });
   const declinedRound = await createLegacyPrivateRound(pairId, continuing.id, "relationship");
   await submitPrivateAnswer(db, {
@@ -571,16 +619,32 @@ test("former-era history is participant-relative, revision-pinned, and immutable
     pairId,
     participantId: replacement.id,
   });
+  const mutualContinuingHistory = await getFormerEraHistoryForParticipant(db, {
+    pairId: mutualPair.pairId,
+    participantId: mutualPair.continuing.id,
+  });
+  const mutualFormerHistory = await getFormerEraHistoryForParticipant(db, {
+    pairId: mutualPair.pairId,
+    participantId: mutualPair.former.id,
+  });
   const continuingRounds = continuingHistory.eras[0]!.privateConversations.flatMap(
     (conversation) => conversation.rounds,
   );
   const formerRounds = formerHistory.eras[0]!.privateConversations.flatMap(
     (conversation) => conversation.rounds,
   );
-  const continuingMutual = continuingRounds.find(
+  const mutualContinuingRounds = mutualContinuingHistory.eras[0]!.privateConversations.flatMap(
+    (conversation) => conversation.rounds,
+  );
+  const mutualFormerRounds = mutualFormerHistory.eras[0]!.privateConversations.flatMap(
+    (conversation) => conversation.rounds,
+  );
+  const continuingMutual = mutualContinuingRounds.find(
     (round) => round.id === mutualWithoutReveal.roundId,
   )!;
-  const formerMutual = formerRounds.find((round) => round.id === mutualWithoutReveal.roundId)!;
+  const formerMutual = mutualFormerRounds.find(
+    (round) => round.id === mutualWithoutReveal.roundId,
+  )!;
   const continuingLone = continuingRounds.find((round) => round.id === loneAnswer.roundId)!;
   const formerLone = formerRounds.find((round) => round.id === loneAnswer.roundId)!;
   const continuingDeclined = continuingRounds.find((round) => round.id === declinedRound.roundId)!;
@@ -594,7 +658,8 @@ test("former-era history is participant-relative, revision-pinned, and immutable
   ]);
   expect(formerMutual.answers).toHaveLength(2);
   expect(
-    continuingMutual.answers.find((answer) => answer.participantId === former.id)?.displayName,
+    continuingMutual.answers.find((answer) => answer.participantId === mutualPair.former.id)
+      ?.displayName,
   ).toBe("Former name");
   expect(continuingLone.answers).toEqual([]);
   expect(formerLone.answers.map((answer) => answer.body)).toEqual(["Only Former may read this."]);
@@ -618,6 +683,7 @@ test("former-era history is participant-relative, revision-pinned, and immutable
         participantId: continuing.id,
         conversationId: oldCandidate.id,
         candidateId: oldCandidate.candidate.id,
+        clientRequestId: randomUUID(),
       }),
     ),
   ).toBeInstanceOf(CloserDomainError);
@@ -645,8 +711,8 @@ test("former-era history is participant-relative, revision-pinned, and immutable
   expect(
     await capture(
       submitPrivateAnswer(db, {
-        pairId,
-        participantId: continuing.id,
+        pairId: mutualPair.pairId,
+        participantId: mutualPair.continuing.id,
         roundId: mutualWithoutReveal.roundId,
         body: "A late answer.",
       }),

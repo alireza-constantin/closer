@@ -751,14 +751,12 @@ test("termination races retain only already-committed Together and candidate act
     liked: true,
   });
   await terminatePair(db, { pairId: likeFirst.pairId, participantId: likeFirst.first.id });
-  expect(
-    (
-      await db
-        .select()
-        .from(privateQuestionCandidate)
-        .where(eq(privateQuestionCandidate.id, liked.candidate.id))
-    )[0],
-  ).toMatchObject({ liked: true, state: "invalidated" });
+  const [invalidatedLikedCandidate] = await db
+    .select()
+    .from(privateQuestionCandidate)
+    .where(eq(privateQuestionCandidate.id, liked.candidate.id));
+  expect(invalidatedLikedCandidate).toMatchObject({ state: "invalidated" });
+  expect(invalidatedLikedCandidate?.likedAt).not.toBeNull();
 
   const skipRace = await createJoinedPair();
   const skipCandidate = await startOrResumePrivateConversation(db, {
@@ -818,14 +816,12 @@ test("termination races retain only already-committed Together and candidate act
     terminatePair(db, { pairId: likeRace.pairId, participantId: likeRace.first.id }),
   ]);
   expect(likeTermination.status).toBe("fulfilled");
-  expect(
-    (
-      await db
-        .select()
-        .from(privateQuestionCandidate)
-        .where(eq(privateQuestionCandidate.id, likeCandidate.candidate.id))
-    )[0],
-  ).toMatchObject({ liked: like.status === "fulfilled", state: "invalidated" });
+  const [likeRaceCandidate] = await db
+    .select()
+    .from(privateQuestionCandidate)
+    .where(eq(privateQuestionCandidate.id, likeCandidate.candidate.id));
+  expect(likeRaceCandidate).toMatchObject({ state: "invalidated" });
+  expect(likeRaceCandidate?.likedAt !== null).toBe(like.status === "fulfilled");
 
   const togetherFirst = await createJoinedPair();
   const advancedSession = await startTogetherSession(db, {

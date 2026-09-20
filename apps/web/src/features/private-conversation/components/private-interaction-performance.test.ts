@@ -12,6 +12,7 @@ describe("Private interaction performance boundaries", () => {
     const screen = await source("private-conversation-screen.tsx");
 
     expect(screen).toContain("question: { id: string; questionRevisionId: string; text: string }");
+    expect(screen).toContain("liked: boolean");
     expect(screen).toContain("setOptimisticAskQuestion(candidate.question)");
     expect(screen).toContain("Your answer");
     expect(screen).toContain("setOptimisticAskQuestion(null)");
@@ -29,13 +30,15 @@ describe("Private interaction performance boundaries", () => {
     expect(screen).not.toContain("router.refresh()");
   });
 
-  test("does not retain obsolete Like or Skip client protocol", async () => {
+  test("uses creator-authorized Like and idempotent Skip candidate commands", async () => {
     const screen = await source("private-conversation-screen.tsx");
 
-    expect(screen).not.toContain("likeQuestion");
-    expect(screen).not.toContain("skipQuestion");
-    expect(screen).not.toContain("/like");
-    expect(screen).not.toContain("/skip");
+    expect(screen).toContain("async function toggleLike()");
+    expect(screen).toContain("fetch(`${candidateBaseUrl}/like`");
+    expect(screen).toContain("async function skipQuestion()");
+    expect(screen).toContain("fetch(`${candidateBaseUrl}/skip`");
+    expect(screen).toContain("body: JSON.stringify({ clientRequestId: crypto.randomUUID() })");
+    expect(screen).toContain("await reconcileConversation()");
   });
 
   test("uses only safe local Private states while answer and Pass persist", async () => {

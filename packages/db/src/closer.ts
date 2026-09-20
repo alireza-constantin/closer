@@ -2246,13 +2246,24 @@ function deterministicPrivateQuestionRank(seed: string, questionId: string) {
 }
 
 async function consumedPrivateQuestionIds(database: Database, conversationId: string) {
-  const asked = await database
-    .select({ questionId: privateRound.questionId })
-    .from(privateRound)
-    .where(
-      and(eq(privateRound.conversationId, conversationId), isNotNull(privateRound.committedAt)),
-    );
-  return new Set(asked.map((item) => item.questionId));
+  const [candidates, committedLegacyRounds] = await Promise.all([
+    database
+      .select({ questionId: privateQuestionCandidate.questionId })
+      .from(privateQuestionCandidate)
+      .where(
+        and(
+          eq(privateQuestionCandidate.conversationId, conversationId),
+          inArray(privateQuestionCandidate.state, ["asked", "skipped"]),
+        ),
+      ),
+    database
+      .select({ questionId: privateRound.questionId })
+      .from(privateRound)
+      .where(
+        and(eq(privateRound.conversationId, conversationId), isNotNull(privateRound.committedAt)),
+      ),
+  ]);
+  return new Set([...candidates, ...committedLegacyRounds].map((item) => item.questionId));
 }
 
 async function mutuallyCompletedPrivateRoundCount(database: Database, conversationId: string) {
@@ -2533,6 +2544,7 @@ async function projectPrivateConversationForParticipant(
       state: "CANDIDATE" as const,
       candidate: {
         id: unresolvedCandidate[0].candidate.id,
+        liked: unresolvedCandidate[0].candidate.likedAt !== null,
         question: {
           id: unresolvedCandidate[0].candidate.questionId,
           questionRevisionId: unresolvedCandidate[0].candidate.questionRevisionId,
@@ -2852,6 +2864,165 @@ export async function selectSharedOpenPrivateCandidate(
       })
       .where(and(eq(privateRound.id, round.id), isNull(privateRound.committedAt)));
     return { conversationId: conversation.id, roundId: round.id };
+  });
+}
+
+async function privateSkipResult(
+  database: Database,
+  input: { conversationId: string; skippedCandidateId: string },
+) {
+  const conversation = {
+    id: input.conversationId,
+    conversationId: input.conversationId,
+  };
+  const skipped = await database
+    .select({ skipResultCandidateId: privateQuestionCandidate.skipResultCandidateId })
+    .from(privateQuestionCandidate)
+    .where(
+      and(
+        eq(privateQuestionCandidate.id, input.skippedCandidateId),
+        eq(privateQuestionCandidate.conversationId, input.conversationId),
+        eq(privateQuestionCandidate.state, "skipped"),
+      ),
+    )
+    .limit(1);
+  if (!skipped[0]) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+  if (!skipped[0].skipResultCandidateId)
+    return {
+      ...conversation,
+      state: "EXHAUSTED" as const,
+      message: "You've reached the end for now.",
+    };
+
+  const replacement = await database
+    .select({ candidate: privateQuestionCandidate, revision: questionRevision })
+    .from(privateQuestionCandidate)
+    .innerJoin(
+      questionRevision,
+      eq(privateQuestionCandidate.questionRevisionId, questionRevision.id),
+    )
+    .where(
+      and(
+        eq(privateQuestionCandidate.id, skipped[0].skipResultCandidateId),
+        eq(privateQuestionCandidate.conversationId, input.conversationId),
+      ),
+    )
+    .limit(1);
+  if (!replacement[0]) throw new Error("Skipped candidate result did not resolve.");
+  return {
+    ...conversation,
+    state: "CANDIDATE" as const,
+    candidate: {
+      id: replacement[0].candidate.id,
+      liked: replacement[0].candidate.likedAt !== null,
+      question: {
+        id: replacement[0].candidate.questionId,
+        questionRevisionId: replacement[0].candidate.questionRevisionId,
+        text: replacement[0].revision.text,
+        category: replacement[0].revision.category,
+        intensity: replacement[0].revision.intensity,
+      },
+    },
+  };
+}
+
+export async function skipPrivateQuestionCandidate(
+  database: Database,
+  input: {
+    participantId: string;
+    pairId: string;
+    conversationId: string;
+    candidateId: string;
+    clientRequestId: string;
+  },
+) {
+  if (!isUuid(input.clientRequestId)) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+  const result = await database.transaction(async (transaction) => {
+    const tx = transaction as unknown as Database;
+    const { access, conversation, candidate } = await loadMutableCreatorCandidateInTransaction(
+      tx,
+      input,
+    );
+    const retried = await tx
+      .select({ id: privateQuestionCandidate.id })
+      .from(privateQuestionCandidate)
+      .where(
+        and(
+          eq(privateQuestionCandidate.conversationId, conversation.id),
+          eq(privateQuestionCandidate.skipRequestId, input.clientRequestId),
+        ),
+      )
+      .limit(1);
+    if (retried[0]) return { conversationId: conversation.id, skippedCandidateId: retried[0].id };
+    if (candidate.candidate.state !== "unresolved")
+      throw new CloserDomainError("QUESTION_UNAVAILABLE");
+    if (candidate.revision.withdrawnAt) {
+      await tx
+        .update(privateQuestionCandidate)
+        .set({ state: "invalidated", resolvedAt: new Date() })
+        .where(
+          and(
+            eq(privateQuestionCandidate.id, candidate.candidate.id),
+            eq(privateQuestionCandidate.state, "unresolved"),
+          ),
+        );
+      throw new CloserDomainError("QUESTION_UNAVAILABLE");
+    }
+
+    const resolvedAt = new Date();
+    const skipped = await tx
+      .update(privateQuestionCandidate)
+      .set({ state: "skipped", resolvedAt, skipRequestId: input.clientRequestId })
+      .where(
+        and(
+          eq(privateQuestionCandidate.id, candidate.candidate.id),
+          eq(privateQuestionCandidate.state, "unresolved"),
+        ),
+      )
+      .returning({ id: privateQuestionCandidate.id });
+    if (!skipped[0]) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+
+    const replacement = await selectPrivateQuestionCandidate(
+      tx,
+      conversation,
+      access.pair.relationshipType,
+    );
+    await tx
+      .update(privateQuestionCandidate)
+      .set({ skipResultCandidateId: replacement?.candidate.id ?? null })
+      .where(eq(privateQuestionCandidate.id, skipped[0].id));
+    return { conversationId: conversation.id, skippedCandidateId: skipped[0].id };
+  });
+  return privateSkipResult(database, result);
+}
+
+export async function setPrivateQuestionCandidateLike(
+  database: Database,
+  input: {
+    participantId: string;
+    pairId: string;
+    conversationId: string;
+    candidateId: string;
+    liked: boolean;
+  },
+) {
+  return database.transaction(async (transaction) => {
+    const tx = transaction as unknown as Database;
+    const { candidate } = await loadMutableCreatorCandidateInTransaction(tx, input);
+    if (candidate.candidate.state !== "unresolved")
+      throw new CloserDomainError("QUESTION_UNAVAILABLE");
+    const updated = await tx
+      .update(privateQuestionCandidate)
+      .set({ likedAt: input.liked ? new Date() : null })
+      .where(
+        and(
+          eq(privateQuestionCandidate.id, candidate.candidate.id),
+          eq(privateQuestionCandidate.state, "unresolved"),
+        ),
+      )
+      .returning({ likedAt: privateQuestionCandidate.likedAt });
+    if (!updated[0]) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+    return { liked: updated[0].likedAt !== null };
   });
 }
 
@@ -3341,7 +3512,7 @@ export async function getFormerEraHistoryForParticipant(
             id: round.id,
             questionNumber: round.questionNumber,
             question: { text: round.text, category: round.category },
-            status: round.status === "retired" ? ("retired" as const) : ("answered" as const),
+            status: round.status === "retired" ? ("passed" as const) : ("answered" as const),
             answers: visibleAnswers.map((answer) => ({
               participantId: answer.participantId,
               displayName: memberNames.get(answer.participantId) ?? "Participant",
@@ -3462,10 +3633,13 @@ export async function retireSharedOpenPrivateRound(
       .select({ participantId: privateAnswer.participantId })
       .from(privateAnswer)
       .where(eq(privateAnswer.roundId, input.roundId));
-    // Retirement is deliberately available to either person only while exactly
-    // one confidential answer exists.  No answer is a disposable provisional;
-    // two answers require explicit Reveal instead.
-    if (answers.length !== 1) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+    // Either person may pass an unanswered Round. Once one answer exists, only
+    // the unanswered person may pass it. Two answers require explicit Reveal.
+    if (
+      answers.length > 1 ||
+      answers.some((answer) => answer.participantId === input.participantId)
+    )
+      throw new CloserDomainError("QUESTION_UNAVAILABLE");
 
     const retired = await tx
       .update(privateRound)

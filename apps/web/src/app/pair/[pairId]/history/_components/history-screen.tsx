@@ -81,8 +81,8 @@ function PrivateConversationHistory({
               Question {round.questionNumber}
             </p>
             <p className="mt-2 leading-snug font-extrabold">{round.question.text}</p>
-            {round.status === "retired" ? (
-              <p className="text-closer-muted mt-3 text-sm font-bold">Let this one go</p>
+            {round.status === "passed" ? (
+              <p className="text-closer-muted mt-3 text-sm font-bold">Question passed</p>
             ) : null}
             {round.answers.length > 0 ? (
               <div className="mt-4 grid gap-2.5">

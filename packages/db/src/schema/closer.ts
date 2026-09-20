@@ -42,6 +42,7 @@ export const privateReactionValue = pgEnum("private_reaction_value", [
 export const privateQuestionCandidateState = pgEnum("private_question_candidate_state", [
   "unresolved",
   "asked",
+  "skipped",
   "invalidated",
 ]);
 export const privateRoundStatus = pgEnum("private_round_status", ["open", "retired"]);
@@ -260,6 +261,9 @@ export const privateQuestionCandidate = pgTable(
     state: privateQuestionCandidateState("state").notNull().default("unresolved"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     resolvedAt: timestamp("resolved_at"),
+    likedAt: timestamp("liked_at"),
+    skipRequestId: uuid("skip_request_id"),
+    skipResultCandidateId: uuid("skip_result_candidate_id"),
   },
   (table) => [
     foreignKey({
@@ -270,6 +274,9 @@ export const privateQuestionCandidate = pgTable(
     uniqueIndex("private_candidate_one_unresolved_uidx")
       .on(table.conversationId)
       .where(sql`${table.state} = 'unresolved'`),
+    uniqueIndex("private_candidate_skip_request_uidx")
+      .on(table.conversationId, table.skipRequestId)
+      .where(sql`${table.skipRequestId} is not null`),
     index("private_candidate_conversation_created_idx").on(table.conversationId, table.createdAt),
   ],
 );

@@ -10,6 +10,8 @@ const { createDb } = await import("./index");
 const {
   CloserDomainError,
   selectSharedOpenPrivateCandidate: askPrivateQuestionCandidate,
+  setPrivateQuestionCandidateLike,
+  skipPrivateQuestionCandidate,
   retireSharedOpenPrivateRound: declinePrivateRound,
   createQuestion,
   createPairForParticipant,
@@ -1012,6 +1014,7 @@ describe("Closer Slice 01B Private rounds", () => {
   });
 
   test("category start persists one creator-owned candidate and concurrent starters converge", async () => {
+    await createPrivateTestQuestion("light");
     const { pairId, first, second } = await createJoinedPair();
     const [firstStart, secondStart] = await Promise.all([
       startOrResumePrivateConversation(db, {
@@ -1028,15 +1031,16 @@ describe("Closer Slice 01B Private rounds", () => {
       }),
     ]);
     expect(firstStart.id).toBe(secondStart.id);
-    const creator = firstStart.role === "creator" ? firstStart : secondStart;
-    const nonCreator = firstStart.role === "non-creator" ? firstStart : secondStart;
+    const creatorParticipantId = firstStart.state === "CANDIDATE" ? first.id : second.id;
+    const creator = firstStart.state === "CANDIDATE" ? firstStart : secondStart;
+    const nonCreator = firstStart.state === "WAITING_FOR_CREATOR" ? firstStart : secondStart;
     expect(creator.state).toBe("CANDIDATE");
     expect(nonCreator.state).toBe("WAITING_FOR_CREATOR");
     expect(JSON.stringify(nonCreator)).not.toContain("candidate");
     if (creator.state !== "CANDIDATE") throw new Error("Expected candidate projection.");
     const retry = await startOrResumePrivateConversation(db, {
       pairId,
-      participantId: creator.creator.participantId,
+      participantId: creatorParticipantId,
       category: "deep",
       clientRequestId: randomUUID(),
     });
@@ -1062,6 +1066,7 @@ describe("Closer Slice 01B Private rounds", () => {
   });
 
   test("candidate pins its revision and withdrawal invalidates it without consuming the question", async () => {
+    await Promise.all([createPrivateTestQuestion("light"), createPrivateTestQuestion("medium")]);
     const { pairId, first } = await createJoinedPair();
     const started = await startOrResumePrivateConversation(db, {
       pairId,
@@ -1115,6 +1120,7 @@ describe("Closer Slice 01B Private rounds", () => {
   });
 
   test("the creator can Like and Ask one current candidate, pinning its previewed revision into Round 1", async () => {
+    await createPrivateTestQuestion("light");
     const { pairId, first, second } = await createJoinedPair();
     const started = await startOrResumePrivateConversation(db, {
       pairId,
@@ -1156,7 +1162,8 @@ describe("Closer Slice 01B Private rounds", () => {
       questionRevisionId: started.candidate.question.questionRevisionId,
       questionNumber: 1,
     });
-    expect(candidate).toMatchObject({ state: "asked", liked: true });
+    expect(candidate).toMatchObject({ state: "asked" });
+    expect(candidate?.likedAt).not.toBeNull();
     expect(
       (
         await getPrivateRoundForParticipant(db, {
@@ -1169,6 +1176,7 @@ describe("Closer Slice 01B Private rounds", () => {
   });
 
   test("candidate actions are creator-only and candidate Like never appears in the non-creator projection", async () => {
+    await createPrivateTestQuestion("light");
     const { pairId, first, second } = await createJoinedPair();
     const started = await startOrResumePrivateConversation(db, {
       pairId,
@@ -1183,7 +1191,14 @@ describe("Closer Slice 01B Private rounds", () => {
       conversationId: started.id,
     });
     expect(nonCreator).toMatchObject({ state: "WAITING_FOR_CREATOR" });
-    expect(JSON.stringify(nonCreator)).not.toContain(started.candidate.id);
+    const waitingProjection = JSON.stringify(nonCreator);
+    for (const secret of [
+      started.candidate.id,
+      started.candidate.question.id,
+      started.candidate.question.questionRevisionId,
+      started.candidate.question.text,
+    ])
+      expect(waitingProjection).not.toContain(secret);
     expect(
       await capture(
         setPrivateQuestionCandidateLike(db, {
@@ -1194,7 +1209,7 @@ describe("Closer Slice 01B Private rounds", () => {
           liked: true,
         }),
       ),
-    ).toMatchObject({ code: "CONVERSATION_NOT_FOUND" });
+    ).toMatchObject({ code: "QUESTION_UNAVAILABLE" });
     expect(
       await capture(
         askPrivateQuestionCandidate(db, {
@@ -1202,9 +1217,10 @@ describe("Closer Slice 01B Private rounds", () => {
           participantId: second.id,
           conversationId: started.id,
           candidateId: started.candidate.id,
+          clientRequestId: randomUUID(),
         }),
       ),
-    ).toMatchObject({ code: "CONVERSATION_NOT_FOUND" });
+    ).toMatchObject({ code: "QUESTION_UNAVAILABLE" });
     expect(
       await capture(
         skipPrivateQuestionCandidate(db, {
@@ -1212,12 +1228,62 @@ describe("Closer Slice 01B Private rounds", () => {
           participantId: second.id,
           conversationId: started.id,
           candidateId: started.candidate.id,
+          clientRequestId: randomUUID(),
         }),
       ),
-    ).toMatchObject({ code: "CONVERSATION_NOT_FOUND" });
+    ).toMatchObject({ code: "QUESTION_UNAVAILABLE" });
+  });
+
+  test("the creator can toggle an unresolved candidate Like and its timestamp is persisted", async () => {
+    await createPrivateTestQuestion("light");
+    const { pairId, first } = await createJoinedPair();
+    const started = await startOrResumePrivateConversation(db, {
+      pairId,
+      participantId: first.id,
+      category: "deep",
+      clientRequestId: randomUUID(),
+    });
+    if (started.state !== "CANDIDATE") throw new Error("Expected candidate projection.");
+
+    expect(
+      await setPrivateQuestionCandidateLike(db, {
+        pairId,
+        participantId: first.id,
+        conversationId: started.id,
+        candidateId: started.candidate.id,
+        liked: true,
+      }),
+    ).toEqual({ liked: true });
+    expect(
+      (
+        await db
+          .select({ likedAt: privateQuestionCandidate.likedAt })
+          .from(privateQuestionCandidate)
+          .where(eq(privateQuestionCandidate.id, started.candidate.id))
+      )[0]?.likedAt,
+    ).not.toBeNull();
+
+    expect(
+      await setPrivateQuestionCandidateLike(db, {
+        pairId,
+        participantId: first.id,
+        conversationId: started.id,
+        candidateId: started.candidate.id,
+        liked: false,
+      }),
+    ).toEqual({ liked: false });
+    expect(
+      (
+        await db
+          .select({ likedAt: privateQuestionCandidate.likedAt })
+          .from(privateQuestionCandidate)
+          .where(eq(privateQuestionCandidate.id, started.candidate.id))
+      )[0]?.likedAt,
+    ).toBeNull();
   });
 
   test("Skip consumes its logical Question without creating a Round, preserves Like, and persists the next candidate", async () => {
+    await Promise.all([createPrivateTestQuestion("light"), createPrivateTestQuestion("medium")]);
     const { pairId, first } = await createJoinedPair();
     const started = await startOrResumePrivateConversation(db, {
       pairId,
@@ -1233,11 +1299,13 @@ describe("Closer Slice 01B Private rounds", () => {
       candidateId: started.candidate.id,
       liked: true,
     });
+    const clientRequestId = randomUUID();
     const afterSkip = await skipPrivateQuestionCandidate(db, {
       pairId,
       participantId: first.id,
       conversationId: started.id,
       candidateId: started.candidate.id,
+      clientRequestId,
     });
     const rounds = await db
       .select()
@@ -1250,9 +1318,10 @@ describe("Closer Slice 01B Private rounds", () => {
     expect(rounds).toHaveLength(0);
     expect(skipped).toMatchObject({
       state: "skipped",
-      liked: true,
       questionId: started.candidate.question.id,
     });
+    expect(skipped?.likedAt).not.toBeNull();
+    expect(skipped?.resolvedAt).not.toBeNull();
     if (afterSkip.state === "CANDIDATE")
       expect(afterSkip.candidate.question.id).not.toBe(started.candidate.question.id);
     expect(
@@ -1265,9 +1334,73 @@ describe("Closer Slice 01B Private rounds", () => {
         }),
       ),
     ).toMatchObject({ code: "QUESTION_UNAVAILABLE" });
+    expect(
+      await capture(
+        setPrivateQuestionCandidateLike(db, {
+          pairId,
+          participantId: first.id,
+          conversationId: started.id,
+          candidateId: started.candidate.id,
+          liked: false,
+        }),
+      ),
+    ).toMatchObject({ code: "QUESTION_UNAVAILABLE" });
+    expect(
+      await skipPrivateQuestionCandidate(db, {
+        pairId,
+        participantId: first.id,
+        conversationId: started.id,
+        candidateId: started.candidate.id,
+        clientRequestId,
+      }),
+    ).toEqual(afterSkip);
+    expect(
+      await db
+        .select()
+        .from(privateQuestionCandidate)
+        .where(eq(privateQuestionCandidate.conversationId, started.id)),
+    ).toHaveLength(afterSkip.state === "CANDIDATE" ? 2 : 1);
+  });
+
+  test("withdrawal invalidates a liked candidate and freezes its final Like", async () => {
+    await Promise.all([createPrivateTestQuestion("light"), createPrivateTestQuestion("medium")]);
+    const { pairId, first } = await createJoinedPair();
+    const started = await startOrResumePrivateConversation(db, {
+      pairId,
+      participantId: first.id,
+      category: "deep",
+      clientRequestId: randomUUID(),
+    });
+    if (started.state !== "CANDIDATE") throw new Error("Expected candidate projection.");
+    await setPrivateQuestionCandidateLike(db, {
+      pairId,
+      participantId: first.id,
+      conversationId: started.id,
+      candidateId: started.candidate.id,
+      liked: true,
+    });
+    await withdrawQuestionRevision(db, started.candidate.question.questionRevisionId);
+    const [candidate] = await db
+      .select()
+      .from(privateQuestionCandidate)
+      .where(eq(privateQuestionCandidate.id, started.candidate.id));
+    expect(candidate).toMatchObject({ state: "invalidated" });
+    expect(candidate?.likedAt).not.toBeNull();
+    expect(
+      await capture(
+        setPrivateQuestionCandidateLike(db, {
+          pairId,
+          participantId: first.id,
+          conversationId: started.id,
+          candidateId: started.candidate.id,
+          liked: false,
+        }),
+      ),
+    ).toMatchObject({ code: "QUESTION_UNAVAILABLE" });
   });
 
   test("Skip exhausts rather than cycles and a skipped logical Question stays consumed after revision", async () => {
+    await createPrivateTestQuestion("light");
     const { pairId, first } = await createJoinedPair();
     let view = await startOrResumePrivateConversation(db, {
       pairId,
@@ -1283,6 +1416,7 @@ describe("Closer Slice 01B Private rounds", () => {
         participantId: first.id,
         conversationId: view.id,
         candidateId: view.candidate.id,
+        clientRequestId: randomUUID(),
       });
     }
     expect(view).toMatchObject({ state: "EXHAUSTED", message: "You've reached the end for now." });
@@ -1310,6 +1444,7 @@ describe("Closer Slice 01B Private rounds", () => {
   });
 
   test("Ask and Skip serialize on a candidate, retries create one Round, and resolved Likes freeze", async () => {
+    await createPrivateTestQuestion("light");
     const { pairId, first } = await createJoinedPair();
     const started = await startOrResumePrivateConversation(db, {
       pairId,
@@ -1335,6 +1470,7 @@ describe("Closer Slice 01B Private rounds", () => {
           participantId: first.id,
           conversationId: started.id,
           candidateId: started.candidate.id,
+          clientRequestId: randomUUID(),
         }),
       ),
     ]);
@@ -1373,6 +1509,7 @@ describe("Closer Slice 01B Private rounds", () => {
   });
 
   test("an Ask request ID cannot resolve a newer candidate to an earlier Round", async () => {
+    await Promise.all([createPrivateTestQuestion("light"), createPrivateTestQuestion("medium")]);
     const { pairId, first, second } = await createJoinedPair();
     const firstCandidate = await startOrResumePrivateConversation(db, {
       pairId,
@@ -1478,6 +1615,7 @@ describe("Closer Slice 01B Private rounds", () => {
       participantId: first.id,
       conversationId: view.id,
       candidateId: view.candidate.id,
+      clientRequestId: randomUUID(),
     });
     if (afterSkip.state !== "CANDIDATE") throw new Error("Expected candidate after Skip.");
     expect(afterSkip.candidate.question.intensity).toBe("light");
@@ -1570,6 +1708,7 @@ describe("Closer Slice 01B Private rounds", () => {
   });
 
   test("replacement starts a distinct era Conversation and cannot read the old candidate", async () => {
+    await createPrivateTestQuestion("light");
     const joined = await createJoinedPair();
     const old = await startOrResumePrivateConversation(db, {
       pairId: joined.pairId,

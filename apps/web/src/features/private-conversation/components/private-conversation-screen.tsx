@@ -27,6 +27,7 @@ type ConversationProjection = {
   roundId?: string;
   candidate?: {
     id: string;
+    liked: boolean;
     question: { id: string; questionRevisionId: string; text: string };
   };
 };
@@ -41,6 +42,8 @@ export default function PrivateConversationScreen({ view }: { view: Conversation
   const router = useRouter();
   const [conversation, setConversation] = useState(view);
   const [isAsking, setIsAsking] = useState(false);
+  const [isSkipping, setIsSkipping] = useState(false);
+  const [isLiking, setIsLiking] = useState(false);
   const [optimisticAskQuestion, setOptimisticAskQuestion] = useState<
     NonNullable<ConversationProjection["candidate"]>["question"] | null
   >(null);
@@ -132,6 +135,55 @@ export default function PrivateConversationScreen({ view }: { view: Conversation
       setError("We couldn’t continue this conversation. Please try again.");
   }
 
+  async function skipQuestion() {
+    if (!candidateBaseUrl) return;
+    setError(null);
+    setIsSkipping(true);
+    try {
+      const response = await fetch(`${candidateBaseUrl}/skip`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ clientRequestId: crypto.randomUUID() }),
+      });
+      if (!response.ok) throw new Error();
+      if (!(await reconcileConversation())) throw new Error();
+    } catch {
+      setError("We couldn’t skip that question. Please try again.");
+    } finally {
+      setIsSkipping(false);
+    }
+  }
+
+  async function toggleLike() {
+    if (!candidateBaseUrl || !conversation.candidate) return;
+    setError(null);
+    setIsLiking(true);
+    try {
+      const response = await fetch(`${candidateBaseUrl}/like`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ liked: !conversation.candidate.liked }),
+      });
+      const result: unknown = await response.json();
+      if (
+        !response.ok ||
+        !result ||
+        typeof result !== "object" ||
+        !("liked" in result) ||
+        typeof result.liked !== "boolean"
+      )
+        throw new Error();
+      const liked = result.liked;
+      setConversation((current) =>
+        current.candidate ? { ...current, candidate: { ...current.candidate, liked } } : current,
+      );
+    } catch {
+      setError("We couldn’t update your Like. Please try again.");
+    } finally {
+      setIsLiking(false);
+    }
+  }
+
   return (
     <CloserPageShell className="pt-5">
       <CloserBackLink href={`/pair/${conversation.pairId}`} />
@@ -182,8 +234,30 @@ export default function PrivateConversationScreen({ view }: { view: Conversation
                 size="lg"
                 type="button"
               >
-                Choose this question
+                Ask this question
               </AsyncButton>
+              <div className="grid grid-cols-2 gap-3">
+                <AsyncButton
+                  onClick={() => void skipQuestion()}
+                  pending={isSkipping}
+                  pendingText="Skipping…"
+                  size="lg"
+                  type="button"
+                  variant="secondary"
+                >
+                  Skip
+                </AsyncButton>
+                <AsyncButton
+                  onClick={() => void toggleLike()}
+                  pending={isLiking}
+                  pendingText="Saving…"
+                  size="lg"
+                  type="button"
+                  variant="outline"
+                >
+                  {conversation.candidate?.liked ? "Liked" : "Like"}
+                </AsyncButton>
+              </div>
             </div>
             {error ? <ActionError>{error}</ActionError> : null}
           </>
