@@ -41,6 +41,8 @@
     "db:watch": "bun run --filter @Closer/db db:watch",
     "db:stop": "bun run --filter @Closer/db db:stop",
     "db:down": "bun run --filter @Closer/db db:down",
+    "admin:bootstrap": "bun run scripts/admin-bootstrap.ts",
+    "admin:recover": "bun run scripts/admin-recover.ts",
     "deploy:setup": "vercel link",
     "dev:vercel": "vercel dev -L",
     "env:preview": "tsx scripts/sync-vercel-env.ts preview",
