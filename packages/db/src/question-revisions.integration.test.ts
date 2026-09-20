@@ -2,22 +2,26 @@ import { randomUUID } from "node:crypto";
 
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import dotenv from "dotenv";
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 
 dotenv.config({ path: new URL("../../../apps/web/.env.local", import.meta.url) });
 
 const { createDb } = await import("./index");
 const {
-  createQuestion,
-  createQuestionRevision,
+  activateQuestion,
+  createAdminQuestion,
+  createAdminQuestionRevision,
   createPairForParticipant,
   deactivateQuestion,
+  findDuplicateQuestionsByText,
   getPrivateRoundForParticipant,
   getTogetherSessionForParticipant,
   issueOrReuseInitialInvite,
   listEligibleTogetherQuestions,
   redeemInitialInvite,
   resolveOrCreateParticipant,
+  reactivateQuestion,
+  restoreAdminQuestionRevision,
   withdrawQuestionRevision,
 } = await import("./closer");
 const {
@@ -62,6 +66,18 @@ async function createParticipant(name = "Question test participant") {
   return resolveOrCreateParticipant(db, { authUserId, displayName: name });
 }
 
+async function createAdminActor() {
+  const id = randomUUID();
+  authUserIds.push(id);
+  await db.insert(user).values({
+    id,
+    name: "Question test Admin",
+    email: `${id}@question.closer.invalid`,
+    isAnonymous: false,
+  });
+  return id;
+}
+
 async function createUnclaimedPair() {
   const creator = await createParticipant();
   const created = await createPairForParticipant(db, {
@@ -86,15 +102,18 @@ async function createJoinedPair() {
 }
 
 async function createTestQuestion() {
-  const created = await createQuestion(db, {
+  const adminUserId = await createAdminActor();
+  const created = await createAdminQuestion(db, {
     text: "A first immutable question",
     category: "fun",
     relationshipFit: "both",
     modeFit: "both",
     intensity: "light",
+    adminUserId,
   });
   questionIds.push(created.question.id);
-  return created;
+  await activateQuestion(db, { questionId: created.question.id, adminUserId });
+  return { ...created, adminUserId };
 }
 
 afterEach(async () => {
@@ -132,8 +151,10 @@ afterAll(async () => {
 describe("Ticket 06 logical Questions and immutable revisions", () => {
   test("creates one logical Question, revises immutable content, and switches current revision", async () => {
     const first = await createTestQuestion();
-    const second = await createQuestionRevision(db, {
+    const second = await createAdminQuestionRevision(db, {
       questionId: first.question.id,
+      expectedCurrentRevisionId: first.revision.id,
+      adminUserId: first.adminUserId,
       text: "A revised immutable question",
       category: "deep",
       relationshipFit: "both",
@@ -156,19 +177,23 @@ describe("Ticket 06 logical Questions and immutable revisions", () => {
     ).toBe("A first immutable question");
   });
 
-  test("serializes concurrent revisions into successive ordinals", async () => {
+  test("serializes concurrent revisions and rejects the stale writer", async () => {
     const first = await createTestQuestion();
-    const revisions = await Promise.all([
-      createQuestionRevision(db, {
+    const results = await Promise.allSettled([
+      createAdminQuestionRevision(db, {
         questionId: first.question.id,
+        expectedCurrentRevisionId: first.revision.id,
+        adminUserId: first.adminUserId,
         text: "Concurrent revision A",
         category: "fun",
         relationshipFit: "both",
         modeFit: "both",
         intensity: "light",
       }),
-      createQuestionRevision(db, {
+      createAdminQuestionRevision(db, {
         questionId: first.question.id,
+        expectedCurrentRevisionId: first.revision.id,
+        adminUserId: first.adminUserId,
         text: "Concurrent revision B",
         category: "deep",
         relationshipFit: "both",
@@ -177,14 +202,229 @@ describe("Ticket 06 logical Questions and immutable revisions", () => {
       }),
     ]);
 
-    expect(revisions.map(({ revision }) => revision.revisionNumber).sort()).toEqual([2, 3]);
+    const committed = results.filter(
+      (
+        result,
+      ): result is PromiseFulfilledResult<
+        Awaited<ReturnType<typeof createAdminQuestionRevision>>
+      > => result.status === "fulfilled",
+    );
+    const rejected = results.filter((result) => result.status === "rejected");
+    expect(committed).toHaveLength(1);
+    expect(committed[0]?.value.revision.revisionNumber).toBe(2);
+    expect(rejected).toMatchObject([{ reason: { code: "QUESTION_REVISION_CONFLICT" } }]);
     const currentQuestion = (
       await db.select().from(question).where(eq(question.id, first.question.id))
     )[0];
+    expect(committed[0]?.value.revision.id === currentQuestion?.currentRevisionId).toBe(true);
+  });
+
+  test("Admin creation starts Inactive and lifecycle history distinguishes publish from reactivate", async () => {
+    const adminUserId = await createAdminActor();
+    const created = await createAdminQuestion(db, {
+      text: "An unpublished Admin question",
+      category: "fun",
+      relationshipFit: "both",
+      modeFit: "both",
+      intensity: "light",
+      adminUserId,
+    });
+    questionIds.push(created.question.id);
+
+    expect(created.question.isActive).toBe(false);
+    expect(created.revision).toMatchObject({
+      revisionNumber: 1,
+      createdByAdminUserId: adminUserId,
+    });
+    await activateQuestion(db, { questionId: created.question.id, adminUserId });
+    await deactivateQuestion(db, {
+      questionId: created.question.id,
+      adminUserId,
+      reason: "Temporarily pause selection",
+    });
+    await reactivateQuestion(db, { questionId: created.question.id, adminUserId });
+
+    const events = await db
+      .select({ action: questionLifecycleEvent.action })
+      .from(questionLifecycleEvent)
+      .where(eq(questionLifecycleEvent.questionId, created.question.id))
+      .orderBy(asc(questionLifecycleEvent.occurredAt), asc(questionLifecycleEvent.id));
+    expect(events.map((event) => event.action)).toEqual([
+      "activated",
+      "deactivated",
+      "reactivated",
+    ]);
+    await expect(
+      activateQuestion(db, { questionId: created.question.id, adminUserId }),
+    ).rejects.toMatchObject({ code: "QUESTION_STATE_CONFLICT" });
+  });
+
+  test("Admin revisions use stale-write protection and restore as a new later revision", async () => {
+    const adminUserId = await createAdminActor();
+    const created = await createAdminQuestion(db, {
+      text: "Original Admin wording",
+      category: "fun",
+      relationshipFit: "both",
+      modeFit: "together",
+      intensity: "light",
+      adminUserId,
+    });
+    questionIds.push(created.question.id);
+    const revision = await createAdminQuestionRevision(db, {
+      questionId: created.question.id,
+      expectedCurrentRevisionId: created.revision.id,
+      adminUserId,
+      text: "Second Admin wording",
+      category: "deep",
+      relationshipFit: "both",
+      modeFit: "private",
+      intensity: "deep",
+    });
+
+    expect(revision.revision).toMatchObject({
+      revisionNumber: 2,
+      createdByAdminUserId: adminUserId,
+    });
+    expect(revision.question.isActive).toBe(false);
+    await expect(
+      createAdminQuestionRevision(db, {
+        questionId: created.question.id,
+        expectedCurrentRevisionId: created.revision.id,
+        adminUserId,
+        text: "Stale Admin wording",
+        category: "deep",
+        relationshipFit: "both",
+        modeFit: "both",
+        intensity: "medium",
+      }),
+    ).rejects.toMatchObject({ code: "QUESTION_REVISION_CONFLICT" });
+
+    const restored = await restoreAdminQuestionRevision(db, {
+      questionId: created.question.id,
+      sourceRevisionId: created.revision.id,
+      expectedCurrentRevisionId: revision.revision.id,
+      adminUserId,
+    });
+    expect(restored.revision).toMatchObject({
+      revisionNumber: 3,
+      createdByAdminUserId: adminUserId,
+      text: created.revision.text,
+      category: created.revision.category,
+      relationshipFit: created.revision.relationshipFit,
+      modeFit: created.revision.modeFit,
+      intensity: created.revision.intensity,
+    });
+    expect(restored.question.currentRevisionId).toBe(restored.revision.id);
+    expect(restored.revision.id).not.toBe(created.revision.id);
+    expect(restored.question.isActive).toBe(false);
+  });
+
+  test("activation waits for a safe current revision after withdrawal", async () => {
+    const adminUserId = await createAdminActor();
+    const created = await createAdminQuestion(db, {
+      text: "Question awaiting safety review",
+      category: "fun",
+      relationshipFit: "both",
+      modeFit: "both",
+      intensity: "light",
+      adminUserId,
+    });
+    questionIds.push(created.question.id);
+    await withdrawQuestionRevision(db, {
+      questionRevisionId: created.revision.id,
+      adminUserId,
+      reason: "Safety review required",
+    });
+    await expect(
+      activateQuestion(db, { questionId: created.question.id, adminUserId }),
+    ).rejects.toMatchObject({ code: "QUESTION_REVISION_WITHDRAWN" });
+
+    const replacement = await createAdminQuestionRevision(db, {
+      questionId: created.question.id,
+      expectedCurrentRevisionId: created.revision.id,
+      adminUserId,
+      text: "Reviewed replacement wording",
+      category: "fun",
+      relationshipFit: "both",
+      modeFit: "both",
+      intensity: "medium",
+    });
+    expect(replacement.question.isActive).toBe(false);
+    await activateQuestion(db, { questionId: created.question.id, adminUserId });
     expect(
-      revisions.find(({ revision }) => revision.id === currentQuestion?.currentRevisionId)?.revision
-        .revisionNumber,
-    ).toBe(3);
+      (await db.select().from(question).where(eq(question.id, created.question.id)))[0]?.isActive,
+    ).toBe(true);
+  });
+
+  test("withdrawal is idempotent and preserves the first actor, time, and reason", async () => {
+    const firstAdminUserId = await createAdminActor();
+    const secondAdminUserId = await createAdminActor();
+    const created = await createAdminQuestion(db, {
+      text: "Question with a first withdrawal",
+      category: "fun",
+      relationshipFit: "both",
+      modeFit: "both",
+      intensity: "light",
+      adminUserId: firstAdminUserId,
+    });
+    questionIds.push(created.question.id);
+
+    const first = await withdrawQuestionRevision(db, {
+      questionRevisionId: created.revision.id,
+      adminUserId: firstAdminUserId,
+      reason: "Initial safety reason",
+    });
+    const repeated = await withdrawQuestionRevision(db, {
+      questionRevisionId: created.revision.id,
+      adminUserId: secondAdminUserId,
+      reason: "Later reason must not replace the first",
+    });
+    const events = await db
+      .select()
+      .from(questionLifecycleEvent)
+      .where(eq(questionLifecycleEvent.revisionId, created.revision.id));
+
+    expect(repeated.withdrawnAt).toEqual(first.withdrawnAt);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      adminUserId: firstAdminUserId,
+      reason: "Initial safety reason",
+      occurredAt: first.withdrawnAt,
+    });
+  });
+
+  test("duplicate wording detection trims, collapses whitespace, and ignores case only", async () => {
+    const adminUserId = await createAdminActor();
+    const first = await createAdminQuestion(db, {
+      text: "  Do\twe\nremember?  ",
+      category: "fun",
+      relationshipFit: "both",
+      modeFit: "both",
+      intensity: "light",
+      adminUserId,
+    });
+    const second = await createAdminQuestion(db, {
+      text: "Do we remember?",
+      category: "deep",
+      relationshipFit: "both",
+      modeFit: "private",
+      intensity: "medium",
+      adminUserId,
+    });
+    questionIds.push(first.question.id, second.question.id);
+
+    const matches = await findDuplicateQuestionsByText(db, { text: "do we remember?" });
+    expect(matches.map((match) => match.questionId)).toEqual([
+      first.question.id,
+      second.question.id,
+    ]);
+    expect(
+      await findDuplicateQuestionsByText(db, {
+        text: "DO WE REMEMBER?",
+        excludeQuestionId: first.question.id,
+      }),
+    ).toMatchObject([{ questionId: second.question.id }]);
+    expect(await findDuplicateQuestionsByText(db, { text: "Do we recall?" })).toEqual([]);
   });
 
   test("database enforces ordinal uniqueness and current-revision ownership", async () => {
@@ -236,7 +476,12 @@ describe("Ticket 06 logical Questions and immutable revisions", () => {
   test("deactivation and withdrawal remove content from new occurrence selection without rewriting revisions", async () => {
     const { question: logicalQuestion, revision } = await createTestQuestion();
     const { creator, pair: pairRecord } = await createUnclaimedPair();
-    await withdrawQuestionRevision(db, revision.id);
+    const adminUserId = await createAdminActor();
+    await withdrawQuestionRevision(db, {
+      questionRevisionId: revision.id,
+      adminUserId,
+      reason: "The wording is unsafe for selection.",
+    });
     expect(
       (
         await listEligibleTogetherQuestions(db, {
@@ -247,15 +492,17 @@ describe("Ticket 06 logical Questions and immutable revisions", () => {
       ).some((item) => item.id === logicalQuestion.id),
     ).toBe(false);
 
-    const activeRevision = await createQuestionRevision(db, {
+    const activeRevision = await createAdminQuestionRevision(db, {
       questionId: logicalQuestion.id,
+      expectedCurrentRevisionId: revision.id,
+      adminUserId,
       text: "A replacement current question",
       category: "fun",
       relationshipFit: "both",
       modeFit: "together",
       intensity: "medium",
     });
-    await deactivateQuestion(db, logicalQuestion.id);
+    await deactivateQuestion(db, { questionId: logicalQuestion.id, adminUserId });
     expect(
       (
         await listEligibleTogetherQuestions(db, {
@@ -273,7 +520,7 @@ describe("Ticket 06 logical Questions and immutable revisions", () => {
   });
 
   test("Together shown-question records keep their exact revision while logical identity stays stable", async () => {
-    const { question: logicalQuestion, revision } = await createTestQuestion();
+    const { question: logicalQuestion, revision, adminUserId } = await createTestQuestion();
     const { creator, pair: pairRecord } = await createUnclaimedPair();
     const [session] = await db
       .insert(togetherSession)
@@ -287,8 +534,10 @@ describe("Ticket 06 logical Questions and immutable revisions", () => {
       position: 1,
     });
 
-    await createQuestionRevision(db, {
+    await createAdminQuestionRevision(db, {
       questionId: logicalQuestion.id,
+      expectedCurrentRevisionId: revision.id,
+      adminUserId,
       text: "Future wording",
       category: "fun",
       relationshipFit: "both",
@@ -308,7 +557,7 @@ describe("Ticket 06 logical Questions and immutable revisions", () => {
   });
 
   test("Private Rounds keep their exact revision while later revisions become current", async () => {
-    const { question: logicalQuestion, revision } = await createTestQuestion();
+    const { question: logicalQuestion, revision, adminUserId } = await createTestQuestion();
     const { pairId, first, second } = await createJoinedPair();
     const era = (
       await db
@@ -340,8 +589,10 @@ describe("Ticket 06 logical Questions and immutable revisions", () => {
       .returning();
     if (!round) throw new Error("Private test round was not created.");
 
-    await createQuestionRevision(db, {
+    await createAdminQuestionRevision(db, {
       questionId: logicalQuestion.id,
+      expectedCurrentRevisionId: revision.id,
+      adminUserId,
       text: "Future private wording",
       category: "fun",
       relationshipFit: "both",

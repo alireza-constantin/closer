@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 
-import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 
 import { createDb } from "./index";
 import {
@@ -26,6 +26,7 @@ import {
   privateRevealView,
   privateRound,
   question,
+  questionLifecycleEvent,
   questionRevision,
   rejoinInvite,
   togetherSession,
@@ -72,6 +73,10 @@ export class CloserDomainError extends Error {
       | "CONVERSATION_NOT_FOUND"
       | "PAIR_NOT_READY"
       | "QUESTION_UNAVAILABLE"
+      | "QUESTION_REVISION_CONFLICT"
+      | "QUESTION_STATE_CONFLICT"
+      | "QUESTION_REVISION_WITHDRAWN"
+      | "QUESTION_WITHDRAWAL_REASON_REQUIRED"
       | "PRIVATE_CONVERSATION_EXHAUSTED"
       | "ANSWER_INVALID"
       | "ANSWER_IMMUTABLE"
@@ -153,7 +158,23 @@ function normalizeQuestionRevision(input: QuestionRevisionInput): QuestionRevisi
   ) {
     throw new CloserDomainError("QUESTION_UNAVAILABLE");
   }
-  return { ...input, text };
+  return {
+    text,
+    category: input.category,
+    relationshipFit: input.relationshipFit,
+    modeFit: input.modeFit,
+    intensity: input.intensity,
+  };
+}
+
+function normalizeOptionalLifecycleReason(reason: string | undefined) {
+  return reason?.trim() || null;
+}
+
+function normalizeWithdrawalReason(reason: string) {
+  const normalized = reason.trim();
+  if (!normalized) throw new CloserDomainError("QUESTION_WITHDRAWAL_REASON_REQUIRED");
+  return normalized;
 }
 
 function assertReactionValue(value: string): asserts value is ReactionValue {
@@ -226,18 +247,25 @@ export async function getParticipantByAuthUserId(database: Database, authUserId:
   return rows[0] ?? null;
 }
 
-/** Create one stable logical Question and its first immutable revision. */
-export async function createQuestion(database: Database, input: QuestionRevisionInput) {
+async function createQuestionWithFirstRevision(
+  database: Database,
+  input: QuestionRevisionInput & { adminUserId: string },
+) {
   const revisionInput = normalizeQuestionRevision(input);
   return database.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
-    const insertedQuestion = await tx.insert(question).values({ isActive: true }).returning();
+    const insertedQuestion = await tx.insert(question).values({ isActive: false }).returning();
     const logicalQuestion = insertedQuestion[0];
     if (!logicalQuestion) throw new Error("Question creation did not return a question.");
 
     const insertedRevision = await tx
       .insert(questionRevision)
-      .values({ questionId: logicalQuestion.id, revisionNumber: 1, ...revisionInput })
+      .values({
+        questionId: logicalQuestion.id,
+        revisionNumber: 1,
+        createdByAdminUserId: input.adminUserId,
+        ...revisionInput,
+      })
       .returning();
     const revision = insertedRevision[0];
     if (!revision) throw new Error("Question creation did not return a revision.");
@@ -252,56 +280,154 @@ export async function createQuestion(database: Database, input: QuestionRevision
   });
 }
 
-/** Create a new immutable revision and make it current for future selection. */
-export async function createQuestionRevision(
+/** Admin catalog creation starts inactive and records its editorial actor. */
+export async function createAdminQuestion(
   database: Database,
-  input: QuestionRevisionInput & { questionId: string },
+  input: QuestionRevisionInput & { adminUserId: string },
+) {
+  return createQuestionWithFirstRevision(database, input);
+}
+
+async function lockQuestionForRevision(database: Database, questionId: string) {
+  const [logicalQuestion] = await database
+    .select()
+    .from(question)
+    .where(eq(question.id, questionId))
+    .for("update")
+    .limit(1);
+  if (!logicalQuestion) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+  return logicalQuestion;
+}
+
+async function insertQuestionRevision(
+  database: Database,
+  logicalQuestion: typeof question.$inferSelect,
+  revisionInput: QuestionRevisionInput,
+  adminUserId: string,
+) {
+  const [latestRevision] = await database
+    .select({ revisionNumber: questionRevision.revisionNumber })
+    .from(questionRevision)
+    .where(eq(questionRevision.questionId, logicalQuestion.id))
+    .orderBy(desc(questionRevision.revisionNumber))
+    .limit(1);
+
+  const [revision] = await database
+    .insert(questionRevision)
+    .values({
+      questionId: logicalQuestion.id,
+      revisionNumber: (latestRevision?.revisionNumber ?? 0) + 1,
+      createdByAdminUserId: adminUserId,
+      ...revisionInput,
+    })
+    .returning();
+  if (!revision) throw new Error("Question revision creation did not return a revision.");
+
+  const [updatedQuestion] = await database
+    .update(question)
+    .set({ currentRevisionId: revision.id })
+    .where(eq(question.id, logicalQuestion.id))
+    .returning();
+  if (!updatedQuestion)
+    throw new Error("Question revision creation did not set a current revision.");
+  return { question: updatedQuestion, revision };
+}
+
+async function createQuestionRevisionInTransaction(
+  database: Database,
+  input: QuestionRevisionInput & {
+    questionId: string;
+    expectedCurrentRevisionId: string;
+    adminUserId: string;
+  },
 ) {
   const revisionInput = normalizeQuestionRevision(input);
   return database.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
-    const logicalQuestion = await tx
-      .select()
-      .from(question)
-      .where(eq(question.id, input.questionId))
-      .for("update")
-      .limit(1);
-    if (!logicalQuestion[0]) throw new CloserDomainError("QUESTION_UNAVAILABLE");
-
-    const [latestRevision] = await tx
-      .select({ revisionNumber: questionRevision.revisionNumber })
-      .from(questionRevision)
-      .where(eq(questionRevision.questionId, input.questionId))
-      .orderBy(desc(questionRevision.revisionNumber))
-      .limit(1);
-
-    const insertedRevision = await tx
-      .insert(questionRevision)
-      .values({
-        questionId: input.questionId,
-        revisionNumber: (latestRevision?.revisionNumber ?? 0) + 1,
-        ...revisionInput,
-      })
-      .returning();
-    const revision = insertedRevision[0];
-    if (!revision) throw new Error("Question revision creation did not return a revision.");
-
-    const updatedQuestion = await tx
-      .update(question)
-      .set({ currentRevisionId: revision.id })
-      .where(eq(question.id, input.questionId))
-      .returning();
-    if (!updatedQuestion[0])
-      throw new Error("Question revision creation did not set a current revision.");
-    return { question: updatedQuestion[0], revision };
+    const logicalQuestion = await lockQuestionForRevision(tx, input.questionId);
+    if (logicalQuestion.currentRevisionId !== input.expectedCurrentRevisionId) {
+      throw new CloserDomainError("QUESTION_REVISION_CONFLICT");
+    }
+    return insertQuestionRevision(tx, logicalQuestion, revisionInput, input.adminUserId);
   });
 }
 
-export async function reviseQuestion(
+/** Create an Admin-authored revision only if the editor's current pointer is fresh. */
+export async function createAdminQuestionRevision(
   database: Database,
-  input: QuestionRevisionInput & { questionId: string },
+  input: QuestionRevisionInput & {
+    questionId: string;
+    expectedCurrentRevisionId: string;
+    adminUserId: string;
+  },
 ) {
-  return createQuestionRevision(database, input);
+  return createQuestionRevisionInTransaction(database, input);
+}
+
+/** Restore a historic revision by copying it into a new current revision. */
+export async function restoreAdminQuestionRevision(
+  database: Database,
+  input: {
+    questionId: string;
+    sourceRevisionId: string;
+    expectedCurrentRevisionId: string;
+    adminUserId: string;
+  },
+) {
+  return database.transaction(async (transaction) => {
+    const tx = transaction as unknown as Database;
+    const logicalQuestion = await lockQuestionForRevision(tx, input.questionId);
+    if (logicalQuestion.currentRevisionId !== input.expectedCurrentRevisionId) {
+      throw new CloserDomainError("QUESTION_REVISION_CONFLICT");
+    }
+
+    const [sourceRevision] = await tx
+      .select({
+        text: questionRevision.text,
+        category: questionRevision.category,
+        relationshipFit: questionRevision.relationshipFit,
+        modeFit: questionRevision.modeFit,
+        intensity: questionRevision.intensity,
+      })
+      .from(questionRevision)
+      .where(
+        and(
+          eq(questionRevision.id, input.sourceRevisionId),
+          eq(questionRevision.questionId, input.questionId),
+        ),
+      )
+      .limit(1);
+    if (!sourceRevision) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+
+    return insertQuestionRevision(tx, logicalQuestion, sourceRevision, input.adminUserId);
+  });
+}
+
+/** Find current catalog wording matches using trim, collapsed whitespace, and case folding. */
+export async function findDuplicateQuestionsByText(
+  database: Database,
+  input: { text: string; excludeQuestionId?: string },
+) {
+  if (!input.text.trim()) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+
+  const normalizedCatalogText = sql`lower(regexp_replace(regexp_replace(${questionRevision.text}, '^[[:space:]]+|[[:space:]]+$', '', 'g'), '[[:space:]]+', ' ', 'g'))`;
+  const normalizedInputText = sql`lower(regexp_replace(regexp_replace(${input.text}, '^[[:space:]]+|[[:space:]]+$', '', 'g'), '[[:space:]]+', ' ', 'g'))`;
+  return database
+    .select({
+      questionId: question.id,
+      text: questionRevision.text,
+      revisionNumber: questionRevision.revisionNumber,
+      isActive: question.isActive,
+    })
+    .from(question)
+    .innerJoin(questionRevision, eq(question.currentRevisionId, questionRevision.id))
+    .where(
+      and(
+        eq(normalizedCatalogText, normalizedInputText),
+        input.excludeQuestionId ? ne(question.id, input.excludeQuestionId) : undefined,
+      ),
+    )
+    .orderBy(asc(question.createdAt), asc(question.id));
 }
 
 export async function getQuestionWithCurrentRevision(database: Database, questionId: string) {
@@ -314,27 +440,165 @@ export async function getQuestionWithCurrentRevision(database: Database, questio
   return rows[0] ?? null;
 }
 
-/** Deactivation only affects future selection; pinned occurrences remain readable. */
-export async function deactivateQuestion(database: Database, questionId: string) {
-  const rows = await database
-    .update(question)
-    .set({ isActive: false })
-    .where(eq(question.id, questionId))
-    .returning();
-  if (!rows[0]) throw new CloserDomainError("QUESTION_UNAVAILABLE");
-  return rows[0];
+async function appendQuestionLifecycleEvent(
+  database: Database,
+  input: typeof questionLifecycleEvent.$inferInsert,
+) {
+  const [event] = await database.insert(questionLifecycleEvent).values(input).returning();
+  if (!event) throw new Error("Question lifecycle event was not recorded.");
+  return event;
 }
 
-/** Withdraw one revision for future safety enforcement without rewriting history. */
-export async function withdrawQuestionRevision(database: Database, questionRevisionId: string) {
+async function hasPriorDeactivation(database: Database, questionId: string) {
+  const [event] = await database
+    .select({ id: questionLifecycleEvent.id })
+    .from(questionLifecycleEvent)
+    .where(
+      and(
+        eq(questionLifecycleEvent.questionId, questionId),
+        eq(questionLifecycleEvent.action, "deactivated"),
+      ),
+    )
+    .limit(1);
+  return !!event;
+}
+
+async function requireSafeCurrentRevision(
+  database: Database,
+  logicalQuestion: typeof question.$inferSelect,
+) {
+  if (!logicalQuestion.currentRevisionId) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+  const [revision] = await database
+    .select({ withdrawnAt: questionRevision.withdrawnAt })
+    .from(questionRevision)
+    .where(eq(questionRevision.id, logicalQuestion.currentRevisionId))
+    .limit(1);
+  if (!revision) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+  if (revision.withdrawnAt) throw new CloserDomainError("QUESTION_REVISION_WITHDRAWN");
+}
+
+async function transitionQuestionToActive(
+  database: Database,
+  input: { questionId: string; adminUserId: string; reason?: string },
+  transition: "activate" | "reactivate",
+) {
+  const reason = normalizeOptionalLifecycleReason(input.reason);
   return database.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
-    const rows = await tx
-      .update(questionRevision)
-      .set({ withdrawnAt: new Date() })
-      .where(eq(questionRevision.id, questionRevisionId))
+    const logicalQuestion = await lockQuestionForRevision(tx, input.questionId);
+    if (logicalQuestion.isActive) throw new CloserDomainError("QUESTION_STATE_CONFLICT");
+
+    const hasDeactivated = await hasPriorDeactivation(tx, input.questionId);
+    if (
+      (transition === "activate" && hasDeactivated) ||
+      (transition === "reactivate" && !hasDeactivated)
+    ) {
+      throw new CloserDomainError("QUESTION_STATE_CONFLICT");
+    }
+    await requireSafeCurrentRevision(tx, logicalQuestion);
+
+    const [updatedQuestion] = await tx
+      .update(question)
+      .set({ isActive: true })
+      .where(eq(question.id, input.questionId))
       .returning();
-    if (!rows[0]) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+    if (!updatedQuestion) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+
+    await appendQuestionLifecycleEvent(tx, {
+      questionId: input.questionId,
+      action: transition === "activate" ? "activated" : "reactivated",
+      adminUserId: input.adminUserId,
+      reason,
+    });
+    return updatedQuestion;
+  });
+}
+
+/** Publish a new Inactive Question for the first time. */
+export async function activateQuestion(
+  database: Database,
+  input: { questionId: string; adminUserId: string; reason?: string },
+) {
+  return transitionQuestionToActive(database, input, "activate");
+}
+
+/** Restore selection for a previously deactivated Question. */
+export async function reactivateQuestion(
+  database: Database,
+  input: { questionId: string; adminUserId: string; reason?: string },
+) {
+  return transitionQuestionToActive(database, input, "reactivate");
+}
+
+/** Deactivation only affects future selection; pinned occurrences remain readable. */
+export async function deactivateQuestion(
+  database: Database,
+  input: { questionId: string; adminUserId: string; reason?: string },
+) {
+  const reason = normalizeOptionalLifecycleReason(input.reason);
+  return database.transaction(async (transaction) => {
+    const tx = transaction as unknown as Database;
+    const logicalQuestion = await lockQuestionForRevision(tx, input.questionId);
+    if (!logicalQuestion.isActive) throw new CloserDomainError("QUESTION_STATE_CONFLICT");
+
+    const [updatedQuestion] = await tx
+      .update(question)
+      .set({ isActive: false })
+      .where(eq(question.id, input.questionId))
+      .returning();
+    if (!updatedQuestion) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+
+    await appendQuestionLifecycleEvent(tx, {
+      questionId: input.questionId,
+      action: "deactivated",
+      adminUserId: input.adminUserId,
+      reason,
+    });
+    return updatedQuestion;
+  });
+}
+
+/** Withdraw one revision and invalidate unresolved pinned candidates atomically. */
+export async function withdrawQuestionRevision(
+  database: Database,
+  input: { questionRevisionId: string; adminUserId: string; reason: string },
+) {
+  const reason = normalizeWithdrawalReason(input.reason);
+  return database.transaction(async (transaction) => {
+    const tx = transaction as unknown as Database;
+    const [revisionIdentity] = await tx
+      .select({ questionId: questionRevision.questionId })
+      .from(questionRevision)
+      .where(eq(questionRevision.id, input.questionRevisionId))
+      .limit(1);
+    if (!revisionIdentity) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+
+    await lockQuestionForRevision(tx, revisionIdentity.questionId);
+    const [lockedRevision] = await tx
+      .select()
+      .from(questionRevision)
+      .where(eq(questionRevision.id, input.questionRevisionId))
+      .for("update")
+      .limit(1);
+    if (!lockedRevision) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+    if (lockedRevision.withdrawnAt) return lockedRevision;
+
+    const withdrawnAt = new Date();
+    const [withdrawnRevision] = await tx
+      .update(questionRevision)
+      .set({ withdrawnAt })
+      .where(eq(questionRevision.id, input.questionRevisionId))
+      .returning();
+    if (!withdrawnRevision) throw new CloserDomainError("QUESTION_UNAVAILABLE");
+
+    await appendQuestionLifecycleEvent(tx, {
+      questionId: withdrawnRevision.questionId,
+      revisionId: withdrawnRevision.id,
+      action: "revision_withdrawn",
+      adminUserId: input.adminUserId,
+      occurredAt: withdrawnAt,
+      reason,
+    });
 
     const affected = await tx
       .select({
@@ -344,7 +608,7 @@ export async function withdrawQuestionRevision(database: Database, questionRevis
       .from(privateQuestionCandidate)
       .where(
         and(
-          eq(privateQuestionCandidate.questionRevisionId, questionRevisionId),
+          eq(privateQuestionCandidate.questionRevisionId, input.questionRevisionId),
           eq(privateQuestionCandidate.state, "unresolved"),
         ),
       );
@@ -378,7 +642,7 @@ export async function withdrawQuestionRevision(database: Database, questionRevis
         );
       }
     }
-    return rows[0];
+    return withdrawnRevision;
   });
 }
 

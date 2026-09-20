@@ -9,8 +9,9 @@ const { createDb } = await import("./index");
 const {
   CloserDomainError,
   advanceTogetherSession,
-  createQuestion,
-  createQuestionRevision,
+  createAdminQuestion,
+  createAdminQuestionRevision,
+  activateQuestion,
   createPairForParticipant,
   endTogetherSession,
   getTogetherQuestionPageForParticipant,
@@ -32,6 +33,7 @@ const {
   togetherSession,
   togetherSessionQuestion,
   question,
+  questionLifecycleEvent,
   questionRevision,
   privateAnswer,
   privateRound,
@@ -43,6 +45,7 @@ const db = createDb();
 const createdAuthUserIds: string[] = [];
 const createdPairIds: string[] = [];
 const createdQuestionIds: string[] = [];
+const testAdminUserId = "00000000-0000-4000-8000-000000009002";
 
 async function createAnonymousAuthUser(name = "Together test user") {
   const id = randomUUID();
@@ -54,6 +57,19 @@ async function createAnonymousAuthUser(name = "Together test user") {
     isAnonymous: true,
   });
   return id;
+}
+
+async function createTestAdminActor() {
+  await db
+    .insert(user)
+    .values({
+      id: testAdminUserId,
+      name: "Together test Admin actor",
+      email: "together-test-admin@closer.invalid",
+      isAnonymous: false,
+    })
+    .onConflictDoNothing();
+  return testAdminUserId;
 }
 
 async function createParticipant(displayName: string) {
@@ -87,7 +103,8 @@ async function createTogetherQuestion(input: {
   category: "fun" | "deep" | "memories" | "relationship" | "friendship";
   intensity: "light" | "medium" | "deep";
 }) {
-  const created = await createQuestion(db, {
+  const adminUserId = await createTestAdminActor();
+  const created = await createAdminQuestion(db, {
     text: `Ticket 07 ${input.category} ${input.intensity} ${randomUUID()}`,
     category: input.category,
     relationshipFit:
@@ -98,9 +115,11 @@ async function createTogetherQuestion(input: {
           : "both",
     modeFit: "together",
     intensity: input.intensity,
+    adminUserId,
   });
   createdQuestionIds.push(created.question.id);
-  return created;
+  await activateQuestion(db, { questionId: created.question.id, adminUserId });
+  return { ...created, adminUserId };
 }
 
 async function captureError(promise: Promise<unknown>) {
@@ -117,10 +136,9 @@ afterEach(async () => {
     await db.delete(pairMembership).where(inArray(pairMembership.pairId, createdPairIds));
     await db.delete(pair).where(inArray(pair.id, createdPairIds));
   }
-  if (createdAuthUserIds.length > 0) {
-    await db.delete(participant).where(inArray(participant.authUserId, createdAuthUserIds));
-    await db.delete(user).where(inArray(user.id, createdAuthUserIds));
-  }
+  await db
+    .delete(questionLifecycleEvent)
+    .where(eq(questionLifecycleEvent.adminUserId, testAdminUserId));
   if (createdQuestionIds.length > 0) {
     await db
       .update(question)
@@ -130,6 +148,10 @@ afterEach(async () => {
       .delete(questionRevision)
       .where(inArray(questionRevision.questionId, createdQuestionIds));
     await db.delete(question).where(inArray(question.id, createdQuestionIds));
+  }
+  if (createdAuthUserIds.length > 0) {
+    await db.delete(participant).where(inArray(participant.authUserId, createdAuthUserIds));
+    await db.delete(user).where(inArray(user.id, createdAuthUserIds));
   }
   createdPairIds.length = 0;
   createdAuthUserIds.length = 0;
@@ -625,8 +647,10 @@ describe("Closer Slice 02 Together sessions", () => {
       sessionId: started.sessionId,
     });
     if (!original.question) throw new Error("A Together session should show its first Question.");
-    const replacement = await createQuestionRevision(db, {
+    const replacement = await createAdminQuestionRevision(db, {
       questionId: original.question.id,
+      expectedCurrentRevisionId: original.question.questionRevisionId,
+      adminUserId: await createTestAdminActor(),
       text: "Ticket 07 later wording",
       category: "fun",
       relationshipFit: "both",
@@ -1247,7 +1271,11 @@ describe("Closer Slice 02 Together sessions", () => {
       band: "light",
     });
     const withdrawn = page.items[0]!;
-    await withdrawQuestionRevision(db, withdrawn.questionRevisionId);
+    await withdrawQuestionRevision(db, {
+      questionRevisionId: withdrawn.questionRevisionId,
+      adminUserId: await createTestAdminActor(),
+      reason: "Together safety regression fixture.",
+    });
 
     expect(
       await captureError(

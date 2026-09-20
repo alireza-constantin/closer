@@ -11,7 +11,8 @@ const {
   CloserDomainError,
   advanceTogetherSession,
   selectSharedOpenPrivateCandidate: askPrivateQuestionCandidate,
-  createQuestion,
+  activateQuestion,
+  createAdminQuestion,
   createPairForParticipant,
   retireSharedOpenPrivateRound: declinePrivateRound,
   getFormerEraHistoryForParticipant,
@@ -41,6 +42,7 @@ const {
   privateQuestionCandidate,
   privateRound,
   question,
+  questionLifecycleEvent,
   questionRevision,
   rejoinInvite,
   togetherSession,
@@ -51,16 +53,33 @@ const db = createDb();
 const userIds: string[] = [];
 const pairIds: string[] = [];
 const questionIds: string[] = [];
+const testAdminUserId = "00000000-0000-4000-8000-000000009003";
+
+async function createTestAdminActor() {
+  await db
+    .insert(user)
+    .values({
+      id: testAdminUserId,
+      name: "Termination test Admin actor",
+      email: "termination-test-admin@closer.invalid",
+      isAnonymous: false,
+    })
+    .onConflictDoNothing();
+  return testAdminUserId;
+}
 
 async function createTerminationQuestion(category: "deep" | "fun") {
-  const created = await createQuestion(db, {
+  const adminUserId = await createTestAdminActor();
+  const created = await createAdminQuestion(db, {
     text: `A ${category} question for terminal Pair coverage.`,
     category,
     relationshipFit: "both",
     modeFit: "both",
     intensity: "light",
+    adminUserId,
   });
   questionIds.push(created.question.id);
+  await activateQuestion(db, { questionId: created.question.id, adminUserId });
 }
 
 async function createGuestAuthUser(displayName: string) {
@@ -130,6 +149,9 @@ async function askCurrentCandidate(
 afterEach(async () => {
   if (pairIds.length) await db.delete(pair).where(inArray(pair.id, pairIds));
   if (questionIds.length) {
+    await db
+      .delete(questionLifecycleEvent)
+      .where(inArray(questionLifecycleEvent.questionId, questionIds));
     await db
       .update(question)
       .set({ currentRevisionId: null })

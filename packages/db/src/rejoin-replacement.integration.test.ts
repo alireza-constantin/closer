@@ -10,9 +10,10 @@ const { createDb } = await import("./index");
 const {
   CloserDomainError,
   advanceTogetherSession,
+  activateQuestion,
+  createAdminQuestion,
+  createAdminQuestionRevision,
   selectSharedOpenPrivateCandidate: askPrivateQuestionCandidate,
-  createQuestion,
-  createQuestionRevision,
   createPairForParticipant,
   retireSharedOpenPrivateRound: declinePrivateRound,
   endTogetherSession,
@@ -45,6 +46,7 @@ const {
   privateQuestionCandidate,
   privateRound,
   question,
+  questionLifecycleEvent,
   questionRevision,
   togetherSession,
   togetherSessionQuestion,
@@ -56,19 +58,36 @@ const db = createDb();
 const userIds: string[] = [];
 const pairIds: string[] = [];
 const testQuestionIds: string[] = [];
+const testAdminUserId = "00000000-0000-4000-8000-000000009004";
+
+async function createTestAdminActor() {
+  await db
+    .insert(user)
+    .values({
+      id: testAdminUserId,
+      name: "Rejoin test Admin actor",
+      email: "rejoin-test-admin@closer.invalid",
+      isAnonymous: false,
+    })
+    .onConflictDoNothing();
+  return testAdminUserId;
+}
 
 async function createTestQuestion(
   category: "deep" | "fun" | "memories" | "relationship",
   modeFit: "both" | "private" | "together" = "private",
 ) {
-  const created = await createQuestion(db, {
+  const adminUserId = await createTestAdminActor();
+  const created = await createAdminQuestion(db, {
     text: `Rejoin regression ${category} ${randomUUID()}`,
     category,
     relationshipFit: category === "relationship" ? "partner" : "both",
     modeFit,
     intensity: "light",
+    adminUserId,
   });
   testQuestionIds.push(created.question.id);
+  await activateQuestion(db, { questionId: created.question.id, adminUserId });
   return created;
 }
 
@@ -153,17 +172,20 @@ afterEach(async () => {
     await db.delete(pairMembership).where(inArray(pairMembership.pairId, pairIds));
     await db.delete(pair).where(inArray(pair.id, pairIds));
   }
-  if (userIds.length) {
-    await db.delete(participant).where(inArray(participant.authUserId, userIds));
-    await db.delete(user).where(inArray(user.id, userIds));
-  }
   if (testQuestionIds.length) {
+    await db
+      .delete(questionLifecycleEvent)
+      .where(inArray(questionLifecycleEvent.questionId, testQuestionIds));
     await db
       .update(question)
       .set({ currentRevisionId: null })
       .where(inArray(question.id, testQuestionIds));
     await db.delete(questionRevision).where(inArray(questionRevision.questionId, testQuestionIds));
     await db.delete(question).where(inArray(question.id, testQuestionIds));
+  }
+  if (userIds.length) {
+    await db.delete(participant).where(inArray(participant.authUserId, userIds));
+    await db.delete(user).where(inArray(user.id, userIds));
   }
   pairIds.length = 0;
   userIds.length = 0;
@@ -574,8 +596,17 @@ test("former-era history is participant-relative, revision-pinned, and immutable
       .from(questionRevision)
       .where(eq(questionRevision.id, originalRound.questionRevisionId))
   )[0]!;
-  await createQuestionRevision(db, {
+  const [originalQuestionState] = await db
+    .select({ currentRevisionId: question.currentRevisionId })
+    .from(question)
+    .where(eq(question.id, originalRevision.questionId))
+    .limit(1);
+  if (!originalQuestionState?.currentRevisionId)
+    throw new Error("Original Question has no current revision.");
+  await createAdminQuestionRevision(db, {
     questionId: originalRevision.questionId,
+    expectedCurrentRevisionId: originalQuestionState.currentRevisionId,
+    adminUserId: await createTestAdminActor(),
     text: "A later edit must not replace history.",
     category: originalRevision.category,
     relationshipFit: originalRevision.relationshipFit,
@@ -594,8 +625,17 @@ test("former-era history is participant-relative, revision-pinned, and immutable
       .from(questionRevision)
       .where(eq(questionRevision.id, originalTogetherCard.questionRevisionId))
   )[0]!;
-  await createQuestionRevision(db, {
+  const [originalTogetherQuestionState] = await db
+    .select({ currentRevisionId: question.currentRevisionId })
+    .from(question)
+    .where(eq(question.id, originalTogetherRevision.questionId))
+    .limit(1);
+  if (!originalTogetherQuestionState?.currentRevisionId)
+    throw new Error("Original Together Question has no current revision.");
+  await createAdminQuestionRevision(db, {
     questionId: originalTogetherRevision.questionId,
+    expectedCurrentRevisionId: originalTogetherQuestionState.currentRevisionId,
+    adminUserId: await createTestAdminActor(),
     text: "A later Together edit must not replace history.",
     category: originalTogetherRevision.category,
     relationshipFit: originalTogetherRevision.relationshipFit,

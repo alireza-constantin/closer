@@ -13,7 +13,6 @@ const {
   setPrivateQuestionCandidateLike,
   skipPrivateQuestionCandidate,
   retireSharedOpenPrivateRound: declinePrivateRound,
-  createQuestion,
   createPairForParticipant,
   getPrivateRoundForParticipant,
   getPrivateRoundStatusForParticipant,
@@ -33,7 +32,9 @@ const {
   setPrivateReply,
   submitPrivateAnswer,
   startOrResumePrivateConversation,
-  reviseQuestion,
+  activateQuestion,
+  createAdminQuestion,
+  createAdminQuestionRevision,
   withdrawQuestionRevision,
 } = await import("./closer");
 const {
@@ -48,6 +49,7 @@ const {
   privateRevealView,
   privateRound,
   question,
+  questionLifecycleEvent,
   questionRevision,
 } = await import("./schema/closer");
 const { user } = await import("./schema/auth");
@@ -56,6 +58,7 @@ const db = createDb();
 const authUserIds: string[] = [];
 const pairIds: string[] = [];
 const testQuestionIds: string[] = [];
+const testAdminUserId = "00000000-0000-4000-8000-000000009001";
 const questionIds = {
   fun: "00000000-0000-4000-8000-000000000101",
   deep: "00000000-0000-4000-8000-000000000201",
@@ -77,6 +80,19 @@ async function createParticipant(name: string) {
     authUserId: await createAuthUser(name),
     displayName: name,
   });
+}
+
+async function createTestAdminActor() {
+  await db
+    .insert(user)
+    .values({
+      id: testAdminUserId,
+      name: "Private test Admin actor",
+      email: "private-test-admin@closer.invalid",
+      isAnonymous: false,
+    })
+    .onConflictDoNothing();
+  return testAdminUserId;
 }
 
 async function issueFreshInitialInvite(participantId: string, pairId: string) {
@@ -181,15 +197,18 @@ async function createPrivateTestQuestion(
   intensity: "light" | "medium" | "deep",
   category: "deep" | "fun" = "deep",
 ) {
-  const created = await createQuestion(db, {
+  const adminUserId = await createTestAdminActor();
+  const created = await createAdminQuestion(db, {
     text: `Ticket 09 ${category} ${intensity} candidate ${randomUUID()}`,
     category,
     relationshipFit: "both",
     modeFit: "private",
     intensity,
+    adminUserId,
   });
   testQuestionIds.push(created.question.id);
-  return created;
+  await activateQuestion(db, { questionId: created.question.id, adminUserId });
+  return { ...created, adminUserId };
 }
 
 async function makeReady(
@@ -222,10 +241,9 @@ afterEach(async () => {
     await db.delete(pairMembership).where(inArray(pairMembership.pairId, pairIds));
     await db.delete(pair).where(inArray(pair.id, pairIds));
   }
-  if (authUserIds.length) {
-    await db.delete(participant).where(inArray(participant.authUserId, authUserIds));
-    await db.delete(user).where(inArray(user.id, authUserIds));
-  }
+  await db
+    .delete(questionLifecycleEvent)
+    .where(eq(questionLifecycleEvent.adminUserId, testAdminUserId));
   if (testQuestionIds.length) {
     await db
       .update(question)
@@ -233,6 +251,10 @@ afterEach(async () => {
       .where(inArray(question.id, testQuestionIds));
     await db.delete(questionRevision).where(inArray(questionRevision.questionId, testQuestionIds));
     await db.delete(question).where(inArray(question.id, testQuestionIds));
+  }
+  if (authUserIds.length) {
+    await db.delete(participant).where(inArray(participant.authUserId, authUserIds));
+    await db.delete(user).where(inArray(user.id, authUserIds));
   }
   pairIds.length = 0;
   authUserIds.length = 0;
@@ -1076,8 +1098,11 @@ describe("Closer Slice 01B Private rounds", () => {
     });
     if (started.state !== "CANDIDATE") throw new Error("Expected candidate projection.");
     const originalText = started.candidate.question.text;
-    const revision = await reviseQuestion(db, {
+    const adminUserId = await createTestAdminActor();
+    const revision = await createAdminQuestionRevision(db, {
       questionId: started.candidate.question.id,
+      expectedCurrentRevisionId: started.candidate.question.questionRevisionId,
+      adminUserId,
       text: "A later wording that must not rewrite the candidate",
       category: "deep",
       relationshipFit: "both",
@@ -1098,7 +1123,11 @@ describe("Closer Slice 01B Private rounds", () => {
         },
       },
     });
-    await withdrawQuestionRevision(db, started.candidate.question.questionRevisionId);
+    await withdrawQuestionRevision(db, {
+      questionRevisionId: started.candidate.question.questionRevisionId,
+      adminUserId: await createTestAdminActor(),
+      reason: "Private safety regression fixture.",
+    });
     const candidates = await db
       .select()
       .from(privateQuestionCandidate)
@@ -1136,8 +1165,10 @@ describe("Closer Slice 01B Private rounds", () => {
       candidateId: started.candidate.id,
       liked: true,
     });
-    await reviseQuestion(db, {
+    await createAdminQuestionRevision(db, {
       questionId: started.candidate.question.id,
+      expectedCurrentRevisionId: started.candidate.question.questionRevisionId,
+      adminUserId: await createTestAdminActor(),
       text: "A later revision must not change Ask",
       category: "deep",
       relationshipFit: "both",
@@ -1379,7 +1410,11 @@ describe("Closer Slice 01B Private rounds", () => {
       candidateId: started.candidate.id,
       liked: true,
     });
-    await withdrawQuestionRevision(db, started.candidate.question.questionRevisionId);
+    await withdrawQuestionRevision(db, {
+      questionRevisionId: started.candidate.question.questionRevisionId,
+      adminUserId: await createTestAdminActor(),
+      reason: "Private Like safety regression fixture.",
+    });
     const [candidate] = await db
       .select()
       .from(privateQuestionCandidate)
@@ -1423,8 +1458,16 @@ describe("Closer Slice 01B Private rounds", () => {
     expect(new Set(skippedQuestionIds).size).toBe(skippedQuestionIds.length);
     const firstSkipped = skippedQuestionIds[0];
     if (!firstSkipped) throw new Error("Expected at least one skipped Question.");
-    await reviseQuestion(db, {
+    const [skippedQuestion] = await db
+      .select({ currentRevisionId: question.currentRevisionId })
+      .from(question)
+      .where(eq(question.id, firstSkipped))
+      .limit(1);
+    if (!skippedQuestion?.currentRevisionId) throw new Error("Skipped Question has no revision.");
+    await createAdminQuestionRevision(db, {
       questionId: firstSkipped,
+      expectedCurrentRevisionId: skippedQuestion.currentRevisionId,
+      adminUserId: await createTestAdminActor(),
       text: "A new revision of a skipped question",
       category: "deep",
       relationshipFit: "both",
