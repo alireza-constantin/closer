@@ -237,7 +237,7 @@ export async function createQuestion(database: Database, input: QuestionRevision
 
     const insertedRevision = await tx
       .insert(questionRevision)
-      .values({ questionId: logicalQuestion.id, ...revisionInput })
+      .values({ questionId: logicalQuestion.id, revisionNumber: 1, ...revisionInput })
       .returning();
     const revision = insertedRevision[0];
     if (!revision) throw new Error("Question creation did not return a revision.");
@@ -268,9 +268,20 @@ export async function createQuestionRevision(
       .limit(1);
     if (!logicalQuestion[0]) throw new CloserDomainError("QUESTION_UNAVAILABLE");
 
+    const [latestRevision] = await tx
+      .select({ revisionNumber: questionRevision.revisionNumber })
+      .from(questionRevision)
+      .where(eq(questionRevision.questionId, input.questionId))
+      .orderBy(desc(questionRevision.revisionNumber))
+      .limit(1);
+
     const insertedRevision = await tx
       .insert(questionRevision)
-      .values({ questionId: input.questionId, ...revisionInput })
+      .values({
+        questionId: input.questionId,
+        revisionNumber: (latestRevision?.revisionNumber ?? 0) + 1,
+        ...revisionInput,
+      })
       .returning();
     const revision = insertedRevision[0];
     if (!revision) throw new Error("Question revision creation did not return a revision.");

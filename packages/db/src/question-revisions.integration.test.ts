@@ -29,6 +29,7 @@ const {
   privateConversation,
   privateRound,
   question,
+  questionLifecycleEvent,
   questionRevision,
   togetherSession,
   togetherSessionQuestion,
@@ -38,6 +39,16 @@ const { user } = await import("./schema/auth");
 const db = createDb();
 const authUserIds: string[] = [];
 const pairIds: string[] = [];
+const questionIds: string[] = [];
+
+async function expectDatabaseFailure(query: PromiseLike<unknown>) {
+  try {
+    await query;
+  } catch {
+    return;
+  }
+  throw new Error("Expected the database query to fail.");
+}
 
 async function createParticipant(name = "Question test participant") {
   const authUserId = randomUUID();
@@ -75,13 +86,15 @@ async function createJoinedPair() {
 }
 
 async function createTestQuestion() {
-  return createQuestion(db, {
+  const created = await createQuestion(db, {
     text: "A first immutable question",
     category: "fun",
     relationshipFit: "both",
     modeFit: "both",
     intensity: "light",
   });
+  questionIds.push(created.question.id);
+  return created;
 }
 
 afterEach(async () => {
@@ -92,12 +105,24 @@ afterEach(async () => {
     await db.delete(pairMembership).where(inArray(pairMembership.pairId, pairIds));
     await db.delete(pair).where(inArray(pair.id, pairIds));
   }
+  if (questionIds.length) {
+    await db
+      .delete(questionLifecycleEvent)
+      .where(inArray(questionLifecycleEvent.questionId, questionIds));
+    await db
+      .update(question)
+      .set({ currentRevisionId: null })
+      .where(inArray(question.id, questionIds));
+    await db.delete(questionRevision).where(inArray(questionRevision.questionId, questionIds));
+    await db.delete(question).where(inArray(question.id, questionIds));
+  }
   if (authUserIds.length) {
     await db.delete(participant).where(inArray(participant.authUserId, authUserIds));
     await db.delete(user).where(inArray(user.id, authUserIds));
   }
   pairIds.length = 0;
   authUserIds.length = 0;
+  questionIds.length = 0;
 });
 
 afterAll(async () => {
@@ -117,6 +142,8 @@ describe("Ticket 06 logical Questions and immutable revisions", () => {
     });
 
     expect(first.revision.id).not.toBe(second.revision.id);
+    expect(first.revision.revisionNumber).toBe(1);
+    expect(second.revision.revisionNumber).toBe(2);
     expect(second.question.id).toBe(first.question.id);
     expect(first.revision.text).toBe("A first immutable question");
     expect(first.revision.category).toBe("fun");
@@ -127,6 +154,83 @@ describe("Ticket 06 logical Questions and immutable revisions", () => {
         await db.select().from(questionRevision).where(eq(questionRevision.id, first.revision.id))
       )[0]?.text,
     ).toBe("A first immutable question");
+  });
+
+  test("serializes concurrent revisions into successive ordinals", async () => {
+    const first = await createTestQuestion();
+    const revisions = await Promise.all([
+      createQuestionRevision(db, {
+        questionId: first.question.id,
+        text: "Concurrent revision A",
+        category: "fun",
+        relationshipFit: "both",
+        modeFit: "both",
+        intensity: "light",
+      }),
+      createQuestionRevision(db, {
+        questionId: first.question.id,
+        text: "Concurrent revision B",
+        category: "deep",
+        relationshipFit: "both",
+        modeFit: "both",
+        intensity: "medium",
+      }),
+    ]);
+
+    expect(revisions.map(({ revision }) => revision.revisionNumber).sort()).toEqual([2, 3]);
+    const currentQuestion = (
+      await db.select().from(question).where(eq(question.id, first.question.id))
+    )[0];
+    expect(
+      revisions.find(({ revision }) => revision.id === currentQuestion?.currentRevisionId)?.revision
+        .revisionNumber,
+    ).toBe(3);
+  });
+
+  test("database enforces ordinal uniqueness and current-revision ownership", async () => {
+    const first = await createTestQuestion();
+    const second = await createTestQuestion();
+
+    await expectDatabaseFailure(
+      db.insert(questionRevision).values({
+        questionId: first.question.id,
+        revisionNumber: first.revision.revisionNumber,
+        text: "Duplicate ordinal",
+        category: "fun",
+        relationshipFit: "both",
+        modeFit: "both",
+        intensity: "light",
+      }),
+    );
+
+    await expectDatabaseFailure(
+      db
+        .update(question)
+        .set({ currentRevisionId: first.revision.id })
+        .where(eq(question.id, second.question.id)),
+    );
+  });
+
+  test("withdrawal lifecycle records require a reason and a revision owned by the Question", async () => {
+    const { question: logicalQuestion, revision } = await createTestQuestion();
+    const admin = await createParticipant("Question test Admin");
+
+    await expectDatabaseFailure(
+      db.insert(questionLifecycleEvent).values({
+        questionId: logicalQuestion.id,
+        revisionId: revision.id,
+        action: "revision_withdrawn",
+        adminUserId: admin.authUserId,
+      }),
+    );
+
+    await db.insert(questionLifecycleEvent).values({
+      questionId: logicalQuestion.id,
+      revisionId: revision.id,
+      action: "revision_withdrawn",
+      adminUserId: admin.authUserId,
+      reason: "Safety review",
+    });
   });
 
   test("deactivation and withdrawal remove content from new occurrence selection without rewriting revisions", async () => {

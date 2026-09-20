@@ -33,6 +33,12 @@ export const questionRelationshipFit = pgEnum("question_relationship_fit", [
 ]);
 export const questionModeFit = pgEnum("question_mode_fit", ["both", "together", "private"]);
 export const questionIntensity = pgEnum("question_intensity", ["light", "medium", "deep"]);
+export const questionLifecycleAction = pgEnum("question_lifecycle_action", [
+  "activated",
+  "reactivated",
+  "deactivated",
+  "revision_withdrawn",
+]);
 export const privateReactionValue = pgEnum("private_reaction_value", [
   "heart",
   "laugh",
@@ -169,20 +175,6 @@ export const initialInvite = pgTable(
   ],
 );
 
-export const question = pgTable(
-  "question",
-  {
-    id: uuid("id").defaultRandom().primaryKey(),
-    currentRevisionId: uuid("current_revision_id").references(
-      (): AnyPgColumn => questionRevision.id,
-      { onDelete: "restrict" },
-    ),
-    isActive: boolean("is_active").default(true).notNull(),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
-  },
-  (table) => [index("question_selection_idx").on(table.isActive, table.currentRevisionId)],
-);
-
 export const questionRevision = pgTable(
   "question_revision",
   {
@@ -195,11 +187,16 @@ export const questionRevision = pgTable(
     relationshipFit: questionRelationshipFit("relationship_fit").notNull(),
     modeFit: questionModeFit("mode_fit").notNull(),
     intensity: questionIntensity("intensity").notNull(),
+    revisionNumber: integer("revision_number").notNull(),
+    createdByAdminUserId: text("created_by_admin_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
     withdrawnAt: timestamp("withdrawn_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
     unique("question_revision_question_id_id_key").on(table.questionId, table.id),
+    unique("question_revision_question_number_key").on(table.questionId, table.revisionNumber),
     index("question_revision_selection_idx").on(
       table.category,
       table.modeFit,
@@ -211,6 +208,57 @@ export const questionRevision = pgTable(
     check(
       "question_revision_category_relationship_fit_valid",
       sql`(${table.category} not in ('relationship', 'friendship')) or (${table.category} = 'relationship' and ${table.relationshipFit} = 'partner') or (${table.category} = 'friendship' and ${table.relationshipFit} = 'friend')`,
+    ),
+  ],
+);
+
+export const question = pgTable(
+  "question",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    currentRevisionId: uuid("current_revision_id").references(
+      (): AnyPgColumn => questionRevision.id,
+      { onDelete: "restrict" },
+    ),
+    isActive: boolean("is_active").default(true).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("question_selection_idx").on(table.isActive, table.currentRevisionId),
+    foreignKey({
+      name: "question_current_revision_question_fk",
+      columns: [table.id, table.currentRevisionId],
+      foreignColumns: [questionRevision.questionId, questionRevision.id],
+    }).onDelete("restrict"),
+  ],
+);
+
+export const questionLifecycleEvent = pgTable(
+  "question_lifecycle_event",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    questionId: uuid("question_id")
+      .notNull()
+      .references(() => question.id, { onDelete: "restrict" }),
+    revisionId: uuid("revision_id"),
+    action: questionLifecycleAction("action").notNull(),
+    adminUserId: text("admin_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    occurredAt: timestamp("occurred_at").defaultNow().notNull(),
+    reason: text("reason"),
+  },
+  (table) => [
+    foreignKey({
+      name: "question_lifecycle_event_revision_question_fk",
+      columns: [table.questionId, table.revisionId],
+      foreignColumns: [questionRevision.questionId, questionRevision.id],
+    }).onDelete("restrict"),
+    index("question_lifecycle_event_occurred_idx").on(table.occurredAt),
+    index("question_lifecycle_event_question_occurred_idx").on(table.questionId, table.occurredAt),
+    check(
+      "question_lifecycle_withdrawal_reason_required",
+      sql`${table.action} <> 'revision_withdrawn' or (${table.revisionId} is not null and ${table.reason} is not null and char_length(btrim(${table.reason})) > 0)`,
     ),
   ],
 );
