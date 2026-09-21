@@ -15,7 +15,7 @@ const { question, questionLifecycleEvent, questionRevision } =
 const { user } = await import("@Closer/db/schema/auth");
 
 mock.module("server-only", () => ({}));
-const { getAdminOverview } = await import("./admin-overview.service");
+const { getAdminOverview, inventoryLevel } = await import("./admin-overview.service");
 
 const adminUserId = `admin-overview-${randomUUID()}`;
 const questionIds: string[] = [];
@@ -131,6 +131,16 @@ afterAll(async () => {
 });
 
 describe("Admin operational overview", () => {
+  test("keeps the established coverage thresholds", () => {
+    expect([0, 5, 6, 11, 12].map(inventoryLevel)).toEqual([
+      "critical",
+      "critical",
+      "low",
+      "low",
+      "healthy",
+    ]);
+  });
+
   test("counts eligible current inventory lanes and shows only current withdrawals and editorial activity", async () => {
     const overview = await getAdminOverview(admin);
     const findLane = (

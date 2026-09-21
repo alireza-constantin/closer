@@ -4,6 +4,7 @@ import type { Route } from "next";
 import type { getAdminOverview } from "@/server/modules/admin-questions/admin-overview.service";
 
 import { CategoryValue } from "./admin-facets";
+import { QuestionCoverageSummary } from "./admin-question-coverage";
 
 type AdminOverview = Awaited<ReturnType<typeof getAdminOverview>>;
 
@@ -28,83 +29,12 @@ function actionLabel(action: string) {
   );
 }
 
-function InventoryLaneList({
-  title,
-  lanes,
-  level,
-}: {
-  title: string;
-  lanes: AdminOverview["criticalInventoryLanes"];
-  level: "critical" | "low";
-}) {
-  return (
-    <section aria-label={`${title} inventory lanes`} className="mt-5">
-      <h3 className="text-closer-muted text-xs font-extrabold tracking-wide uppercase">{title}</h3>
-      {lanes.length ? (
-        <ul className="mt-2 space-y-2">
-          {lanes.map((lane) => (
-            <li
-              className="border-closer-navy/10 flex flex-wrap items-start justify-between gap-3 rounded-xl border bg-white/75 px-3 py-3"
-              key={`${lane.category}:${lane.relationship}:${lane.mode}`}
-            >
-              <div className="min-w-0">
-                <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-bold">
-                  <span>
-                    <span className="sr-only">Category: </span>
-                    <CategoryValue category={lane.category} />
-                  </span>
-                  <span aria-hidden="true" className="text-closer-muted">
-                    ·
-                  </span>
-                  <span>{lane.relationship === "partner" ? "Partner" : "Friend"}</span>
-                  <span aria-hidden="true" className="text-closer-muted">
-                    ·
-                  </span>
-                  <span>{lane.mode === "private" ? "Private" : "Together"}</span>
-                </p>
-                <p className="text-closer-muted mt-1 text-xs">
-                  Intensity breakdown (diagnostic): Light {lane.intensityBreakdown.light} · Medium{" "}
-                  {lane.intensityBreakdown.medium} · Deep {lane.intensityBreakdown.deep}
-                </p>
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
-                <span
-                  className={`rounded-lg px-2.5 py-1 text-xs font-extrabold ${level === "critical" ? "bg-closer-error/10 text-closer-error" : "bg-closer-coral/30 text-closer-navy"}`}
-                >
-                  {level === "critical" ? "Critical" : "Low"}
-                </span>
-                <span className="text-sm font-extrabold">
-                  {lane.eligibleQuestions} eligible Questions
-                </span>
-              </div>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="text-closer-muted bg-closer-cream mt-2 rounded-xl px-4 py-5 text-center text-sm">
-          No {title.toLowerCase()} inventory lanes.
-        </p>
-      )}
-    </section>
-  );
-}
-
 export function AdminOverviewWorkspace({ data }: { data: AdminOverview }) {
   return (
     <div className="grid gap-5 xl:grid-cols-2">
-      <section
-        aria-labelledby="inventory-heading"
-        className="rounded-closer-panel shadow-closer-soft bg-white/90 p-5 md:p-6"
-      >
-        <div>
-          <h2 className="font-extrabold" id="inventory-heading">
-            Inventory lanes needing attention
-          </h2>
-          <p className="text-closer-muted mt-1 text-xs">Category × relationship × mode</p>
-        </div>
-        <InventoryLaneList level="critical" lanes={data.criticalInventoryLanes} title="Critical" />
-        <InventoryLaneList level="low" lanes={data.lowInventoryLanes} title="Low" />
-      </section>
+      <QuestionCoverageSummary
+        lanes={[...data.criticalInventoryLanes, ...data.lowInventoryLanes]}
+      />
 
       <section
         aria-labelledby="withdrawn-heading"

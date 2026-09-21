@@ -60,12 +60,6 @@ function laneKey(category: Category, relationship: Relationship, mode: Mode) {
   return `${category}:${relationship}:${mode}`;
 }
 
-function inventoryLevel(countValue: number): InventoryLevel {
-  if (countValue <= CRITICAL_INVENTORY_MAX) return "critical";
-  if (countValue <= LOW_INVENTORY_MAX) return "low";
-  return "healthy";
-}
-
 function iso(value: Date | string) {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
@@ -74,39 +68,86 @@ function actorLabel(name: string | null | undefined) {
   return name?.trim() || "Admin";
 }
 
+export function inventoryLevel(countValue: number): InventoryLevel {
+  if (countValue <= CRITICAL_INVENTORY_MAX) return "critical";
+  if (countValue <= LOW_INVENTORY_MAX) return "low";
+  return "healthy";
+}
+
+async function getInventoryCoverageLanes() {
+  const inventoryRows = await db
+    .select({
+      category: questionRevision.category,
+      relationshipFit: questionRevision.relationshipFit,
+      modeFit: questionRevision.modeFit,
+      intensity: questionRevision.intensity,
+      eligibleQuestions: count(question.id),
+    })
+    .from(question)
+    .innerJoin(
+      questionRevision,
+      and(
+        eq(question.id, questionRevision.questionId),
+        eq(question.currentRevisionId, questionRevision.id),
+      ),
+    )
+    .where(
+      and(
+        eq(question.isActive, true),
+        isNull(questionRevision.withdrawnAt),
+        categoryEligibilityCondition(),
+      ),
+    )
+    .groupBy(
+      questionRevision.category,
+      questionRevision.relationshipFit,
+      questionRevision.modeFit,
+      questionRevision.intensity,
+    );
+
+  const laneMap = new Map<string, Omit<InventoryLane, "level">>();
+  for (const category of categories) {
+    for (const relationship of eligibleRelationshipsByCategory[category]) {
+      for (const mode of modes) {
+        laneMap.set(laneKey(category, relationship, mode), {
+          category,
+          relationship,
+          mode,
+          eligibleQuestions: 0,
+          intensityBreakdown: { light: 0, medium: 0, deep: 0 },
+        });
+      }
+    }
+  }
+
+  for (const row of inventoryRows) {
+    const rowRelationships = row.relationshipFit === "both" ? relationships : [row.relationshipFit];
+    const rowModes = row.modeFit === "both" ? modes : [row.modeFit];
+    for (const relationship of rowRelationships) {
+      for (const mode of rowModes) {
+        const lane = laneMap.get(laneKey(row.category, relationship, mode));
+        if (!lane) continue;
+        lane.eligibleQuestions += row.eligibleQuestions;
+        lane.intensityBreakdown[row.intensity] += row.eligibleQuestions;
+      }
+    }
+  }
+
+  return [...laneMap.values()].map((lane) => ({
+    ...lane,
+    level: inventoryLevel(lane.eligibleQuestions),
+  }));
+}
+
+export async function getAdminQuestionCoverage(_admin: AdminSession) {
+  return getInventoryCoverageLanes();
+}
+
 export async function getAdminOverview(_admin: AdminSession) {
   const currentRevision = alias(questionRevision, "admin_overview_current_revision");
   const affectedRevision = alias(questionRevision, "admin_overview_affected_revision");
-  const [inventoryRows, withdrawnCountRows, withdrawnQuestions, editorialRows] = await Promise.all([
-    db
-      .select({
-        category: questionRevision.category,
-        relationshipFit: questionRevision.relationshipFit,
-        modeFit: questionRevision.modeFit,
-        intensity: questionRevision.intensity,
-        eligibleQuestions: count(question.id),
-      })
-      .from(question)
-      .innerJoin(
-        questionRevision,
-        and(
-          eq(question.id, questionRevision.questionId),
-          eq(question.currentRevisionId, questionRevision.id),
-        ),
-      )
-      .where(
-        and(
-          eq(question.isActive, true),
-          isNull(questionRevision.withdrawnAt),
-          categoryEligibilityCondition(),
-        ),
-      )
-      .groupBy(
-        questionRevision.category,
-        questionRevision.relationshipFit,
-        questionRevision.modeFit,
-        questionRevision.intensity,
-      ),
+  const [lanes, withdrawnCountRows, withdrawnQuestions, editorialRows] = await Promise.all([
+    getInventoryCoverageLanes(),
     db
       .select({ total: count() })
       .from(question)
@@ -160,39 +201,6 @@ export async function getAdminOverview(_admin: AdminSession) {
       .orderBy(desc(questionLifecycleEvent.occurredAt), desc(questionLifecycleEvent.id))
       .limit(RECENT_EDITORIAL_ACTIVITY_LIMIT),
   ]);
-
-  const laneMap = new Map<string, Omit<InventoryLane, "level">>();
-  for (const category of categories) {
-    for (const relationship of eligibleRelationshipsByCategory[category]) {
-      for (const mode of modes) {
-        laneMap.set(laneKey(category, relationship, mode), {
-          category,
-          relationship,
-          mode,
-          eligibleQuestions: 0,
-          intensityBreakdown: { light: 0, medium: 0, deep: 0 },
-        });
-      }
-    }
-  }
-
-  for (const row of inventoryRows) {
-    const rowRelationships = row.relationshipFit === "both" ? relationships : [row.relationshipFit];
-    const rowModes = row.modeFit === "both" ? modes : [row.modeFit];
-    for (const relationship of rowRelationships) {
-      for (const mode of rowModes) {
-        const lane = laneMap.get(laneKey(row.category, relationship, mode));
-        if (!lane) continue;
-        lane.eligibleQuestions += row.eligibleQuestions;
-        lane.intensityBreakdown[row.intensity] += row.eligibleQuestions;
-      }
-    }
-  }
-
-  const lanes = [...laneMap.values()].map((lane) => ({
-    ...lane,
-    level: inventoryLevel(lane.eligibleQuestions),
-  }));
 
   return {
     criticalInventoryLanes: lanes.filter((lane) => lane.level === "critical"),

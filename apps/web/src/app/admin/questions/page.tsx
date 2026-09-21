@@ -1,9 +1,11 @@
 import { adminQuestionAnalyticsQuerySchema } from "@/contracts/admin/question.schema";
+import { getAdminQuestionCoverage } from "@/server/modules/admin-questions/admin-overview.service";
 import { listAdminQuestionAnalytics } from "@/server/modules/admin-questions/admin-question-analytics.service";
 import { listAdminQuestions } from "@/server/modules/admin-questions/admin-question.service";
 
 import { AdminSectionHeading } from "../_components/admin-facets";
 import { AdminShell } from "../_components/admin-shell";
+import { QuestionCoverageWorkspace } from "../_components/admin-question-coverage";
 import { AdminQuestionWorkspace } from "../_components/admin-question-workspace";
 import type { AdminQuestionView } from "../_components/admin-workspace-tabs";
 import { requireAdminPage } from "../_lib/admin-page";
@@ -17,6 +19,20 @@ export default async function AdminQuestionsPage({
 }) {
   const admin = await requireAdminPage();
   const params = await searchParams;
+  if (params.coverage === "all") {
+    const lanes = await getAdminQuestionCoverage(admin);
+
+    return (
+      <AdminShell activeSection="questions" userEmail={admin.user.email} userName={admin.user.name}>
+        <AdminSectionHeading
+          description="See eligible question counts and intensity for every conversation type."
+          title="Question coverage"
+        />
+        <QuestionCoverageWorkspace lanes={lanes} />
+      </AdminShell>
+    );
+  }
+
   const viewValue = typeof params.view === "string" ? params.view : "operations";
   const view: AdminQuestionView =
     viewValue === "private" || viewValue === "together" ? viewValue : "operations";
