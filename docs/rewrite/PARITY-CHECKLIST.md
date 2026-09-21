@@ -217,6 +217,60 @@ Canonical tests: `packages/db/src/realtime.test.ts`,
 
 ## 9. Black-box parity harness
 
+PARITY-01 keeps the scenarios in [`scripts/parity/cases.ts`](../../scripts/parity/cases.ts)
+and the adapter-neutral observation/normalization contract in
+[`scripts/parity/model.ts`](../../scripts/parity/model.ts). Each case records
+its gate, fixture preconditions, actor and operation sequence, expected results
+and persisted facts, viewer-relative projection assertions, applicable
+post-commit events, and links to the current Next oracle tests or canonical
+contract. The catalog is deliberately data-shaped TypeScript rather than a
+second domain model.
+
+Run the foundation checks without opening a database:
+
+```sh
+bun test scripts/parity/model.test.ts
+```
+
+The current Next/TypeScript implementation remains the oracle. The catalog's
+`sources` point to its existing domain, route, and UI tests. Cases without an
+existing focused oracle test are still explicit parity requirements sourced
+from the frozen contracts; they remain reference-only until an OLD adapter can
+exercise them.
+
+| Area                        | Mandatory catalog coverage | Current oracle references                                                                                                                                                                     |
+| --------------------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Auth ownership              | `auth.*`                   | `packages/db/src/closer.integration.test.ts`, `packages/auth/src/admin-auth.integration.test.ts`, `apps/web/src/app/prefetch-safety.test.ts`, `apps/web/src/app/api/onboarding/route.test.ts` |
+| Pair, invite, era           | `pair.*`                   | `packages/db/src/closer.integration.test.ts`, `packages/db/src/rejoin-replacement.integration.test.ts`, `packages/db/src/pair-termination.integration.test.ts`, invite route/prefetch tests   |
+| Together                    | `together.*`               | `packages/db/src/together.integration.test.ts`, `packages/db/src/question-revisions.integration.test.ts`, Together playback tests                                                             |
+| Private and confidentiality | `private.*`                | `packages/db/src/private.integration.test.ts`, `packages/db/src/pair-termination.integration.test.ts`, `packages/db/src/rejoin-replacement.integration.test.ts`                               |
+| Admin and analytics privacy | `admin.*`                  | `packages/db/src/question-revisions.integration.test.ts`, `apps/web/src/server/modules/admin-questions/*.integration.test.ts`, Admin route tests                                              |
+| Realtime                    | `realtime.*`               | `packages/db/src/realtime.test.ts`, SSE route tests, Pair realtime provider tests                                                                                                             |
+
+`must-pass-before-cutover` is required for all Private confidentiality and race
+cases, auth-to-Participant ownership, Pair/era authorization, and Admin
+suppression. Only explicitly `nice-to-have` cases may be deferred. The
+`private.waiting-projection-confidentiality` case enumerates every forbidden
+candidate field; do not replace it with a screenshot or rendered-UI assertion.
+
+The comparison preserves semantic differences. Adapters supply a stable alias
+map for fixture IDs; timestamp, generated request ID, token, seed, and unordered
+array normalization is opt-in by JSON Pointer on the specific case. Unknown
+IDs, state values, action outcomes, and contract-significant order remain
+comparable. `assertScenarioExpectations` checks expected action status/code,
+persisted-state facts, projection omissions, and post-commit invalidations;
+`compareObservations` then compares the normalized OLD and NEW observations.
+
+At this stage the catalog and comparison primitives are runnable, but no OLD or
+NEW adapters exist. Therefore the current Next oracle tests can be run as
+references, while cross-runtime execution and cutover readiness remain
+unverified. Do not report the parity gate as passed until both adapters run
+every mandatory case against equivalent disposable fixtures, including
+two-client races, and retain the normalized traces and state snapshots.
+
+The eventual runner executes each scenario against both implementations with
+the same logical fixture and command sequence:
+
 Run both implementations against the same disposable PostgreSQL fixture and
 the same command sequence:
 
