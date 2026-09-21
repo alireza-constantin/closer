@@ -6,25 +6,27 @@ checks are complete; applying Production migrations and running the live smoke
 test below remain manual operator release steps. This guide does not claim
 that Production has been verified.
 
-Use [.env.example](../../.env.example) as the environment-variable inventory.
+Use [apps/web/.env.example](../../apps/web/.env.example) as the environment-variable inventory.
 Never commit credentials or put real database credentials in documentation.
 
 ## Production deployment checklist
 
-1. Configure the normal Production runtime values: `DATABASE_URL`,
-   `BETTER_AUTH_SECRET` (at least 32 characters), and `BETTER_AUTH_URL`. On
+1. Configure the normal Production runtime values: pooled `DATABASE_URL`,
+   direct `DATABASE_URL_UNPOOLED` for migrations, `BETTER_AUTH_SECRET` (at
+   least 32 characters), and `BETTER_AUTH_URL`. On
    Vercel, `BETTER_AUTH_URL` is derived from `VERCEL_URL` or
    `VERCEL_PROJECT_PRODUCTION_URL` when unset. Set it explicitly to the public
    canonical origin if using a custom domain. Set `REALTIME_DATABASE_URL` only
    when `DATABASE_URL` uses a transaction pooler or cannot support a persistent
-   PostgreSQL `LISTEN` connection; it must be session-capable.
+   PostgreSQL `LISTEN` connection; it must be session-capable. Never use the
+   Neon Development or TEST branch for Production.
 2. In a trusted operator shell, prepare the temporary `ADMIN_BOOTSTRAP_EMAIL`
    and `ADMIN_BOOTSTRAP_PASSWORD`. Use a dedicated Admin email, not an existing
    consumer account. Do not leave these values in persistent Production
    configuration. The password must be 8–128 characters.
-3. Before migrating, confirm that the `DATABASE_URL` selected by the migration
-   command targets the intended Production database. Run the repository command
-   from the root:
+3. Before migrating, confirm that `DATABASE_URL_UNPOOLED` (or the explicit
+   `DATABASE_URL` fallback) selected by the migration command targets the
+   intended Production database. Run the repository command from the root:
 
    ```sh
    bun run db:migrate
@@ -85,15 +87,16 @@ user ID argument and cannot recover arbitrary accounts.
 
 ## Runtime configuration
 
-- `DATABASE_URL` — required for the application and database migrations.
+- `DATABASE_URL` — pooled connection required for application queries.
+- `DATABASE_URL_UNPOOLED` — direct connection used by migrations when configured.
 - `BETTER_AUTH_SECRET` — required; use a unique secret of at least 32
   characters.
 - `BETTER_AUTH_URL` — required resolved auth origin. Vercel values may supply a
   derived origin; configure it explicitly for a custom domain. Local development
   uses `http://localhost:3001`.
-- `REALTIME_DATABASE_URL` — optional when `DATABASE_URL` is already a direct,
-  session-capable PostgreSQL connection; otherwise required for realtime
-  `LISTEN` when the primary URL is transaction-pooled.
+- `REALTIME_DATABASE_URL` — optional when `DATABASE_URL` or
+  `DATABASE_URL_UNPOOLED` is already a direct, session-capable PostgreSQL
+  connection; otherwise required for realtime `LISTEN`.
 - `ADMIN_USER_ID` — optional for consumer-only operation; required to authorize
   Admin access.
 - `ADMIN_BOOTSTRAP_EMAIL` and `ADMIN_BOOTSTRAP_PASSWORD` — temporary bootstrap

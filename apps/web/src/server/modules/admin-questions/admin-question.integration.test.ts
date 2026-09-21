@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { afterAll, describe, expect, mock, test } from "bun:test";
-import dotenv from "dotenv";
+import "@Closer/db/test-env";
 import { eq, inArray } from "drizzle-orm";
 
 import {
@@ -11,7 +11,6 @@ import {
   adminDuplicateResponseSchema,
 } from "@/contracts/admin/question.schema";
 
-dotenv.config({ path: new URL("../../../../.env.local", import.meta.url) });
 mock.module("server-only", () => ({}));
 
 const { db } = await import("@Closer/db");

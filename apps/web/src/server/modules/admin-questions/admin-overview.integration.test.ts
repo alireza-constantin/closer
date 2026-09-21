@@ -2,11 +2,9 @@ import { randomUUID } from "node:crypto";
 
 import { afterAll, describe, expect, mock, test } from "bun:test";
 import { eq, inArray } from "drizzle-orm";
-import dotenv from "dotenv";
+import "@Closer/db/test-env";
 
 import type { AdminSession } from "@/server/http/admin-http";
-
-dotenv.config({ path: new URL("../../../../../../apps/web/.env.local", import.meta.url) });
 
 const { db } = await import("@Closer/db");
 const { createAdminQuestion } = await import("@Closer/db/closer");

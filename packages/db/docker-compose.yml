@@ -1,3 +1,4 @@
+# Optional offline/local fallback. Normal development uses the Neon Development branch.
 name: Closer
 
 services:

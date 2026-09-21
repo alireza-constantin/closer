@@ -1,9 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import dotenv from "dotenv";
-
-dotenv.config({ path: new URL("../../../apps/web/.env", import.meta.url) });
+import "./test-env";
 
 const { createDb } = await import("./index");
 const {

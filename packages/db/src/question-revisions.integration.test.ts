@@ -1,10 +1,8 @@
 import { randomUUID } from "node:crypto";
 
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import dotenv from "dotenv";
+import "./test-env";
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
-
-dotenv.config({ path: new URL("../../../apps/web/.env.local", import.meta.url) });
 
 const { createDb } = await import("./index");
 const {

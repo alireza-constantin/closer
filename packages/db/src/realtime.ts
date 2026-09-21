@@ -118,7 +118,7 @@ const globalRealtime = globalThis as typeof globalThis & { __closerRealtimeBus?:
 
 export function getRealtimeBus() {
   return (globalRealtime.__closerRealtimeBus ??= new RealtimeBus(
-    env.REALTIME_DATABASE_URL ?? env.DATABASE_URL,
+    env.REALTIME_DATABASE_URL ?? env.DATABASE_URL_UNPOOLED ?? env.DATABASE_URL,
     undefined,
     async (payload) => {
       // The listener needs a session-capable Client. Publishing is a normal,

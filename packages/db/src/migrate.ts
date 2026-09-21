@@ -7,9 +7,14 @@ import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Pool } from "pg";
 
 dotenv.config({
-  path: existsSync("../../apps/web/.env.local")
-    ? "../../apps/web/.env.local"
-    : "../../apps/web/.env",
+  path:
+    process.env.NODE_ENV === "test"
+      ? existsSync("../../apps/web/.env.test.local")
+        ? "../../apps/web/.env.test.local"
+        : "../../apps/web/.env.test"
+      : existsSync("../../apps/web/.env.local")
+        ? "../../apps/web/.env.local"
+        : "../../apps/web/.env",
 });
 
 const migrationsFolder = fileURLToPath(new URL("./migrations", import.meta.url));
@@ -141,7 +146,12 @@ async function describeMigrationState(pool: Pool, entries: MigrationJournalEntry
 }
 
 async function runMigration() {
-  const databaseUrl = process.env.DATABASE_URL;
+  const databaseUrl =
+    process.env.NODE_ENV === "test"
+      ? (process.env.TEST_DATABASE_URL ??
+        process.env.DATABASE_URL_UNPOOLED ??
+        process.env.DATABASE_URL)
+      : (process.env.DATABASE_URL_UNPOOLED ?? process.env.DATABASE_URL);
   let pool: Pool | undefined;
   let exitCode = 0;
 

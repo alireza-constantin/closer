@@ -23,15 +23,25 @@ bun install
 
 ## Database Setup
 
-This project uses PostgreSQL with Drizzle ORM.
+This project uses PostgreSQL with Drizzle ORM and retains the `node-postgres`
+driver because the app requires transactions, row locking, and session-based
+PostgreSQL `LISTEN`/`NOTIFY`.
 
-1. Make sure you have a PostgreSQL database set up.
-2. Update your `apps/web/.env` file with your PostgreSQL connection details.
+Normal development uses a dedicated Neon Development branch. Docker remains an
+optional offline/local fallback; it is not required when the Neon variables are
+configured.
 
-3. Apply the schema to your database:
+1. Create or select a Neon Development branch. Never use Production branch
+   credentials in local development.
+2. Copy `apps/web/.env.example` to `apps/web/.env.local` and set:
+   - `DATABASE_URL` to the pooled Development URL for normal app queries.
+   - `DATABASE_URL_UNPOOLED` to the direct Development URL for migrations.
+   - `REALTIME_DATABASE_URL` to the direct Development URL for `LISTEN/NOTIFY`.
+   - the required auth and admin values with non-production local values.
+3. Apply tracked migrations to the Development branch:
 
 ```bash
-bun run db:push
+bun run db:migrate
 ```
 
 Then, run the development server:
@@ -41,6 +51,29 @@ bun run dev
 ```
 
 Open [http://localhost:3001](http://localhost:3001) in your browser to see the fullstack application.
+
+### Integration-test database
+
+Create a separate Neon TEST branch. Do not point tests at Production or share a
+manually used Development database: the integration tests create and delete
+fixtures. Copy the test-only values to `apps/web/.env.test.local` and set
+`TEST_DATABASE_URL` to a direct/session-capable URL for that TEST branch. Keep
+`DATABASE_URL` pointed at Development in `.env.local`; the test bootstrap
+requires `TEST_DATABASE_URL` and maps it only inside the test process.
+
+Initialize the TEST branch with the same tracked migrations before running
+integration tests:
+
+```bash
+# macOS/Linux/Git Bash
+NODE_ENV=test bun run db:migrate
+
+# PowerShell
+$env:NODE_ENV = "test"; bun run db:migrate
+```
+
+The test helper refuses to run without `TEST_DATABASE_URL` and refuses to use
+the same value as `DATABASE_URL`.
 
 ## UI Customization
 
@@ -88,9 +121,10 @@ If you want to add app-specific blocks instead of shared primitives, run the sha
 
 Before creating a Preview deployment, configure these Vercel Preview environment variables with deployment-safe values:
 
-- `DATABASE_URL`: a reachable PostgreSQL connection string for the intended Preview database; never a localhost, loopback, or file URL.
+- `DATABASE_URL`: a pooled PostgreSQL connection string for the intended Preview database; never a localhost, loopback, or file URL.
+- `DATABASE_URL_UNPOOLED`: a direct/unpooled PostgreSQL connection for the migration command when configured.
 - `BETTER_AUTH_SECRET`: at least 32 characters, scoped consistently with the Preview environment.
-- `REALTIME_DATABASE_URL` (when `DATABASE_URL` is transaction-pooled): a direct, session-capable PostgreSQL URL for the server-side `LISTEN` connection. This is never sent to browsers or logged. If `DATABASE_URL` is already a direct PostgreSQL connection, the realtime listener reuses it.
+- `REALTIME_DATABASE_URL` (when `DATABASE_URL` is transaction-pooled): a direct, session-capable PostgreSQL URL for the server-side `LISTEN` connection. This is never sent to browsers or logged. If it is unset, the listener falls back to `DATABASE_URL_UNPOOLED`, then `DATABASE_URL`.
 
 `BETTER_AUTH_URL` is intentionally not synchronized by `bun run env:preview`. On Vercel, Closer derives it from that deployment's `VERCEL_URL`, then uses that exact HTTPS origin for Better Auth's base URL and trusted-origin list. This supports each Preview URL without allowing arbitrary origins. For local development, keep `BETTER_AUTH_URL` set to the local app origin.
 
@@ -126,7 +160,7 @@ Closer/
 - `bun run build`: Build all applications
 - `bun run dev:web`: Start only the web application
 - `bun run check-types`: Check TypeScript types across all apps
-- `bun run db:push`: Push schema changes to database
+- `bun run db:push`: Push schema changes to a database (not used for Neon branch setup or deployment)
 - `bun run db:generate`: Generate database client/types
 - `bun run db:migrate`: Run database migrations
 - `bun run db:studio`: Open database studio UI
