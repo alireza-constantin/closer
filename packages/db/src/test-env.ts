@@ -8,24 +8,29 @@ const environmentFiles = [
   `${repositoryRoot}/.env`,
   `${repositoryRoot}/apps/web/.env`,
   `${repositoryRoot}/apps/web/.env.local`,
-  `${repositoryRoot}/apps/web/.env.test`,
-  `${repositoryRoot}/apps/web/.env.test.local`,
 ];
 
 for (const environmentFile of environmentFiles) {
   if (existsSync(environmentFile)) dotenv.config({ path: environmentFile });
 }
 
-const testDatabaseUrl = process.env.TEST_DATABASE_URL;
-if (!testDatabaseUrl) {
-  throw new Error("Integration tests require TEST_DATABASE_URL for a dedicated Neon test branch.");
+if (process.env.NODE_ENV === "production" || process.env.VERCEL_ENV === "production") {
+  throw new Error("Integration tests must never run against Production.");
 }
 
-if (process.env.DATABASE_URL === testDatabaseUrl) {
-  throw new Error("TEST_DATABASE_URL must not reuse DATABASE_URL.");
+if (process.env.CLOSER_ALLOW_DESTRUCTIVE_DB_TESTS !== "1") {
+  throw new Error(
+    "Integration tests use and clean up Development data. Confirm apps/web/.env.local targets Neon DEVELOPMENT, then set CLOSER_ALLOW_DESTRUCTIVE_DB_TESTS=1 to opt in.",
+  );
 }
 
-// Production code continues to read DATABASE_URL. Only this test process maps
-// the dedicated test branch into that role before importing the DB package.
-process.env.DATABASE_URL = testDatabaseUrl;
-process.env.REALTIME_DATABASE_URL = testDatabaseUrl;
+const developmentDatabaseUrl = process.env.DATABASE_URL_UNPOOLED ?? process.env.DATABASE_URL;
+if (!developmentDatabaseUrl) {
+  throw new Error(
+    "Integration tests require the Neon DEVELOPMENT DATABASE_URL_UNPOOLED or DATABASE_URL.",
+  );
+}
+
+// Integration tests use the direct Development connection for all DB access.
+process.env.DATABASE_URL = developmentDatabaseUrl;
+process.env.REALTIME_DATABASE_URL = developmentDatabaseUrl;

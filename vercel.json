@@ -5,7 +5,7 @@
       "root": "apps/web",
       "framework": "nextjs",
       "installCommand": "cd ../.. && bun install",
-      "buildCommand": "cd ../.. && if [ \"$VERCEL_ENV\" = \"production\" ]; then bun run db:migrate; fi && bun run --filter web build"
+      "buildCommand": "cd ../.. && bun run --filter web build"
     }
   },
   "rewrites": [

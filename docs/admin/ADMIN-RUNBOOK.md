@@ -2,9 +2,15 @@
 
 Admin uses a dedicated Better Auth email/password account. It does not require
 or create a Closer Participant. The Admin V1 implementation and repository
-checks are complete; applying Production migrations and running the live smoke
-test below remain manual operator release steps. This guide does not claim
-that Production has been verified.
+checks are complete; the database steps and live smoke test below remain manual
+operator release steps. This guide does not claim that Production has been
+verified.
+
+> **Pre-launch database warning:** Production is disposable only for the current
+> pre-launch stage. Deployments never mutate the database. A manual Production
+> `db:push` is allowed only after confirming that no real user data exists. Once
+> real users exist, `db:push` against Production is prohibited and the project
+> must use a clean, reviewed migration baseline.
 
 Use [apps/web/.env.production.example](../../apps/web/.env.production.example) as the Production environment-variable checklist.
 Never commit credentials or put real database credentials in documentation.
@@ -12,29 +18,30 @@ Never commit credentials or put real database credentials in documentation.
 ## Production deployment checklist
 
 1. Configure the normal Production runtime values: pooled `DATABASE_URL`,
-   direct `DATABASE_URL_UNPOOLED` for migrations, `BETTER_AUTH_SECRET` (at
+   direct `DATABASE_URL_UNPOOLED` for explicit schema operations, `BETTER_AUTH_SECRET` (at
    least 32 characters), and `BETTER_AUTH_URL`. On
    Vercel, `BETTER_AUTH_URL` is derived from `VERCEL_URL` or
    `VERCEL_PROJECT_PRODUCTION_URL` when unset. Set it explicitly to the public
    canonical origin if using a custom domain. Set `REALTIME_DATABASE_URL` only
    when `DATABASE_URL` uses a transaction pooler or cannot support a persistent
-   PostgreSQL `LISTEN` connection; it must be session-capable. Never use the
-   Neon Development or TEST branch for Production.
+   PostgreSQL `LISTEN` connection; it must be session-capable. Production uses
+   the Neon `main` branch; never use the Development branch for Production.
 2. In a trusted operator shell, prepare the temporary `ADMIN_BOOTSTRAP_EMAIL`
    and `ADMIN_BOOTSTRAP_PASSWORD`. Use a dedicated Admin email, not an existing
    consumer account. Do not leave these values in persistent Production
    configuration. The password must be 8–128 characters.
-3. Before migrating, confirm that `DATABASE_URL_UNPOOLED` (or the explicit
-   `DATABASE_URL` fallback) selected by the migration command targets the
-   intended Production database. Run the repository command from the root:
+3. During the disposable-data pre-launch phase only, confirm that no
+   Production data requires preservation and that the direct URL targets Neon
+   `main`. Manually reset or clear the database, then run from the repository
+   root:
 
    ```sh
-   bun run db:migrate
+   bun run db:push
    ```
 
-   The Vercel Production build is also configured to run this same command
-   before the web build. If you apply migrations manually first, the build
-   checks the same Drizzle migration ledger. Never use `db:push` for deployment.
+   This is an explicit operator action. The Vercel Production build only runs
+   `cd ../.. && bun run --filter web build`; it never runs `db:migrate`,
+   `db:push`, or any other database mutation.
 
 4. With the Production database and required auth environment available to the
    trusted operator process, run the bootstrap command manually from the root:
@@ -88,7 +95,7 @@ user ID argument and cannot recover arbitrary accounts.
 ## Runtime configuration
 
 - `DATABASE_URL` — pooled connection required for application queries.
-- `DATABASE_URL_UNPOOLED` — direct connection used by migrations when configured.
+- `DATABASE_URL_UNPOOLED` — direct connection reserved for explicit/manual schema operations.
 - `BETTER_AUTH_SECRET` — required; use a unique secret of at least 32
   characters.
 - `BETTER_AUTH_URL` — required resolved auth origin. Vercel values may supply a

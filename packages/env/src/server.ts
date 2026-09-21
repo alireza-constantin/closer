@@ -21,7 +21,7 @@ const runtimeEnv = {
 export const env = createEnv({
   server: {
     DATABASE_URL: z.string().min(1),
-    // Use the direct Neon connection for migrations when one is configured.
+    // Use the direct Neon connection for explicit schema operations when one is configured.
     DATABASE_URL_UNPOOLED: z.string().min(1).optional(),
     // LISTEN needs a session-capable connection. Configure this separately when
     // DATABASE_URL points at a transaction pooler.

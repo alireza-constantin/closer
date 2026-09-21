@@ -40,4 +40,3 @@ local.db-*
 
 # Generated application and database metadata
 apps/web/src/routeTree.gen.ts
-packages/db/src/migrations/meta/
