@@ -11,6 +11,7 @@ import (
 
 	"github.com/alireza-constantin/closer/apps/api/internal/config"
 	"github.com/alireza-constantin/closer/apps/api/internal/httpapi"
+	"github.com/alireza-constantin/closer/apps/api/internal/postgres"
 )
 
 func main() {
@@ -26,8 +27,15 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	startupCtx, cancelStartup := context.WithTimeout(context.Background(), postgres.ConnectTimeout)
+	database, err := postgres.NewPool(startupCtx, cfg.DatabaseURL)
+	cancelStartup()
+	if err != nil {
+		return err
+	}
+	defer database.Close()
 
-	router := httpapi.NewRouter(logger)
+	router := httpapi.NewRouter(logger, database)
 	server := httpapi.NewServer(cfg.ListenAddress, router)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

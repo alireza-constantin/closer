@@ -2,7 +2,9 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -13,7 +15,7 @@ import (
 
 func TestHealthEndpoint(t *testing.T) {
 	var logOutput bytes.Buffer
-	handler := NewRouter(slog.New(slog.NewJSONHandler(&logOutput, nil)))
+	handler := NewRouter(slog.New(slog.NewJSONHandler(&logOutput, nil)), nil)
 	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	request.Header.Set(RequestIDHeader, "untrusted-client-value")
 	response := httptest.NewRecorder()
@@ -50,9 +52,9 @@ func TestHealthEndpoint(t *testing.T) {
 	}
 }
 
-func TestReadinessIsUnavailableUntilDependenciesExist(t *testing.T) {
+func TestReadinessIsUnavailableWhenDatabaseCannotBeChecked(t *testing.T) {
 	response := httptest.NewRecorder()
-	NewRouter(nil).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	NewRouter(nil, nil).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusServiceUnavailable)
@@ -63,6 +65,60 @@ func TestReadinessIsUnavailableUntilDependenciesExist(t *testing.T) {
 	}
 	if body.Status != "not_ready" {
 		t.Fatalf("readiness status = %q, want not_ready", body.Status)
+	}
+}
+
+type readinessFunc func(context.Context) error
+
+func (fn readinessFunc) Ping(ctx context.Context) error {
+	return fn(ctx)
+}
+
+func TestReadinessReflectsDatabaseStatusWithoutLeakingErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		ping func(context.Context) error
+		want int
+	}{
+		{name: "usable", ping: func(context.Context) error { return nil }, want: http.StatusOK},
+		{name: "unavailable", ping: func(context.Context) error { return errors.New("database URL secret must not escape") }, want: http.StatusServiceUnavailable},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			checker := readinessFunc(test.ping)
+			response := httptest.NewRecorder()
+			NewRouter(nil, checker).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+			if response.Code != test.want {
+				t.Fatalf("status = %d, want %d", response.Code, test.want)
+			}
+			if strings.Contains(response.Body.String(), "secret") {
+				t.Fatalf("readiness response leaked database error: %s", response.Body.String())
+			}
+			var body healthResponse
+			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode readiness response: %v", err)
+			}
+			wantStatus := "not_ready"
+			if test.want == http.StatusOK {
+				wantStatus = "ready"
+			}
+			if body.Status != wantStatus {
+				t.Fatalf("readiness status = %q, want %q", body.Status, wantStatus)
+			}
+		})
+	}
+}
+
+func TestReadinessPassesRequestContextAndDeadline(t *testing.T) {
+	var gotDeadline bool
+	checker := readinessFunc(func(ctx context.Context) error {
+		_, gotDeadline = ctx.Deadline()
+		return nil
+	})
+	response := httptest.NewRecorder()
+	NewRouter(nil, checker).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if !gotDeadline || response.Code != http.StatusOK {
+		t.Fatalf("readiness deadline = %t, status = %d", gotDeadline, response.Code)
 	}
 }
 
@@ -77,7 +133,7 @@ func TestUnsupportedMethodsReturnJSON(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			response := httptest.NewRecorder()
-			NewRouter(nil).ServeHTTP(response, httptest.NewRequest(test.method, "/healthz", nil))
+			NewRouter(nil, nil).ServeHTTP(response, httptest.NewRequest(test.method, "/healthz", nil))
 			if response.Code != http.StatusMethodNotAllowed {
 				t.Fatalf("status = %d, want %d", response.Code, http.StatusMethodNotAllowed)
 			}
@@ -102,7 +158,7 @@ func TestRequestBodyLimitRejectsOversizedDeclaredBody(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/healthz", nil)
 	request.ContentLength = MaxRequestBodyBytes + 1
 	response := httptest.NewRecorder()
-	NewRouter(nil).ServeHTTP(response, request)
+	NewRouter(nil, nil).ServeHTTP(response, request)
 
 	if response.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusRequestEntityTooLarge)
@@ -160,7 +216,7 @@ func TestRecoveryHidesPanicDetails(t *testing.T) {
 func TestRequestLogDoesNotIncludeRawURLOrQuery(t *testing.T) {
 	var logOutput bytes.Buffer
 	request := httptest.NewRequest(http.MethodGet, "/healthz?token=do-not-log", nil)
-	NewRouter(slog.New(slog.NewJSONHandler(&logOutput, nil))).ServeHTTP(httptest.NewRecorder(), request)
+	NewRouter(slog.New(slog.NewJSONHandler(&logOutput, nil)), nil).ServeHTTP(httptest.NewRecorder(), request)
 
 	if strings.Contains(logOutput.String(), "do-not-log") {
 		t.Fatalf("request log exposed query data: %q", logOutput.String())
