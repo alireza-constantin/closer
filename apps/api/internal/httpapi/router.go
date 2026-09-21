@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/alireza-constantin/closer/apps/api/internal/auth"
+	"github.com/alireza-constantin/closer/apps/api/internal/invite"
 	"github.com/alireza-constantin/closer/apps/api/internal/pair"
 	"github.com/alireza-constantin/closer/apps/api/internal/participant"
 	"github.com/go-chi/chi/v5"
@@ -60,7 +61,7 @@ func NewRouterWithAuth(
 	authService *auth.Service,
 	security SecurityConfig,
 ) http.Handler {
-	return NewRouterWithServices(logger, readiness, authService, nil, nil, security)
+	return NewRouterWithServices(logger, readiness, authService, nil, nil, nil, security)
 }
 
 func NewRouterWithServices(
@@ -69,6 +70,7 @@ func NewRouterWithServices(
 	authService *auth.Service,
 	participantService *participant.Service,
 	pairService *pair.Service,
+	inviteService *invite.Service,
 	security SecurityConfig,
 ) http.Handler {
 	if logger == nil {
@@ -109,6 +111,9 @@ func NewRouterWithServices(
 			registerAuthRoutes(api, authService, participantService, security)
 			if participantService != nil && pairService != nil {
 				registerParticipantPairRoutes(api, authService, participantService, pairService, security)
+			}
+			if participantService != nil && inviteService != nil {
+				registerInviteRoutes(api, authService, participantService, inviteService, security)
 			}
 		})
 	}

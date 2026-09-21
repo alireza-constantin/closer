@@ -381,6 +381,53 @@ const cases = [
     ],
   },
   {
+    id: "pair.claim-vs-invite-revoke",
+    area: "pair-invite-era",
+    gate: "must-pass-before-cutover",
+    title: "Claim and explicit invite revocation commit in one terminal order",
+    preconditions: ["An initial invite is usable and the Pair is unclaimed."],
+    actions: [
+      action("claim", "participant-b", "redeem initial invite", "claim-revoke"),
+      action("revoke", "participant-a", "DELETE /api/v1/pairs/:pairId/invite", "claim-revoke"),
+    ],
+    expected: {
+      actions: [{ id: "claim" }, { id: "revoke" }],
+      persistedState: {
+        inviteRedeemedXorRevoked: true,
+        claimHasBothMembershipsAndEra: true,
+        rejectedClaimLeavesPairUnclaimed: true,
+      },
+    },
+    sources: [
+      "docs/adr/002-invite-and-rejoin-security.md — invite revocation and atomic claim",
+      "docs/adr/005-pair-membership-era-termination-and-history.md — Pair lifecycle lock boundary",
+    ],
+  },
+  {
+    id: "pair.expiry-is-rechecked-at-claim",
+    area: "pair-invite-era",
+    gate: "must-pass-before-cutover",
+    title: "A stale valid preview cannot authorize Join after the seven-day expiry",
+    preconditions: [
+      "Preview succeeds immediately before expiry, then time reaches the expiry boundary before Join.",
+    ],
+    actions: [
+      action("preview", "browser-b", "GET /api/v1/invites/:token"),
+      action("join", "participant-b", "POST /api/v1/invites/:token/redeem"),
+    ],
+    expected: {
+      actions: [
+        { id: "preview", status: 200 },
+        { id: "join", status: 409, errorCode: "INVITE_INVALID" },
+      ],
+      persistedState: { occupiedSlots: 1, membershipEraCount: 0, invitationRedeemed: false },
+    },
+    sources: [
+      "docs/adr/002-invite-and-rejoin-security.md — seven-day expiry and explicit claim",
+      "docs/adr/005-pair-membership-era-termination-and-history.md — transactional lifecycle boundary",
+    ],
+  },
+  {
     id: "pair.replacement-era-history",
     area: "pair-invite-era",
     gate: "must-pass-before-cutover",
@@ -437,6 +484,39 @@ const cases = [
       "docs/adr/002-invite-and-rejoin-security.md — initial claim",
       "packages/db/src/closer.integration.test.ts — redeems an opaque initial invite into the empty second slot",
       "packages/db/src/together.integration.test.ts — initial claim closes the pre-claim session",
+    ],
+  },
+  {
+    id: "pair.claim-race-unordered-duplicate-active-pair",
+    area: "pair-invite-era",
+    gate: "must-pass-before-cutover",
+    title: "Concurrent claims cannot create the same active participant pair in reverse slot order",
+    preconditions: [
+      "Participant A owns unclaimed Pair X and Participant B owns unclaimed Pair Y.",
+      "Both invite claims begin concurrently, with A claiming Y and B claiming X.",
+    ],
+    actions: [
+      action("claim-y", "participant-a", "redeem Pair Y invite", "unordered-duplicate-claim"),
+      action("claim-x", "participant-b", "redeem Pair X invite", "unordered-duplicate-claim"),
+    ],
+    expected: {
+      actions: [{ id: "claim-y" }, { id: "claim-x" }],
+      actionGroups: [
+        {
+          ids: ["claim-y", "claim-x"],
+          exactlyOneStatusIn: [200],
+          remainingStatusIn: [409],
+        },
+      ],
+      persistedState: {
+        activeFullyClaimedPairsForParticipantsAAndB: 1,
+        rejectedClaimInvitationRemainsUsable: true,
+        noPartialMembershipEra: true,
+      },
+    },
+    sources: [
+      "docs/adr/002-invite-and-rejoin-security.md — unordered active fully claimed Pair uniqueness",
+      "docs/rewrite/PARITY-CHECKLIST.md — section 11 claim lock and race matrix",
     ],
   },
   {

@@ -74,7 +74,9 @@ read-only. The schema includes `auth_user`, `auth_credential`, `auth_session`,
 `auth_rate_limit`, and `admin_user`. Admin authorization requires both
 `auth_user.kind = 'admin'` and an `admin_user` row; no Admin identity creates a
 Participant. `db/schema/002_participant_pair.sql` adds the GO-04 domain
-foundation and references the Go UUID auth identity.
+foundation and `db/schema/003_initial_invite.sql` adds the GO-05 initial invite
+and exact first membership-era relationships. Both reference the Go UUID auth
+identity.
 
 The Go Admin operator commands are separate from the legacy TypeScript
 `admin:bootstrap` and `admin:recover` scripts. They read only process

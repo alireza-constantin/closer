@@ -3,20 +3,24 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/alireza-constantin/closer/apps/api/internal/auth"
+	"github.com/alireza-constantin/closer/apps/api/internal/invite"
 	"github.com/alireza-constantin/closer/apps/api/internal/pair"
 	"github.com/alireza-constantin/closer/apps/api/internal/participant"
 	"github.com/alireza-constantin/closer/apps/api/internal/postgres"
 	postgresauth "github.com/alireza-constantin/closer/apps/api/internal/postgres/auth"
+	postgresinvite "github.com/alireza-constantin/closer/apps/api/internal/postgres/invite"
 	postgrespair "github.com/alireza-constantin/closer/apps/api/internal/postgres/pair"
 	postgresparticipant "github.com/alireza-constantin/closer/apps/api/internal/postgres/participant"
 	"github.com/alireza-constantin/closer/apps/api/internal/postgres/sqlc"
@@ -45,8 +49,9 @@ func newParticipantPairRouter(pool *postgres.Pool) (http.Handler, *auth.Service)
 	authStore := postgresauth.NewStore(pool)
 	participantService := participant.NewService(postgresparticipant.NewStore(pool))
 	pairService := pair.NewService(postgrespair.NewStore(pool))
+	inviteService := invite.NewService(postgresinvite.NewStore(pool))
 	authService := auth.NewServiceWithCredentials(authStore, authStore, nil)
-	return NewRouterWithServices(nil, pool, authService, participantService, pairService, SecurityConfig{
+	return NewRouterWithServices(nil, pool, authService, participantService, pairService, inviteService, SecurityConfig{
 		TrustedOrigins: []string{domainTestOrigin},
 	}), authService
 }
@@ -249,9 +254,12 @@ func TestParticipantPairHTTPFlowAndAuthUpgradePreserveOwnership(t *testing.T) {
 		t.Fatalf("relationship change was accepted: %d %s", unsupportedRelationshipUpdate.Code, unsupportedRelationshipUpdate.Body.String())
 	}
 
-	// No GO-05 invite or initial membership era is created with the Pair.
-	if inviteRelationExists(t, pool) {
-		t.Fatal("GO-04 Pair creation schema unexpectedly includes an initial invitation table")
+	// GO-05 adds invitation storage, while Pair creation remains lazy.
+	if !inviteRelationExists(t, pool) {
+		t.Fatal("GO-05 initial invitation table is missing")
+	}
+	if countForPair(t, pool, "initial_invite", pairID) != 0 {
+		t.Fatal("Pair creation issued an invitation before an explicit request")
 	}
 	if countForPair(t, pool, "pair_membership_era", pairID) != 0 {
 		t.Fatal("creator-only Pair creation started a membership era")
@@ -344,6 +352,184 @@ func TestParticipantPairHTTPFlowAndAuthUpgradePreserveOwnership(t *testing.T) {
 	if terminalRead.Code != http.StatusOK || json.Unmarshal(terminalRead.Body.Bytes(), &terminalEntry) != nil || terminalEntry.State != "terminated" || terminalEntry.RelationshipType != "" || len(terminalEntry.Members) != 0 {
 		t.Fatalf("terminated Pair projection = %d %s", terminalRead.Code, terminalRead.Body.String())
 	}
+}
+
+func TestInitialInviteExplicitClaimCreatesFirstEraAndStoresOnlyHash(t *testing.T) {
+	pool := openParticipantPairTestPool(t)
+	router, _ := newParticipantPairRouter(pool)
+	creatorCookie := createAnonymousTestCookie(t, router)
+	creatorOnboard := performDomainRequest(router, http.MethodPost, "/api/v1/onboarding", map[string]string{"displayName": "Creator"}, creatorCookie)
+	var creator onboardingResponse
+	if creatorOnboard.Code != http.StatusOK || json.Unmarshal(creatorOnboard.Body.Bytes(), &creator) != nil {
+		t.Fatalf("creator onboarding: %d %s", creatorOnboard.Code, creatorOnboard.Body.String())
+	}
+	createdPair := performDomainRequest(router, http.MethodPost, "/api/v1/pairs", map[string]string{"intendedPersonName": "Rae", "relationshipType": "friend"}, creatorCookie)
+	var pairResult createPairResponse
+	if createdPair.Code != http.StatusOK || json.Unmarshal(createdPair.Body.Bytes(), &pairResult) != nil {
+		t.Fatalf("Pair creation: %d %s", createdPair.Code, createdPair.Body.String())
+	}
+	issuedResponse := performDomainRequest(router, http.MethodPost, "/api/v1/pairs/"+pairResult.PairID+"/invite", nil, creatorCookie)
+	var issued inviteStateResponse
+	if issuedResponse.Code != http.StatusCreated || json.Unmarshal(issuedResponse.Body.Bytes(), &issued) != nil || issued.Token == "" {
+		t.Fatalf("issue invite: %d %s", issuedResponse.Code, issuedResponse.Body.String())
+	}
+	if !strings.Contains(issuedResponse.Header().Get("Set-Cookie"), "HttpOnly") {
+		t.Fatalf("raw invite was not retained in an HttpOnly cookie: %q", issuedResponse.Header().Get("Set-Cookie"))
+	}
+	preview := performDomainRequest(router, http.MethodGet, "/api/v1/invites/"+issued.Token, nil, nil)
+	var landing inviteLandingResponse
+	if preview.Code != http.StatusOK || json.Unmarshal(preview.Body.Bytes(), &landing) != nil || landing.InviterDisplayName != "Creator" || landing.IntendedPersonName == nil || *landing.IntendedPersonName != "Rae" {
+		t.Fatalf("preview: %d %s", preview.Code, preview.Body.String())
+	}
+	previewAgain := performDomainRequest(router, http.MethodGet, "/api/v1/invites/"+issued.Token, nil, nil)
+	if previewAgain.Code != http.StatusOK {
+		t.Fatalf("repeat preview consumed invite: %d %s", previewAgain.Code, previewAgain.Body.String())
+	}
+	selfClaim := performDomainRequest(router, http.MethodPost, "/api/v1/invites/"+issued.Token+"/redeem", nil, creatorCookie)
+	if selfClaim.Code != http.StatusConflict || countForPair(t, pool, "pair_membership", pairResult.PairID) != 1 {
+		t.Fatalf("creator self-claim changed Pair state: %d %s", selfClaim.Code, selfClaim.Body.String())
+	}
+	tampered := "A" + issued.Token[1:]
+	if tampered == issued.Token {
+		tampered = "B" + issued.Token[1:]
+	}
+	if denied := performDomainRequest(router, http.MethodGet, "/api/v1/invites/"+tampered, nil, nil); denied.Code != http.StatusNotFound {
+		t.Fatalf("tampered credential preview status=%d body=%s", denied.Code, denied.Body.String())
+	}
+	replacedResponse := performDomainRequest(router, http.MethodPut, "/api/v1/pairs/"+pairResult.PairID+"/invite", nil, creatorCookie)
+	var replaced inviteStateResponse
+	if replacedResponse.Code != http.StatusCreated || json.Unmarshal(replacedResponse.Body.Bytes(), &replaced) != nil || replaced.Token == "" || replaced.Token == issued.Token {
+		t.Fatalf("explicit invite replacement: %d %s", replacedResponse.Code, replacedResponse.Body.String())
+	}
+	if stale := performDomainRequest(router, http.MethodGet, "/api/v1/invites/"+issued.Token, nil, nil); stale.Code != http.StatusNotFound {
+		t.Fatalf("replaced credential remained valid: %d %s", stale.Code, stale.Body.String())
+	}
+	issued = replaced
+	inviteeCookie := createAnonymousTestCookie(t, router)
+	joined := performDomainRequest(router, http.MethodPost, "/api/v1/invites/"+issued.Token+"/redeem", map[string]string{"displayName": "Actual name"}, inviteeCookie)
+	var claim inviteClaimResponse
+	if joined.Code != http.StatusOK || json.Unmarshal(joined.Body.Bytes(), &claim) != nil || claim.PairID != pairResult.PairID || claim.MembershipEraID == "" {
+		t.Fatalf("claim: %d %s", joined.Code, joined.Body.String())
+	}
+	inviteeMe := performDomainRequest(router, http.MethodGet, "/api/v1/me", nil, inviteeCookie)
+	var inviteeActor meResponse
+	if inviteeMe.Code != http.StatusOK || json.Unmarshal(inviteeMe.Body.Bytes(), &inviteeActor) != nil || inviteeActor.Actor == nil || inviteeActor.Actor.Participant == nil || inviteeActor.Actor.Participant.DisplayName != "Actual name" {
+		t.Fatalf("inline claimant onboarding projection: %d %s", inviteeMe.Code, inviteeMe.Body.String())
+	}
+	if got := pairMembershipCountForParticipant(t, pool, inviteeActor.Actor.Participant.ParticipantID); got != 1 {
+		t.Fatalf("invitee active membership count=%d", got)
+	}
+	digest := sha256.Sum256([]byte(issued.Token))
+	var storedHash []byte
+	if err := pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		return db.QueryRow(context.Background(), "SELECT token_hash FROM initial_invite WHERE pair_id=$1 ORDER BY created_at DESC LIMIT 1", pairResult.PairID).Scan(&storedHash)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(storedHash, digest[:]) || bytes.Equal(storedHash, []byte(issued.Token)) {
+		t.Fatalf("invite token persistence did not contain only its SHA-256 hash")
+	}
+	var activeMembers, activeEras int
+	if err := pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		if err := db.QueryRow(context.Background(), "SELECT count(*) FROM pair_membership WHERE pair_id=$1 AND ended_at IS NULL", pairResult.PairID).Scan(&activeMembers); err != nil {
+			return err
+		}
+		return db.QueryRow(context.Background(), "SELECT count(*) FROM pair_membership_era WHERE pair_id=$1 AND ended_at IS NULL", pairResult.PairID).Scan(&activeEras)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if activeMembers != 2 || activeEras != 1 {
+		t.Fatalf("post-claim active members/eras=%d/%d", activeMembers, activeEras)
+	}
+	var intended *string
+	if err := pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		return db.QueryRow(context.Background(), "SELECT intended_person_name FROM pair WHERE id=$1", pairResult.PairID).Scan(&intended)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if intended != nil {
+		t.Fatalf("claim retained intended-person label: %q", *intended)
+	}
+	meBefore := performDomainRequest(router, http.MethodGet, "/api/v1/me", nil, creatorCookie)
+	var beforeUpgrade meResponse
+	if meBefore.Code != http.StatusOK || json.Unmarshal(meBefore.Body.Bytes(), &beforeUpgrade) != nil || beforeUpgrade.Actor == nil {
+		t.Fatalf("pre-upgrade actor: %d %s", meBefore.Code, meBefore.Body.String())
+	}
+	upgrade := performDomainRequest(router, http.MethodPost, "/api/v1/auth/upgrade", map[string]string{
+		"email": "go05-" + strings.ReplaceAll(pairResult.PairID, "-", "") + "@example.test", "password": "Valid-passphrase-2040",
+	}, creatorCookie)
+	if upgrade.Code != http.StatusOK {
+		t.Fatalf("creator credential upgrade: %d %s", upgrade.Code, upgrade.Body.String())
+	}
+	meAfter := performDomainRequest(router, http.MethodGet, "/api/v1/me", nil, creatorCookie)
+	var afterUpgrade meResponse
+	if meAfter.Code != http.StatusOK || json.Unmarshal(meAfter.Body.Bytes(), &afterUpgrade) != nil || afterUpgrade.Actor == nil || afterUpgrade.Actor.AuthUserID != beforeUpgrade.Actor.AuthUserID || afterUpgrade.Actor.Participant == nil || afterUpgrade.Actor.Participant.ParticipantID != creator.ParticipantID {
+		t.Fatalf("post-claim credential upgrade changed ownership: %d %s", meAfter.Code, meAfter.Body.String())
+	}
+	if countForPair(t, pool, "pair_membership", pairResult.PairID) != 2 || countForPair(t, pool, "pair_membership_era", pairResult.PairID) != 1 || countForPair(t, pool, "initial_invite", pairResult.PairID) != 2 {
+		t.Fatal("credential upgrade changed claim membership, era, or redeemed invite rows")
+	}
+}
+
+func TestInitialClaimRaceForSameInviteCreatesOneEra(t *testing.T) {
+	pool := openParticipantPairTestPool(t)
+	router, _ := newParticipantPairRouter(pool)
+	creator := createOnboardedTestActor(t, router, "Race creator")
+	pairResponse := performDomainRequest(router, http.MethodPost, "/api/v1/pairs", map[string]string{"intendedPersonName": "Claimant", "relationshipType": "partner"}, creator.cookie)
+	var created createPairResponse
+	if pairResponse.Code != http.StatusOK || json.Unmarshal(pairResponse.Body.Bytes(), &created) != nil {
+		t.Fatalf("create Pair: %d %s", pairResponse.Code, pairResponse.Body.String())
+	}
+	issue := performDomainRequest(router, http.MethodPost, "/api/v1/pairs/"+created.PairID+"/invite", nil, creator.cookie)
+	var inviteBody inviteStateResponse
+	if issue.Code != http.StatusCreated || json.Unmarshal(issue.Body.Bytes(), &inviteBody) != nil {
+		t.Fatalf("issue invite: %d %s", issue.Code, issue.Body.String())
+	}
+	a := createOnboardedTestActor(t, router, "Claimant A")
+	b := createOnboardedTestActor(t, router, "Claimant B")
+	responses := make(chan int, 2)
+	var wait sync.WaitGroup
+	for _, actor := range []testHTTPActor{a, b} {
+		wait.Add(1)
+		go func(actor testHTTPActor) {
+			defer wait.Done()
+			responses <- performDomainRequest(router, http.MethodPost, "/api/v1/invites/"+inviteBody.Token+"/redeem", nil, actor.cookie).Code
+		}(actor)
+	}
+	wait.Wait()
+	close(responses)
+	successes, conflicts := 0, 0
+	for status := range responses {
+		if status == http.StatusOK {
+			successes++
+		} else if status == http.StatusConflict {
+			conflicts++
+		} else {
+			t.Fatalf("unexpected concurrent claim status %d", status)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("same-invite race successes/conflicts=%d/%d", successes, conflicts)
+	}
+	if countForPair(t, pool, "pair_membership", created.PairID) != 2 || countForPair(t, pool, "pair_membership_era", created.PairID) != 1 {
+		t.Fatal("same-invite race produced partial or duplicate membership-era state")
+	}
+}
+
+type testHTTPActor struct {
+	cookie        *http.Cookie
+	participantID string
+}
+
+func createOnboardedTestActor(t *testing.T, router http.Handler, name string) testHTTPActor {
+	t.Helper()
+	cookie := createAnonymousTestCookie(t, router)
+	response := performDomainRequest(router, http.MethodPost, "/api/v1/onboarding", map[string]string{"displayName": name}, cookie)
+	var result onboardingResponse
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &result) != nil {
+		t.Fatalf("onboard %q: %d %s", name, response.Code, response.Body.String())
+	}
+	return testHTTPActor{cookie: cookie, participantID: result.ParticipantID}
 }
 
 func TestAdminActorNeverResolvesOrCreatesParticipant(t *testing.T) {

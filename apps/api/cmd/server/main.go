@@ -13,10 +13,12 @@ import (
 	"github.com/alireza-constantin/closer/apps/api/internal/auth"
 	"github.com/alireza-constantin/closer/apps/api/internal/config"
 	"github.com/alireza-constantin/closer/apps/api/internal/httpapi"
+	"github.com/alireza-constantin/closer/apps/api/internal/invite"
 	"github.com/alireza-constantin/closer/apps/api/internal/pair"
 	"github.com/alireza-constantin/closer/apps/api/internal/participant"
 	"github.com/alireza-constantin/closer/apps/api/internal/postgres"
 	postgresauth "github.com/alireza-constantin/closer/apps/api/internal/postgres/auth"
+	postgresinvite "github.com/alireza-constantin/closer/apps/api/internal/postgres/invite"
 	postgrespair "github.com/alireza-constantin/closer/apps/api/internal/postgres/pair"
 	postgresparticipant "github.com/alireza-constantin/closer/apps/api/internal/postgres/participant"
 )
@@ -46,7 +48,8 @@ func run(logger *slog.Logger) error {
 	authService := auth.NewServiceWithCredentials(authStore, authStore, nil)
 	participantService := participant.NewService(postgresparticipant.NewStore(database))
 	pairService := pair.NewService(postgrespair.NewStore(database))
-	router := httpapi.NewRouterWithServices(logger, database, authService, participantService, pairService, httpapi.SecurityConfig{
+	inviteService := invite.NewService(postgresinvite.NewStore(database))
+	router := httpapi.NewRouterWithServices(logger, database, authService, participantService, pairService, inviteService, httpapi.SecurityConfig{
 		TrustedOrigins:    cfg.TrustedOrigins,
 		TrustedProxyCIDRs: cfg.TrustedProxyCIDRs,
 	})
