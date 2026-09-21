@@ -35,8 +35,14 @@ type healthResponse struct {
 	Status string `json:"status"`
 }
 
+// ReadinessChecker is the small database-health seam used by /readyz. It
+// deliberately returns no error details to HTTP callers.
+type ReadinessChecker interface {
+	Ping(context.Context) error
+}
+
 // NewRouter constructs the HTTP transport without opening a listening socket.
-func NewRouter(logger *slog.Logger) http.Handler {
+func NewRouter(logger *slog.Logger, readiness ReadinessChecker) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -57,8 +63,18 @@ func NewRouter(logger *slog.Logger) http.Handler {
 	router.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, healthResponse{Status: "ok"})
 	})
-	router.Get("/readyz", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusServiceUnavailable, healthResponse{Status: "not_ready"})
+	router.Get("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		if readiness == nil {
+			writeJSON(w, http.StatusServiceUnavailable, healthResponse{Status: "not_ready"})
+			return
+		}
+		checkCtx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		if readiness.Ping(checkCtx) != nil {
+			writeJSON(w, http.StatusServiceUnavailable, healthResponse{Status: "not_ready"})
+			return
+		}
+		writeJSON(w, http.StatusOK, healthResponse{Status: "ready"})
 	})
 
 	return router

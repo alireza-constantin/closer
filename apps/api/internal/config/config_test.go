@@ -1,9 +1,12 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
+
+const testDatabaseURL = "postgres://closer:secret-for-tests@localhost:5432/closer_dev?sslmode=disable"
 
 func TestParseRequiresValidListenAddress(t *testing.T) {
 	tests := []struct {
@@ -38,6 +41,7 @@ func TestParseUsesDefaultsAndConfiguredShutdownTimeout(t *testing.T) {
 	values := map[string]string{
 		listenAddressEnv:   "127.0.0.1:8080",
 		shutdownTimeoutEnv: "3s",
+		databaseURLEnv:     testDatabaseURL,
 	}
 	config, err := Parse(func(key string) (string, bool) {
 		value, ok := values[key]
@@ -51,6 +55,9 @@ func TestParseUsesDefaultsAndConfiguredShutdownTimeout(t *testing.T) {
 	}
 	if config.ShutdownTimeout != 3*time.Second {
 		t.Fatalf("ShutdownTimeout = %s, want 3s", config.ShutdownTimeout)
+	}
+	if config.DatabaseURL != testDatabaseURL || config.RealtimeDatabaseURL != testDatabaseURL {
+		t.Fatalf("database URLs were not loaded with the local fallback: %+v", config)
 	}
 
 	delete(values, shutdownTimeoutEnv)
@@ -66,6 +73,99 @@ func TestParseUsesDefaultsAndConfiguredShutdownTimeout(t *testing.T) {
 	}
 }
 
+func TestParseSelectsRealtimeURLAndTransitionFallback(t *testing.T) {
+	tests := []struct {
+		name    string
+		values  map[string]string
+		wantURL string
+	}{
+		{
+			name: "explicit realtime URL",
+			values: map[string]string{
+				databaseURLEnv:      testDatabaseURL,
+				realtimeDatabaseEnv: "postgres://closer:other-secret@localhost:5432/closer_realtime?sslmode=disable",
+				databaseUnpooledEnv: "postgres://closer:unused@localhost:5432/unused?sslmode=disable",
+			},
+			wantURL: "postgres://closer:other-secret@localhost:5432/closer_realtime?sslmode=disable",
+		},
+		{
+			name: "unpooled fallback",
+			values: map[string]string{
+				databaseURLEnv:      testDatabaseURL,
+				databaseUnpooledEnv: "postgres://closer:direct@localhost:5432/closer_direct?sslmode=disable",
+			},
+			wantURL: "postgres://closer:direct@localhost:5432/closer_direct?sslmode=disable",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			values := map[string]string{
+				listenAddressEnv: "127.0.0.1:8080",
+			}
+			for key, value := range test.values {
+				values[key] = value
+			}
+			config, err := Parse(func(key string) (string, bool) {
+				value, ok := values[key]
+				return value, ok
+			})
+			if err != nil {
+				t.Fatalf("Parse() error = %v", err)
+			}
+			if config.RealtimeDatabaseURL != test.wantURL {
+				t.Fatalf("RealtimeDatabaseURL = %q, want %q", config.RealtimeDatabaseURL, test.wantURL)
+			}
+		})
+	}
+}
+
+func TestParseRejectsInvalidDatabaseURLsWithoutEchoingSecrets(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		variable string
+		values   map[string]string
+	}{
+		{
+			name:     "missing normal URL",
+			variable: databaseURLEnv,
+			values:   map[string]string{},
+		},
+		{
+			name:     "malformed normal URL",
+			variable: databaseURLEnv,
+			values:   map[string]string{databaseURLEnv: "postgres://closer:do-not-log@[invalid"},
+		},
+		{
+			name:     "malformed realtime URL",
+			variable: realtimeDatabaseEnv,
+			values: map[string]string{
+				databaseURLEnv:      testDatabaseURL,
+				realtimeDatabaseEnv: "postgres://closer:do-not-log@[invalid",
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			values := map[string]string{
+				listenAddressEnv: "127.0.0.1:8080",
+			}
+			for key, value := range test.values {
+				values[key] = value
+			}
+			_, err := Parse(func(key string) (string, bool) {
+				value, ok := values[key]
+				return value, ok
+			})
+			if err == nil || !strings.Contains(err.Error(), test.variable) {
+				t.Fatalf("Parse() error = %v, want error naming %s", err, test.variable)
+			}
+			if strings.Contains(err.Error(), "do-not-log") {
+				t.Fatalf("Parse() leaked the URL secret: %v", err)
+			}
+		})
+	}
+}
+
 func TestParseRejectsInvalidShutdownTimeout(t *testing.T) {
 	for _, timeout := range []string{"not-a-duration", "0s", "-1s"} {
 		t.Run(timeout, func(t *testing.T) {
@@ -75,8 +175,9 @@ func TestParseRejectsInvalidShutdownTimeout(t *testing.T) {
 					return "127.0.0.1:8080", true
 				case shutdownTimeoutEnv:
 					return timeout, true
+				case databaseURLEnv:
+					return testDatabaseURL, true
 				default:
-					t.Fatalf("unexpected environment lookup for %q", key)
 					return "", false
 				}
 			})
