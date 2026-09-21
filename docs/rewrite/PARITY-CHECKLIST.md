@@ -1,0 +1,239 @@
+# Closer parity checklist
+
+This is the cutover gate. Each item is a behavioral assertion against the
+current implementation. `MUST PORT` means it blocks making Go authoritative.
+
+## 1. Schema and identity
+
+- [ ] MUST PORT: `participant.id` remains stable and distinct from auth user ID.
+- [ ] MUST PORT: onboarding trims and bounds display names; duplicate names are
+      allowed; onboarding is idempotent.
+- [ ] MUST PORT: every occurrence pins `question_revision_id` while no-repeat
+      consumption uses logical `question_id`.
+- [ ] MUST PORT: current revision composite ownership is enforced by the DB,
+      not only by application code.
+- [ ] MUST PORT: all partial unique indexes and content/lifecycle checks in
+      `packages/db/src/schema/closer.ts` have equivalent constraints.
+- [ ] MUST PORT: no hard delete path exists for Questions or editorial history.
+
+## 2. Pair and invitation parity
+
+- [ ] MUST PORT: Pair creation occupies slot one, requires a trimmed intended
+      name and valid Partner/Friend relationship, and does not issue an invite.
+- [ ] MUST PORT: `creationRequestId` retry converges to one Pair.
+- [ ] MUST PORT: only explicit Invite/Connect issues a credential; issue/reuse
+      never silently rotates a valid token.
+- [ ] MUST PORT: raw invite appears only to the issuing browser; DB stores only
+      a token hash; other devices see existence and expiry only.
+- [ ] MUST PORT: explicit replacement revokes the old usable token and creates
+      exactly one new token.
+- [ ] MUST PORT: initial claim is explicit, single-use, slot-2-only, unexpired,
+      non-self, non-duplicate-Pair, and serializes with termination.
+- [ ] MUST PORT: successful claim clears intended name, creates first era, ends
+      pre-claim Together, and grants no pre-claim history.
+- [ ] MUST PORT: rejoin is distinct from initial claim, targets only an
+      anonymous member without an active session, and creates a new Participant.
+- [ ] MUST PORT: rejoin ends the exact old membership/era, freezes display name,
+      invalidates candidates, ends Together, revokes target links, and grants no
+      old-era content.
+- [ ] MUST PORT: termination is irreversible, idempotent, Pair-locked, and
+      closes active authority without deleting historical rows.
+
+Canonical tests:
+
+- `packages/db/src/closer.integration.test.ts`
+  - stable onboarding and concurrent identity resolution;
+  - Pair creation and `clientRequestId` retry;
+  - invitation issuance/reuse/replacement/hash-only behavior;
+  - claim, duplicate Pair rejection, self-claim rejection, expiry/revocation;
+  - claim serialization and unrelated Pair authorization;
+  - rejoin link slot binding and multi-space behavior.
+- `packages/db/src/rejoin-replacement.integration.test.ts`
+  - atomic old-era/new-era replacement;
+  - concurrent replacement vs Pair-scoped mutations;
+  - former-era history and pre-claim Together history.
+- `packages/db/src/pair-termination.integration.test.ts`
+  - claim/replacement/termination commit-order races;
+  - committed activity retained and later activity rejected.
+
+## 3. Private state machine
+
+### Candidate stage
+
+| Before                                                    | Actor/command                          | Allowed     | Mutation/result                                                                                        | Visibility/event                                                                      |
+| --------------------------------------------------------- | -------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
+| no active Conversation                                    | either complete member starts category | yes         | one `(Pair,era,category)` Conversation; creator is first creator                                       | creator gets candidate or ready state; other gets waiting; `private.changed`          |
+| unresolved candidate                                      | creator Ask                            | yes         | candidate `asked`, `resolved_at`; numbered Round with exact revision                                   | both see Round question; no candidate remains; `private.changed`                      |
+| unresolved candidate                                      | non-creator Ask                        | no          | none                                                                                                   | 404/400 equivalent; never disclose candidate                                          |
+| unresolved candidate                                      | creator Skip + UUID request            | yes         | candidate `skipped`, logical Question consumed, no Round, next candidate persisted; retry replays same | only creator sees next candidate; `private.changed` after route command if configured |
+| unresolved candidate                                      | creator Like/unlike                    | yes         | nullable final `liked_at` toggle                                                                       | creator only; no consumption                                                          |
+| asked/skipped/invalidated                                 | any candidate action                   | no          | none; Like frozen                                                                                      | no candidate projection                                                               |
+| unresolved pinned withdrawn / era ended / Pair terminated | system boundary                        | invalidates | candidate invalidated, not consumed as asked/skipped                                                   | never user-visible candidate                                                          |
+
+### Round stage
+
+| Before                             | Actor/command                     | Allowed | Mutation/result                                                              | Visibility                                                       |
+| ---------------------------------- | --------------------------------- | ------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| open, no own answer                | either member Answer              | yes     | one immutable answer; first answer commits provisional Round under Pair lock | viewer sees own answer only; other answer absent                 |
+| open, own answer exists            | same member Answer different body | no      | `ANSWER_IMMUTABLE` 409                                                       | unchanged                                                        |
+| open, 0 answers                    | either member Decline/Retire      | yes     | status `retired`, actor/time; Round number remains                           | lone/no answer rules preserved; no Reveal/reaction/reply         |
+| open, 1 answer                     | unanswered member Decline         | yes     | terminal retired                                                             | answer visible only to author; declined history                  |
+| open, 1 answer                     | answer author Decline             | no      | none                                                                         | unavailable                                                      |
+| open, 2 answers                    | either Decline                    | no      | none                                                                         | Reveal required                                                  |
+| open, 2 answers, viewer not viewed | viewer Reveal                     | yes     | insert viewer Reveal View                                                    | only after this viewer's action can that viewer see both answers |
+| both answers + viewer Reveal       | viewer reaction/reply             | yes     | upsert/delete own reaction/reply                                             | both answers and post-reveal content for authorized viewer       |
+| both answers + only creator Reveal | creator progression               | no      | no automatic advance; creator cannot continue                                | creator waits for other Reveal                                   |
+| both Reveal Views                  | creator continue/category entry   | yes     | next creator candidate in same Conversation                                  | non-creator waits; candidate confidential                        |
+
+The active projection states are `CURRENT_ROUND`, `CANDIDATE`,
+`WAITING_FOR_CREATOR`, `READY_FOR_NEXT`, and `EXHAUSTED`. The current route
+`hideUnviewedReveal` additionally removes answers/reactions/replies from a
+`REVEAL_READY` response.
+
+### Private selection and history
+
+- [ ] MUST PORT: Private ramp prefers Light at 0–1 mutually completed rounds,
+      Medium at 2–3, Deep at 4+; fallback is Light→Medium→Deep,
+      Medium→Light→Deep, Deep→Medium→Light.
+- [ ] MUST PORT: only both answers plus both Reveal Views count as mutually
+      completed; Like, Ask, Skip, Decline, one answer, one Reveal, reaction, and
+      reply do not advance the ramp.
+- [ ] MUST PORT: skipped and asked logical Questions remain consumed after later
+      revisions; exhaustion does not cycle or restart.
+- [ ] MUST PORT: replacement creates a new Conversation/creator/sequence and
+      resets consumption/ramp.
+- [ ] MUST PORT: former history filters by viewer membership IDs, uses frozen
+      ended display names, and never grants replacement history.
+- [ ] MUST PORT: terminated-history visibility follows the same answer and
+      reveal boundary documented by ADR 005; fully answered-before-boundary rounds
+      are readable to both former members even without prior Reveal.
+
+Canonical tests: `packages/db/src/private.integration.test.ts` cases covering
+both-slot readiness, category isolation, candidate confidentiality, answer
+confidentiality, idempotent answer/Skip, logical consumption, withdrawal,
+intensity, replacement, Decline, Reveal, reactions, replies, and progression;
+`packages/db/src/pair-termination.integration.test.ts` for termination races.
+
+## 4. Together parity
+
+- [ ] MUST PORT: one member may start Together before claim; claim ends the
+      pre-claim session and does not grant its history to the claimant.
+- [ ] MUST PORT: relationship-compatible categories only; manual URL picker
+      routes cannot bypass category authorization.
+- [ ] MUST PORT: Start persists category, seed, first shown Question, and
+      `clientRequestId` convergence.
+- [ ] MUST PORT: selection pins exact revision and never repeats logical
+      Question within one Session.
+- [ ] MUST PORT: Next marks current `advanced_at` and inserts one next card;
+      Skip also advances but marks `skipped_at`; Like toggles current card only.
+- [ ] MUST PORT: Next transitions alone drive Light/Medium/Deep ramp at 0–1,
+      2–3, 4+; Skip and Like do not.
+- [ ] MUST PORT: concurrent Next/Skip and repeated request IDs commit one
+      transition; stale current/next IDs reject safely.
+- [ ] MUST PORT: End sets `ended_at`, repeat End is safe, later mutation is
+      rejected; exhausted is distinct from manually ended.
+- [ ] NICE TO HAVE: exact 20-item client buffering and prefetch timing may
+      change if the persisted choice, ordering seed, fallback, and no-repeat result
+      remain equivalent.
+
+Canonical tests: `packages/db/src/together.integration.test.ts` and
+`apps/web/src/features/together-session/components/together-playback.test.ts`.
+
+## 5. Question/Admin parity
+
+- [ ] MUST PORT: create Question + revision 1 atomically, inactive by default.
+- [ ] MUST PORT: revision ordinal increases; edit does not mutate old revision;
+      restore copies as a new later revision.
+- [ ] MUST PORT: `expectedCurrentRevisionId` stale writes return 409; no
+      last-write-wins.
+- [ ] MUST PORT: exact duplicate wording warning trims, collapses whitespace,
+      and ignores case; it never blocks creation.
+- [ ] MUST PORT: activate/reactivate require a safe current revision; deactivate
+      does not rewrite pinned occurrences.
+- [ ] MUST PORT: withdrawal requires a reason, is idempotent preserving first
+      actor/time/reason, excludes the revision from future selection, and
+      invalidates unresolved Private candidates.
+- [ ] MUST PORT: lifecycle events are append-only and identify Admin actor;
+      pre-Admin rows display `Pre-Admin catalog`.
+- [ ] MUST PORT: Admin projections expose no consumer identity, Pair, answer,
+      reply, session, or occurrence drilldown.
+
+Canonical tests: `packages/db/src/question-revisions.integration.test.ts`,
+`apps/web/src/server/modules/admin-questions/*.integration.test.ts`,
+`apps/web/src/app/api/admin/questions/admin-routes.test.ts`, and the Admin UI
+editor/coverage tests.
+
+## 6. Analytics and inventory parity
+
+- [ ] MUST PORT: all-time only; current revision is the default; historical
+      revision and all-revisions aggregate are explicitly labelled.
+- [ ] MUST PORT: every metric bucket requires five distinct Pairs. Below five,
+      return `insufficient_data` and no count, numerator, denominator, or rate.
+- [ ] MUST PORT: Private Valid Offers = unresolved + asked + skipped;
+      Decisions = asked + skipped; Decision Rate = Decisions / Valid Offers;
+      Ask/Skip/Like rates use Decisions as denominator and invalidated rows are
+      excluded.
+- [ ] MUST PORT: Together Shown = shown occurrences; Decisions = advanced;
+      Continue = advanced and not skipped; Skip = advanced and skipped; Like rate
+      counts liked decided occurrences only.
+- [ ] MUST PORT: inventory is current eligible Question count by
+      category × relationship × mode; 0–5 critical, 6–11 low, 12+ healthy;
+      intensity is diagnostic breakdown only.
+
+Source of truth: `docs/admin/ADMIN-ANALYTICS.md` and
+`apps/web/src/server/modules/admin-questions/admin-question-analytics.service.ts`.
+
+## 7. Realtime parity
+
+- [ ] MUST PORT: exact fixed event vocabulary and `{version:1,pairId,type}`
+      payload.
+- [ ] MUST PORT: one lazy listener per API process, Pair subscriber registry,
+      reconnect backoff, heartbeat, abort cleanup, and no cross-Pair delivery.
+- [ ] MUST PORT: SSE sends invalidations only; all content arrives via
+      authorized JSON projections.
+- [ ] MUST PORT: client reconnect/open performs reconciliation and invalidates
+      only the affected React Query key prefix; termination closes the stream and
+      navigates to Pair Home.
+
+Canonical tests: `packages/db/src/realtime.test.ts`,
+`apps/web/src/app/api/pairs/[pairId]/events/route.test.ts`, and
+`apps/web/src/features/pair/components/pair-realtime-provider.test.ts`.
+
+## 8. Test port matrix
+
+| Category                 | MUST PORT                                                                                                                        | Nice-to-have                              |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| Auth                     | anonymous session, onboarding, stable identity/linking, Admin access, bootstrap/recovery, rate limit                             | provider-specific Better Auth behavior    |
+| Pair                     | creation, access, status, name edit, multi-space                                                                                 | exact Server Component redirect snapshots |
+| Invite                   | issue/reuse/replace, hash-only, landing, claim race, duplicate Pair                                                              | QR SVG snapshots                          |
+| Replacement              | slot binding, eligible guest, old-era closure, concurrent races, history                                                         | exact copy                                |
+| Together                 | categories, start/claim, ramp/fallback, revision pinning, Next/Skip/Like/End, idempotency, authorization                         | page size/prefetch timing                 |
+| Private                  | candidate secrecy, Ask/Skip/Like, logical consumption, rounds, answers, Decline, Reveal, reaction/reply, progression, exhaustion | animation/performance thresholds          |
+| History                  | former-era projection, frozen names, termination boundary, pre-claim Together                                                    | visual snapshots                          |
+| Admin                    | revision lifecycle, conflicts, withdrawal, duplicate warning, filters, actor labels                                              | desktop layout details                    |
+| Analytics                | formulas, revision scopes, suppression, inventory                                                                                | query-plan snapshots                      |
+| Realtime                 | payload validation, Pair fanout, reconnect, SSE heartbeat/open/abort, client invalidation                                        | browser EventSource timing                |
+| Security/confidentiality | no candidate leak, no answer leak, no token leak, no unrelated Pair access, no admin consumer data                               | log redaction scans                       |
+
+## 9. Black-box parity harness
+
+Run both implementations against the same disposable PostgreSQL fixture and
+the same command sequence:
+
+```text
+fixture -> authenticate actor(s) -> command -> normalized projection -> state digest
+```
+
+Normalize nondeterministic fields (UUIDs, timestamps, raw tokens, seed when
+random) into stable placeholders. Compare exactly where possible:
+
+- status/error code and HTTP status;
+- actor-relative state tags and resource IDs within a test mapping;
+- Question logical/revision IDs, position/number, candidate state;
+- answer visibility and absence of forbidden fields;
+- event type/pair scope, never event timing.
+
+Use semantic assertions for display timestamps, hash values, deterministic
+ordering when a seed differs, and JSON field ordering. Include race scenarios
+with two concurrent clients and record commit order. A parity failure must
+retain both normalized command traces and DB state digests for diagnosis.
