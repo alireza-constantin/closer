@@ -237,3 +237,94 @@ Use semantic assertions for display timestamps, hash values, deterministic
 ordering when a seed differs, and JSON field ordering. Include race scenarios
 with two concurrent clients and record commit order. A parity failure must
 retain both normalized command traces and DB state digests for diagnosis.
+
+## 10. Frozen custom-auth parity
+
+- [ ] MUST PORT: final runtime has purpose-built Go auth and no Better Auth
+      route, table dependency, runtime package, cookie adapter, or provider
+      callback.
+- [ ] MUST PORT: an anonymous `auth_user` is created only by explicit POST;
+      root GET, public invite/rejoin GET, React Router loader, browser prefetch,
+      SSE connect, and `/api/v1/me` never create auth/session/Participant rows.
+- [ ] MUST PORT: auth identity remains distinct from Participant; an auth user
+      can have no Participant and an Admin always has no Participant.
+- [ ] MUST PORT: anonymous credential upgrade preserves the same auth-user ID,
+      Participant ID, memberships, Pair/history ownership, and valid sessions.
+- [ ] MUST PORT: direct signup creates a registered auth user/session but no
+      Participant; explicit onboarding creates exactly one Participant.
+- [ ] MUST PORT: a browser that logs into another registered account never
+      merges its anonymous Participant/data; its anonymous current session is
+      revoked and the existing account gets a fresh session.
+- [ ] MUST PORT: session token is opaque, random, cookie-only, hash-only in the
+      DB, revoked server-side, and never reflected in JSON/logs/SSE. Expired and
+      revoked sessions cannot authorize a request.
+- [ ] MUST PORT: password handling is Argon2id with the frozen parameter,
+      bounds, encoded hash, unique normalized email, and rehash-on-login policy.
+- [ ] MUST PORT: unknown email, wrong password, disabled user, and
+      non-credential identity produce the same `INVALID_CREDENTIALS` result.
+- [ ] MUST PORT: consumer password-reset delivery is absent/deferred; Admin
+      operator recovery can reset only an existing Admin and revokes only its
+      sessions.
+- [ ] MUST PORT: `admin_user` is the final authorization source. Bootstrap
+      cannot promote an existing consumer; an Admin route independently rejects
+      missing session, consumer session, and non-Admin registered session.
+- [ ] MUST PORT: Admin login permits five durable attempts/IP/minute and denies
+      the sixth across separate API connections. Consumer IP/email limits and
+      trusted-proxy handling have integration tests.
+- [ ] MUST PORT: every cookie mutation validates exact configured Origin; no
+      wildcard credential CORS exists; missing Origin browser mutations fail.
+
+## 11. Frozen lock/idempotency test matrix
+
+For each row, tests must assert lock order, committed result, retry behavior,
+and the listed event—not merely that concurrent requests eventually return.
+
+| Case                                         | Required assertion                                                                                                                         |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| issue/reuse/replace vs issue/reuse/replace   | Pair first; one usable hash; explicit replace revokes exactly one predecessor; `pair.changed`                                              |
+| claim vs terminate / claim vs Together start | Pair then invite/membership/era plus ordered-pair advisory lock; commit order decides; rejected claim leaves token usable where required   |
+| replacement vs Private/Together/termination  | Pair then membership/era then child rows; no partially closed era and no new entrant historical access                                     |
+| candidate start vs start / Ask vs Skip       | Pair then era/Conversation/candidate; one Conversation/one resolved result; no candidate field crosses actor boundary                      |
+| Skip retry                                   | UUID request replay returns persisted next candidate or exhaustion without consuming a second logical Question                             |
+| Like vs Ask/Skip                             | Like cannot mutate a resolved candidate and Ask/Skip cannot return an obsolete Like state                                                  |
+| withdrawal vs unresolved candidate           | Question/revision first, affected candidates deterministically; first withdrawal facts survive; unresolved candidate cannot become a Round |
+| first/second Answer vs Decline/termination   | Pair then Round; own answer immutable, only eligible Decline succeeds, and commit order defines former history                             |
+| Reveal/reaction/reply/progression            | Pair then Round and viewer rows; two answers plus viewer Reveal required; both Reveal Views required for creator continuation              |
+| Together Next/Skip/Like/End                  | Pair then Session/current occurrence; request ID/current-card checks converge and terminal session rejects later writes                    |
+| revision stale edit                          | Question then current revision; expected pointer mismatch returns `STALE_REVISION` without a new revision                                  |
+
+## 12. API/PWA/deployment parity
+
+- [ ] MUST PORT: all final API routes are `/api/v1`; additive v1 changes are
+      backward-compatible and a breaking change requires a new major path.
+- [ ] MUST PORT: every non-success JSON response has stable machine code and
+      request ID; raw SQL errors are never observable.
+- [ ] MUST PORT: OpenAPI, generated TypeScript client, and contract tests have
+      no drift; HTTP DTOs are not database row types.
+- [ ] MUST PORT: production is same-origin static Vite + Go API. Vite dev CORS
+      is explicit; Vercel transition and future Caddy both serve SPA deep links
+      without routing `/api/v1` to `index.html`.
+- [ ] MUST PORT: PWA starts at `/`; service worker caches versioned static assets
+      only, does app-shell navigation fallback, waits for explicit update reload,
+      and never caches authenticated JSON, SSE, writes, or offline domain state.
+- [ ] MUST PORT: normal DB access can use Neon pooling, but realtime `LISTEN`
+      uses a session-capable direct URL. Local and future VPS PostgreSQL require
+      configuration changes only; no Neon API/hostname appears in domain code.
+- [ ] MUST PORT: each API process has its own listener and subscriber registry;
+      cross-instance PostgreSQL fanout works without Redis; slow SSE clients
+      cannot block a committed command.
+
+## 13. Schema and test-database cutover gate
+
+- [ ] MUST PORT: while porting, Go tests use `CLOSER_TEST_DATABASE_URL` and
+      refuse any database name other than `closer_test`/`closer_test_*`.
+- [ ] MUST PORT: the Go-independent reviewed SQL baseline installs on a clean
+      disposable database and reproduces every required domain constraint.
+- [ ] MUST PORT: baseline replaces Better Auth tables with `auth_user`,
+      `auth_credential`, `auth_session`, `admin_user`, and `auth_rate_limit`
+      without redesigning Closer domain tables.
+- [ ] MUST PORT: after baseline ownership moves to `apps/api/db/migrations`,
+      no production path invokes Drizzle `db:push`.
+- [ ] MUST PORT: Caddy exposes only HTTP/HTTPS; future PostgreSQL listens only
+      on loopback, uses an application-specific role, and has a tested off-server
+      backup/restore procedure.

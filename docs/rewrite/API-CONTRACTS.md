@@ -1,9 +1,10 @@
 # Closer API contracts
 
-This document records the current Next route surface and the proposed stable
-Go JSON/SSE surface. Shapes below are intentionally projection-oriented: the
-server derives actor-relative visibility and the browser never chooses an
-owner.
+This document records the current Next route surface and the frozen stable Go
+JSON/SSE surface. Current-route tables are evidence only. The REWRITE-01 rules
+below supersede any older use of unversioned `/api` or Better Auth endpoints.
+Shapes are intentionally projection-oriented: the server derives
+actor-relative visibility and the browser never chooses an owner.
 
 ## Contract rules
 
@@ -138,26 +139,71 @@ GET /api/admin/questions/:id/analytics?revisionScope=current|revision|all&revisi
 These endpoints must retain current-revision default, historical labelling, and
 five-distinct-Pair suppression.
 
-## Proposed Go API conventions
+## REWRITE-01 frozen Go API conventions
 
-Keep the current public URLs where they already express a domain resource.
-Add safe read endpoints for currently server-only landing/page data:
+Every Go endpoint begins `/api/v1`. The Go router is organized by
+domain-visible resources and commands, not `/rpc`. JSON is UTF-8,
+`application/json`; all protected reads and every response that can contain
+participant-relative state use `Cache-Control: private, no-store`. An error is
+always `{"error":{"code","message","requestId"}}`; clients branch on
+`code`, not on `message`.
+
+The final auth surface is deliberately small:
 
 ```text
-GET /api/me
-GET /api/invites/:token
-GET /api/rejoin/:token
-GET /api/pairs
-GET /api/pairs/:pairId/history
+GET  /api/v1/me                         safe actor/onboarding/Admin-neutral state
+POST /api/v1/auth/anonymous             explicit anonymous user + session creation
+POST /api/v1/auth/register              direct registered auth user + session, no Participant
+POST /api/v1/auth/upgrade               attach credential to current anonymous auth user
+POST /api/v1/auth/login                 generic invalid-credential failure
+POST /api/v1/auth/logout                revoke current session
+POST /api/v1/auth/logout-all            revoke all sessions for current auth user
+POST /api/v1/admin/login                Admin credential login with durable limit
+POST /api/v1/admin/logout               revoke current Admin session
 ```
 
-`GET /api/me` returns only actor/onboarding state. `GET /api/invites/:token`
+There is no anonymous creation on `GET /me`, no Better Auth catch-all route,
+no client-chosen actor ID, no JWT endpoint, and no consumer password-reset
+endpoint in V1. All cookie mutations require an allow-listed Origin.
+
+Canonical public/participant reads are:
+
+```text
+GET /api/v1/invites/:token
+GET /api/v1/rejoin/:token
+GET /api/v1/pairs
+GET /api/v1/pairs/:pairId
+GET /api/v1/pairs/:pairId/history
+GET /api/v1/pairs/:pairId/events
+```
+
+`GET /api/v1/me` returns only actor/onboarding state. `GET /api/v1/invites/:token`
 returns inviter display name, relationship type, and contextual intended name;
-`GET /api/rejoin/:token` returns only target slot/context needed by the page.
+`GET /api/v1/rejoin/:token` returns only target slot/context needed by the page.
 Neither endpoint proves authority to redeem. Redemption remains an explicit
 POST.
 
-The Go router should be organized by domain-visible resources and commands,
-not a generic `/rpc` endpoint. Every command response should be sufficient for
-the immediate client update but the client may refetch the authoritative
-projection after an SSE event.
+Resource routes in the existing tables retain their resource/command shape with
+the `/api/v1` prefix. The canonical Private collection is
+`/pairs/:pairId/private-conversations`; no new `/private-rounds` collection
+alias is created. A command response is enough for the immediate client update,
+but the client may refetch the authoritative projection after SSE.
+
+### Projection and contract synchronization rules
+
+- A `WAITING_FOR_CREATOR` Private projection may contain only the safe state,
+  the already-selected category lane, and a version/refresh marker. It contains
+  no candidate ID, Question ID, revision ID, text, intensity, Like state,
+  timestamp, rank, seed, or selection metadata.
+- Before the current viewer persists Reveal, a private Round projection omits
+  the other answer and all reactions/replies. Omitting a field is mandatory;
+  sending it as a hidden value is a leak.
+- SSE is `text/event-stream` at `/api/v1/pairs/:pairId/events`, with only
+  `{version:1,pairId,type}` and the four fixed event names. It has no replay
+  cursor and no content payload; reconnect/focus refetch makes delivery loss
+  harmless.
+- `apps/api/openapi.yaml` is the source contract. Go handler/DTO tests validate
+  it; TypeScript transport types/client are generated from it; CI fails when
+  generated output differs. React Hook Form/Zod stays at the client boundary
+  for forms and response hardening, but it does not become a second server
+  domain implementation.

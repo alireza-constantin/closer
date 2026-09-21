@@ -1,33 +1,54 @@
-# Closer Go + Vite rewrite audit
+# Closer Go + Vite rewrite architecture
 
-REWRITE-00 is complete as a documentation-only audit. The current Next/Bun
-implementation remains the executable specification. No Go code, Vite code,
-schema mutation, runtime change, or application commit is part of this work.
+**Status: REWRITE-01 architecture freeze.** The final target is React, Vite,
+TypeScript, React Router, TanStack Query, React Hook Form, Zod, Tailwind, and
+the existing Closer visual system on the frontend; Go, PostgreSQL, HTTP JSON,
+SSE, and PostgreSQL `LISTEN`/`NOTIFY` on the backend. **Purpose-built Closer
+authentication in Go is frozen. Better Auth is not part of the final runtime.**
+
+This is a documentation-only decision record. The current Next/TypeScript app
+and its tests remain the behavioral reference until cutover. It does not
+authorize Go or Vite implementation, schema mutation, dependency changes,
+deployment, or a database operation.
 
 Read the documents in this order:
 
-1. [GO-VITE-ARCHITECTURE.md](./GO-VITE-ARCHITECTURE.md) — current map, auth,
-   domain, persistence, realtime, frontend reuse, and target structure.
-2. [API-CONTRACTS.md](./API-CONTRACTS.md) — current HTTP surface and the
-   proposed explicit Go API.
-3. [PARITY-CHECKLIST.md](./PARITY-CHECKLIST.md) — behavior, locking,
-   confidentiality, analytics, realtime, and canonical tests.
-4. [REWRITE-PLAN.md](./REWRITE-PLAN.md) — ticket sequence, parity harness,
-   cutover, VPS deployment, risks, and checkpoints.
+1. [GO-VITE-ARCHITECTURE.md](./GO-VITE-ARCHITECTURE.md) — the frozen technical
+   decisions, then the supporting repository audit.
+2. [API-CONTRACTS.md](./API-CONTRACTS.md) — the versioned HTTP contract and
+   its error, projection, and client-validation rules.
+3. [PARITY-CHECKLIST.md](./PARITY-CHECKLIST.md) — non-negotiable behavioral,
+   concurrency, confidentiality, auth, realtime, and PWA cutover gates.
+4. [REWRITE-PLAN.md](./REWRITE-PLAN.md) — dependency order, exact early-ticket
+   acceptance criteria, transition layout, and cutover boundaries.
 
-## Executive decision
+## Frozen executive decision
 
-Go + Vite is a good fit for Closer, with one non-negotiable constraint: the Go
-API must be a persistent, stateful process with PostgreSQL transactions and a
-session-capable `LISTEN` connection. A stateless/serverless deployment would
-fight the current realtime and locking model. React + Vite is appropriate for
-the client, but it must preserve server-derived projections and route guards;
-it must not move authorization or candidate confidentiality into the browser.
+Go + Vite is the rewrite target. The Go API is a persistent, stateful process
+with PostgreSQL transactions and a session-capable `LISTEN` connection; it is
+not a serverless port. React + Vite preserves server-derived projections and
+route guards; it does not move authorization or candidate confidentiality into
+the browser. `chi` over `net/http`, `pgx`/`pgxpool`, `sqlc` for stable queries,
+and direct `pgx` only for genuinely dynamic reporting are frozen choices.
 
 The highest-risk phase is Private, especially creator-only unresolved
 candidate projections, Ask/Skip races, logical-question consumption, answer
 confidentiality, Decline, and both-view Reveal progression. Pair termination,
 guest replacement, and auth identity linking are the next highest-risk seams.
+
+## Portability boundary
+
+The same domain code must run against local PostgreSQL in development, Neon in
+current production, and PostgreSQL bound to `127.0.0.1` on the future VPS.
+`DATABASE_URL` is the normal-query pool URL. `REALTIME_DATABASE_URL` is a
+session-capable direct URL for `LISTEN`; during transition only,
+`DATABASE_URL_UNPOOLED` remains its fallback. No Neon API or hostname belongs
+in domain or persistence code.
+
+Production serves the static Vite build and `/api/v1` from one origin. Caddy
+exposes HTTP/HTTPS only; PostgreSQL is not public, uses an application-specific
+role, and has off-server backups. Vercel may host the transition only when it
+can serve deep-link fallbacks and proxy the API without changing this contract.
 
 ## Important repository findings
 
@@ -47,7 +68,7 @@ guest replacement, and auth identity linking are the next highest-risk seams.
   The rewrite should create a reviewed migration baseline before any real-user
   cutover; it must never carry `db:push` into the post-launch workflow.
 
-## Contradictions and supersessions
+## Resolved supersessions
 
 1. ADR 003 contains an explicitly labelled historical Shared Open section whose
    creator/shared-candidate rules are superseded by the 2026-09-20 amendment.
@@ -59,10 +80,14 @@ guest replacement, and auth identity linking are the next highest-risk seams.
 3. The root README and `bts.jsonc` describe a Vercel/Next generated stack. That
    is accurate for the current app but is deployment history, not a constraint
    on the proposed VPS target.
-4. `apps/web/src/app/api/pairs/[pairId]/private-rounds/route.ts` returns the
-   conversation list despite its `/private-rounds` name. The rewrite should
-   expose one canonical resource path and keep a compatibility alias only if
-   the parity client needs it.
+4. ADR 001 correctly preserves a stable Participant through Better Auth's old
+   identity-linking behavior. The Go auth model supersedes only that provider
+   workaround: an anonymous user attaches a credential to the **same**
+   `auth_user`, so `participant.auth_user_id` does not need repointing.
+5. `apps/web/src/app/api/pairs/[pairId]/private-rounds/route.ts` returns the
+   conversation list despite its name. The Go API uses canonical
+   `/api/v1/pairs/:pairId/private-conversations`; there is no new ambiguous
+   alias unless a measured transition client requires one.
 
 ## Evidence boundary
 
@@ -72,18 +97,18 @@ realtime implementation, frontend features, and integration/unit tests. The
 most authoritative implementation references are listed inline in the other
 documents with file and line spans.
 
-## Open decisions requiring user input
+## Closed decisions
 
-The audit can proceed without blocking on these, but decide them before the
-corresponding implementation ticket:
-
-- whether Go auth migrates Better Auth tables in place or uses a short-lived
-  compatibility bridge;
-- whether email verification/password reset are in the rewrite launch scope;
-- whether the VPS uses local PostgreSQL or an external managed PostgreSQL
-  service, and the required backup retention;
-- the rollback retention window for keeping the legacy Next app after cutover;
-- whether `/dashboard` remains a compatibility route or is removed after the
-  Vite route map is proven;
-- whether current pre-launch disposable data is intentionally discarded when
-  the reviewed Go migration baseline is installed.
+- Pre-launch data is disposable. The reviewed Go-independent baseline replaces
+  Better Auth tables at `CUTOVER-01`; there is no in-place provider bridge.
+- Consumer email verification and email-delivered password reset are deferred.
+  They are neither implied by login nor silently simulated. Privileged Admin
+  recovery remains an operator-only command that resets only an Admin user and
+  revokes that user's sessions.
+- `admin_user`, not `ADMIN_USER_ID`, is the final authorization record. The
+  environment variable is transition-only and is removed with Better Auth.
+- `/dashboard` is a temporary client redirect to `/`; it is removed only at
+  legacy removal after deep-link parity proves the new route map.
+- The legacy Next app remains read-only reference and rollback artifact until
+  cutover parity, rollback rehearsal, and the agreed retention window are
+  complete. This task deliberately does not set an operational retention date.

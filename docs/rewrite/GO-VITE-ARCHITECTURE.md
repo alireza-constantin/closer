@@ -1,7 +1,343 @@
 # Go + Vite architecture and repository audit
 
-Status: REWRITE-00 audit/specification only. This document records current
-behavior and a proposed porting shape; it does not authorize implementation.
+Status: **REWRITE-01 architecture freeze.** Sections 1–15 are the supporting
+REWRITE-00 audit. The decisions in section 0 are authoritative where an older
+audit statement says “proposed” or differs. This document does not authorize
+implementation.
+
+## 0. Frozen architecture decisions
+
+### 0.1 HTTP, package direction, and database access
+
+Use `chi` on the Go standard library `net/http`; do not add another web
+framework. `chi` supplies readable nested routes and path parameters while all
+HTTP, streaming, context, and shutdown behavior remains standard-library
+behavior. Use structured `slog` logging, request IDs, recovery, request-size
+limits, explicit timeouts, and a small ordered middleware chain.
+
+```text
+apps/api/
+  cmd/server/main.go                 process wiring only
+  internal/config/                   parsed, validated runtime configuration
+  internal/httpapi/                  chi routes, middleware, JSON DTOs/errors
+  internal/auth/                     auth user, credential, session, admin actor
+  internal/participant/              onboarding and participant resolution
+  internal/pair/                     Pair, membership, era, termination
+  internal/invite/                   initial and rejoin credential lifecycles
+  internal/question/                 revision lifecycle and selection primitives
+  internal/together/                 Session commands and projections
+  internal/private/                  Conversation, candidate, Round commands
+  internal/history/                  former/current authorized projections
+  internal/admin/                    catalog, inventory, analytics
+  internal/realtime/                 NOTIFY listener, registry, SSE handler
+  internal/postgres/                 pool setup, transaction/retry/lock helpers
+  db/queries/                        sqlc SQL source
+  db/sqlc/                           generated code; never hand edited
+  db/migrations/                     reviewed baseline and later SQL migrations
+  sqlc.yaml
+```
+
+`httpapi` authenticates, validates HTTP input, calls one service, maps a
+typed result/error, and serializes a DTO. It owns no Pair, Private, auth, or
+authorization transition. Domain services own authorization that depends on
+domain state, transaction scope, row locking, validation, idempotency, and
+the returned application projection. Services may depend only on their own
+types, narrow query interfaces, `postgres`, and lower-level shared helpers;
+they do not import `httpapi` or another feature's implementation. `realtime`
+accepts already-committed invalidation metadata and has no domain authority.
+
+Generated sqlc row types stay inside persistence/service code. HTTP DTOs are
+hand-authored JSON types in `internal/httpapi` (with generated TypeScript
+types at the frontend boundary); database rows are never HTTP responses.
+
+Use `pgxpool` for normal queries, an explicit `pgx.Tx` for every multi-step
+command, and one dedicated long-lived `pgx.Conn` per API process for `LISTEN`.
+`DATABASE_URL` configures the normal pool and can use a Neon pooler. A
+production `REALTIME_DATABASE_URL` must be a direct/session-capable URL.
+`DATABASE_URL_UNPOOLED` is only a transition fallback when the realtime URL is
+unset; new Go deployment configuration must set `REALTIME_DATABASE_URL`.
+Local PostgreSQL may use `DATABASE_URL` for both. Start only after pool `Ping`
+and, when realtime is enabled, direct-listener connection validation succeed.
+Defaults are conservative: pool max 10, min 0, acquire timeout 5 seconds,
+connect timeout 5 seconds, command timeout 10 seconds, and a separately
+bounded 30-second streaming write deadline. Configuration, not code, adjusts
+them. Shutdown first stops accepting requests, closes SSE subscribers, waits
+up to 10 seconds for requests, then closes listener and pool.
+
+### 0.2 sqlc and direct-pgx boundary
+
+`sqlc` is required for stable row shapes: auth/session/credential lookups;
+Pair, membership, and era access/locks; invite token lifecycle; Question and
+revision lifecycle; deterministic selection inputs; Private and Together
+command/projection queries; and ordinary Admin catalog/inventory reads. It is
+preferred for all fixed SQL with a stable result shape, especially every
+`FOR UPDATE` query.
+
+Direct parameterized `pgx` is acceptable only in a named repository helper for
+dynamic Admin analytics/reporting with optional filters, large conditional
+aggregates, or a query whose generated API would obscure its semantics. It is
+not permission to use an ORM, concatenate SQL, or hide a transaction. A
+service receives `Queries.WithTx(tx)` (or a transaction-bound repository) so
+every query in a command uses exactly its command transaction.
+
+### 0.3 Auth model and lifecycle
+
+Custom Go auth is frozen. There is no Better Auth, Authboss, GoTrue, Ory,
+Zitadel, JWT identity token, OAuth, or third-party authentication server in
+the final runtime.
+
+```text
+auth_user(
+  id uuid primary key,
+  kind text not null check (kind in ('anonymous','registered','admin')),
+  created_at timestamptz not null,
+  disabled_at timestamptz null
+)
+auth_credential(
+  auth_user_id uuid primary key references auth_user(id) on delete restrict,
+  email_normalized text not null unique,
+  password_hash text not null,
+  created_at timestamptz not null,
+  password_updated_at timestamptz not null
+)
+auth_session(
+  id uuid primary key,
+  auth_user_id uuid not null references auth_user(id) on delete restrict,
+  token_hash bytea not null unique,
+  created_at timestamptz not null,
+  expires_at timestamptz not null,
+  last_used_at timestamptz not null,
+  revoked_at timestamptz null
+)
+admin_user(
+  auth_user_id uuid primary key references auth_user(id) on delete restrict,
+  created_at timestamptz not null
+)
+auth_rate_limit(
+  scope text not null, subject text not null, window_started_at timestamptz not null,
+  count integer not null check (count >= 0), primary key (scope, subject)
+)
+```
+
+Index active sessions by `(auth_user_id, expires_at)` and expired/revoked rows
+by `expires_at`; use the unique credential email and token hash indexes for
+lookup. No auth table stores Participant profile data, a raw session token,
+OAuth metadata, image/name, plaintext password, or IP/user-agent metadata.
+`participant.auth_user_id` remains unique and refers to `auth_user.id` with
+`RESTRICT`. Its stable Participant, memberships, and history are unchanged.
+
+An anonymous `auth_user` and session are created **only by an explicit
+non-idempotent `POST /api/v1/auth/anonymous`** initiated by the client after
+the user chooses to start/onboard or needs an authenticated join action.
+`GET`, link opening, route prefetch, public invite/rejoin inspection, and
+landing at `/` do not create an auth row, cookie, or Participant. An auth
+session may exist without a Participant. `POST /onboarding` is the only
+operation that creates a Participant, and it is idempotent for that auth user.
+
+An anonymous-to-registered upgrade locks the current `auth_user` and its
+Participant mapping, normalizes the supplied email (`TrimSpace` then Unicode
+case-folded lowercase), checks the unique credential row, hashes the password,
+inserts `auth_credential`, and changes `auth_user.kind` to `registered` in one
+transaction. It preserves the exact same `auth_user.id`, `participant.id`,
+memberships, Pair ownership, history, and existing sessions. A duplicate email
+returns `EMAIL_IN_USE` with no merge, no Participant copy, and no session
+change. Unlike ADR 001's Better Auth workaround, no mapping repoint occurs.
+
+Direct consumer registration is allowed: create one registered `auth_user`,
+credential, and current session, but no Participant until explicit onboarding.
+An existing registered user logs in on another device and receives a new
+session for that same auth user. An anonymous browser that tries an owned email
+gets `EMAIL_IN_USE`; it stays anonymous and retains its separate data. Login
+from a browser with an anonymous session first revokes only that browser's
+anonymous session, clears the cookie/client query state, then creates a session
+for the authenticated existing account. It never merges either Participant or
+domain history.
+
+Passwords are accepted only at 8–128 UTF-8 bytes after validation. Hash with
+Argon2id version 19, 64 MiB memory, 3 iterations, parallelism 1, a fresh
+16-byte cryptographic salt, and a 32-byte derived key; persist the standard
+encoded Argon2id string. Verification uses constant-time library comparison;
+if stored parameters are weaker than the current policy, rehash and update the
+credential in the successful-login transaction. Passwords and raw credentials
+are never logged or persisted outside the hash.
+
+Sessions use 32 random bytes encoded base64url. Only `SHA-256(raw-token)` is
+stored. The cookie is `closer_session`, `HttpOnly`, `Path=/`, `SameSite=Lax`,
+`Secure` outside local development, and has a 7-day sliding expiry with an
+absolute 30-day ceiling from creation. Renew the database and cookie expiry at
+most once per 24 hours; do not rotate the raw token merely for normal use.
+Logout revokes the current session and expires its cookie; logout-all revokes
+every unexpired session for the actor and is an explicitly separate command.
+Password change/recovery revokes all of that auth user's sessions, including
+the initiator, and requires a new login. Expired/revoked sessions are deleted
+by a daily bounded job and may be opportunistically removed on lookup.
+
+Login deliberately returns one `INVALID_CREDENTIALS` result for unknown email,
+wrong password, disabled account, and a non-credential anonymous user. It
+performs a dummy Argon2id verification for absent credentials to reduce timing
+distinction. Consumer email verification and email-delivered password reset
+are deferred from V1; no endpoint claims to deliver reset email. Admin recovery
+is instead the existing privileged operator concept: a local operator command
+identifies an existing `admin_user` by configured bootstrap identity, sets a
+new password, and revokes only that Admin's sessions. It cannot reset an
+arbitrary user.
+
+Admin is an `auth_user` with `kind='admin'` and an `admin_user` row, never a
+Participant. The final bootstrap command accepts a dedicated unused email and
+password, creates both rows plus the credential transactionally, and is a no-op
+only if that email already belongs to the same `admin_user`; an existing
+consumer or unlisted auth user fails without promotion. `ADMIN_USER_ID` is a
+Better Auth transition detail and is not used for Go authorization. Admin
+login remains hidden/unlinked only for discoverability; every Admin route also
+requires a valid session and `admin_user` membership.
+
+### 0.4 Request security, error model, and API versioning
+
+The final API is `/api/v1/...`. The SPA and API are same-origin in production;
+Vite development origin is an explicit configured origin. Every cookie-auth
+mutation requires an allow-listed `Origin` exactly matching the configured
+public app origin (or configured Vite origin in development). A missing Origin
+is accepted only for same-site, non-browser operational endpoints that use a
+separate operator credential; browser cookie mutations without Origin fail.
+No wildcard CORS is used. Cross-origin credentials are not supported. `GET`,
+`HEAD`, `OPTIONS`, SSE, and public invite inspection do not mutate state;
+SameSite Lax is defense in depth, not the CSRF control.
+
+Trust a client IP only from a configured, trusted reverse proxy. Without that
+proxy, the direct remote address is the rate-limit subject; arbitrary
+`X-Forwarded-For` is ignored. `auth_rate_limit` uses an upsert under row lock.
+Admin login is exactly five attempts per IP per rolling fixed one-minute
+window, durable across API instances; attempt six returns `RATE_LIMITED` 429
+with `Retry-After`. Consumer login is 10 attempts per IP per minute and 10 per
+normalized-email per minute, with both checks required. There is no global
+account lockout. A daily bounded cleanup removes old limit windows.
+
+Every non-success JSON response is
+`{"error":{"code":"...","message":"...","requestId":"..."}}`.
+The stable code, not prose, drives the frontend. `UNAUTHENTICATED` is 401;
+`FORBIDDEN` is 403 only for non-sensitive Admin access; unauthorized Pair,
+Private, Together, invite, and history resources collapse to `NOT_FOUND` 404;
+`VALIDATION_ERROR` 400; `RATE_LIMITED` 429; `EMAIL_IN_USE` 409; `CONFLICT`,
+`STALE_REVISION`,
+`ANSWER_IMMUTABLE`, `CANDIDATE_ALREADY_RESOLVED`, `ROUND_ALREADY_RESOLVED`, and
+`ROUND_NOT_REVEALABLE` 409; `PAIR_TERMINATED` 409; `INVITE_INVALID` 404;
+`INVITE_EXPIRED`, `PAIR_ALREADY_CLAIMED`, `DUPLICATE_ACTIVE_PAIR`, and
+`QUESTION_UNAVAILABLE` 409; and `INTERNAL_ERROR` 500. Raw PostgreSQL errors
+never leave the server. The API uses a major URL version because Vite and Go
+can deploy independently; additive fields are backward-compatible within v1,
+while removal or semantic change requires `/api/v2` and an overlap window.
+
+### 0.5 Transactions, locks, Private, Together, and realtime
+
+Every mutating domain service follows: start transaction; acquire locks in the
+documented global order; validate actor/state; check idempotency; mutate;
+commit; publish a metadata-only invalidation after commit; return the committed
+projection. Notification failure never rolls back a committed command. All
+Pair-scoped mutation begins by locking `pair` first. Where needed, locks then
+progress `pair -> active membership/era -> Conversation/Session -> candidate or
+Round -> answer/reveal/child row`; Question administration instead locks
+`question -> current revision -> affected unresolved candidates`. This order is
+mandatory across services.
+
+| Command/race                      | Locked rows and convergence                                                      | Retry result / event                                                                                                  |
+| --------------------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| initial issue/reuse/replace       | Pair; usable invite; token hash unique                                           | existing/one replacement result; `pair.changed`                                                                       |
+| initial claim                     | Pair; invite; memberships/era; ordered-pair advisory transaction lock            | consumed result or exact conflict; `pair.changed`                                                                     |
+| rejoin/replacement                | Pair; target membership/active era; credentials; affected Conversations/Sessions | one new era or conflict; `pair.changed` and relevant private/together invalidation                                    |
+| termination                       | Pair; active memberships/era; active credentials/Candidates/Sessions             | repeated terminate returns terminal projection; `pair.terminated`                                                     |
+| Private start/resume              | Pair; active era; category Conversation; active unresolved-round guard           | unique Pair/era/category converges; `private.changed`                                                                 |
+| Ask vs Skip                       | Pair; Conversation; unresolved candidate                                         | conditional candidate state + unique Round/request IDs; same idempotent result; `private.changed`                     |
+| Skip retry                        | same, plus `(conversation_id, skip_request_id)` unique                           | stored next-candidate/exhausted result; `private.changed` once                                                        |
+| Like vs Ask/Skip                  | Pair; Conversation; unresolved candidate                                         | Like conditionally updates only unresolved row, otherwise conflict; `private.changed` only for state-changing command |
+| withdrawal vs candidate           | Question; revision; all unresolved pinned candidates in deterministic ID order   | first withdrawal facts retained; candidate invalidated; `private.changed` per affected Pair after commit              |
+| Answer / Decline / Reveal         | Pair; era; Conversation; Round; answer/reveal children                           | answer unique and immutable; conditional decline/reveal convergence; `private.changed`                                |
+| post-Reveal progression           | Pair; Conversation; completed Round; new candidate                               | both Reveal Views required; creator-only candidate result; `private.changed`                                          |
+| Together Start/Next/Skip/Like/End | Pair; active Session; current shown occurrence                                   | request unique/current-card checks; replay persisted result; `together.changed`                                       |
+| Question revision edit            | Question; current revision                                                       | expected ID + unique ordinal; stale is `STALE_REVISION`; no Pair event                                                |
+
+The Private projection is participant-relative. A non-creator at unresolved
+candidate state receives only `WAITING_FOR_CREATOR`, the already shared Pair and
+category lane, and a safe refresh/version marker. It receives **no** candidate
+ID, Question ID, QuestionRevision ID, text, intensity, Like state, timestamp,
+selection rank/seed, or candidate metadata through JSON, logs, events, client
+cache, prefetch, hydration, or errors. The creator alone receives the candidate
+until Ask. Candidate states are `unresolved`, `asked`, `skipped`, and
+`invalidated`; Ask creates one exact-revision Round, Skip consumes the logical
+Question and persists the next result, Like never consumes, and withdrawal/era
+end/termination invalidates without a Round. Round commands preserve current
+answer, Decline, Reveal, reaction/reply, former-history, and creator-progression
+rules exactly as specified in ADR 003's 2026-09-20 amendment and ADR 005.
+
+Together preserves the deterministic persisted occurrence, exact revision,
+logical no-repeat, category access, intensity ramp/fallback, Start/Next/Skip/
+Like/End, and occurrence analytics. Its old TypeScript buffering mechanism is
+not itself a parity requirement if the Go/Vite port gives the same persisted
+result and instant-feeling UI.
+
+Realtime is `pg_notify` after commit -> one session-capable `LISTEN` connection
+per API process -> local `map[pairID]subscriber-set` -> authorized SSE ->
+TanStack Query invalidation/refetch. Payload remains exactly
+`{version:1,pairId,type}` and type remains one of `pair.changed`,
+`private.changed`, `together.changed`, or `pair.terminated`; it never contains
+content or credentials. SSE sends a 20-second heartbeat, uses each subscriber
+as a one-event nonblocking buffer (drop duplicate/stale invalidations for a
+slow client rather than blocking a command), and removes it on disconnect or
+write failure. Authorize Pair access before subscription, close/navigate on
+termination, reconnect EventSource with bounded exponential backoff, and
+refetch on focus/reconnect. Correctness never depends on every event arriving.
+Each Go instance has its own listener and local registry; PostgreSQL fanout
+makes multi-instance delivery valid without Redis.
+
+### 0.6 Frontend, contracts, PWA, schema transition, and test database
+
+During the port, preserve `apps/web` as the frozen Next behavioral reference,
+create `apps/api` for Go, and create `apps/web-vite` for the new frontend. Do
+not rename the existing app first. At parity cutover, move Vite to `apps/web`
+only as one deliberate migration, retain the legacy app until rollback retention
+ends, then remove it and its Better Auth/Next-specific code. Reuse Tailwind,
+shadcn primitives, Closer components/tokens/icons/copy, Admin design,
+responsive/accessibility fixes, React Hook Form, Zod client validation, and
+TanStack Query concepts. Rewrite only Next routing, Server Components/actions,
+Next cache/fetch behavior, and Next-only APIs.
+
+React Router uses the current paths for root, login, onboarding, create, Space
+selection/Pair Home, invite/join/rejoin, Together, Private, history, settings,
+Admin login, and Admin routes. `/dashboard` redirects to `/` during transition.
+Loaders/guards are UX only and may call `GET /api/v1/me`; API authorization is
+always authoritative. Static hosting supplies `index.html` fallback for
+non-`/api` deep links on Vercel transition hosting and Caddy. Public landing
+routes remain safe before auth; private routes never preload protected data.
+
+Go owns an OpenAPI 3.1 document committed under `apps/api`; generated TypeScript
+transport types/client are generated into `apps/web-vite/src/api/generated` in
+the implementation ticket, with a CI drift check. Handwritten Zod schemas
+validate untrusted form input and critical API responses at the boundary; they
+do not duplicate domain rules. This is deliberately small OpenAPI generation,
+not a new platform. Versioned contract changes require the OpenAPI update,
+generated-client update, and consumer compatibility test together.
+
+The Vite PWA manifest starts at `/`, not stale `/new`. Its service worker uses
+app-shell navigation fallback only for static routes, caches versioned static
+assets, installs updates waiting for explicit user reload, and never caches
+authenticated JSON, mutation responses, cookies, SSE, or `/api/v1/**`. V1 has
+no offline write queue and no offline domain state machine.
+
+During Go port tickets, existing Drizzle schema/migrations remain canonical for
+the disposable local dev/test database, and Go targets that schema. Before any
+Go production cutover, `CUTOVER-01` creates a reviewed Go-independent SQL
+baseline from the final canonical schema, verifies it on an empty disposable
+database, and makes `apps/api/db/migrations` the only production schema source.
+It replaces Better Auth tables with the frozen auth tables but does not redesign
+Pair, membership-era, Private, Together, Question, or history tables. No
+`db:push` is allowed after that boundary.
+
+Use an isolated local `closer_test` database selected only by
+`CLOSER_TEST_DATABASE_URL`; `closer_dev` is never a test target. The test
+harness refuses to run unless the parsed database name is exactly `closer_test`
+or begins `closer_test_`, uses one transaction/schema per test where possible,
+and truncates only named test schemas for integration/concurrency fixtures. CI
+creates ephemeral PostgreSQL plus the same guard. A hosted Neon test branch is
+not required for V1.
 
 ## 1. Current repository map
 
@@ -168,7 +504,7 @@ the same Participant to survive any auth-user replacement. The current domain
 code supports stable mapping and anonymous users; the rewrite must explicitly
 implement the upgrade transaction rather than assume a Better Auth callback.
 
-### Proposed Go V1 auth
+### Historical REWRITE-00 auth proposal (superseded by section 0.3)
 
 Use the smallest explicit model:
 
@@ -339,7 +675,7 @@ contextual projections. Authorization remains server-side and unauthorized
 Pair, Private, Together, and history resources should continue to collapse to
 not-found where the current adapters do.
 
-## 12. Proposed Go package layout
+## 12. Historical REWRITE-00 package layout (superseded by section 0.1)
 
 ```text
 apps/api/
