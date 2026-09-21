@@ -41,7 +41,11 @@ var (
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	ErrCredentialNotFound = errors.New("credential not found")
 	ErrInvalidInput       = errors.New("invalid authentication input")
+	ErrAdminNotFound      = errors.New("configured admin identity not found")
+	ErrAdminEmailInUse    = errors.New("email belongs to a non-admin identity")
 )
+
+const AdminLoginLimit = 5
 
 type Credential struct {
 	Actor        Actor
@@ -65,6 +69,15 @@ type CredentialStore interface {
 	RevokeAllSessions(context.Context, string, time.Time) error
 	CountConsumerLoginAttempt(context.Context, string, string) (LoginRateResult, error)
 	DeleteOldRateLimits(context.Context, time.Time) (int64, error)
+}
+
+type AdminStore interface {
+	BootstrapAdmin(context.Context, string, string, string, time.Time) (string, bool, error)
+	FindAdminCredential(context.Context, string) (Credential, error)
+	CreateAdminLoginSession(context.Context, string, string, []byte, []byte, string, time.Time, time.Time) error
+	RecoverAdmin(context.Context, string, string, time.Time) (string, int64, error)
+	IsAdmin(context.Context, string) (bool, error)
+	CountAdminLoginAttempt(context.Context, string) (LoginRateResult, error)
 }
 
 type PasswordHasher interface {
@@ -231,6 +244,16 @@ type SessionGrant struct {
 	ExpiresAt time.Time
 }
 
+type AdminBootstrapResult struct {
+	AuthUserID string
+	Created    bool
+}
+
+type AdminRecoveryResult struct {
+	AuthUserID          string
+	RevokedSessionCount int64
+}
+
 type RateLimitedError struct{ RetryAfter time.Duration }
 
 func (e RateLimitedError) Error() string { return "authentication rate limit exceeded" }
@@ -375,6 +398,142 @@ func (s *Service) CleanupRateLimits(ctx context.Context) (int64, error) {
 		return 0, nil
 	}
 	return s.credentials.DeleteOldRateLimits(ctx, s.now().UTC())
+}
+
+func (s *Service) BootstrapAdmin(ctx context.Context, email, password string) (AdminBootstrapResult, error) {
+	if s.admin == nil || s.hasher == nil {
+		return AdminBootstrapResult{}, errors.New("admin authentication is not configured")
+	}
+	normalized, err := NormalizeEmail(email)
+	if err != nil || !validPasswordForCreation(password) {
+		return AdminBootstrapResult{}, ErrInvalidInput
+	}
+	passwordHash, err := s.hasher.Hash(ctx, password)
+	if err != nil {
+		return AdminBootstrapResult{}, err
+	}
+	userID, err := NewID()
+	if err != nil {
+		return AdminBootstrapResult{}, err
+	}
+	adminID, created, err := s.admin.BootstrapAdmin(ctx, userID, normalized, passwordHash, s.now().UTC())
+	if err != nil {
+		return AdminBootstrapResult{}, err
+	}
+	return AdminBootstrapResult{AuthUserID: adminID, Created: created}, nil
+}
+
+func (s *Service) RecoverAdmin(ctx context.Context, email, password string) (AdminRecoveryResult, error) {
+	if s.admin == nil || s.hasher == nil {
+		return AdminRecoveryResult{}, errors.New("admin authentication is not configured")
+	}
+	normalized, err := NormalizeEmail(email)
+	if err != nil || !validPasswordForCreation(password) {
+		return AdminRecoveryResult{}, ErrInvalidInput
+	}
+	passwordHash, err := s.hasher.Hash(ctx, password)
+	if err != nil {
+		return AdminRecoveryResult{}, err
+	}
+	userID, revokedCount, err := s.admin.RecoverAdmin(ctx, normalized, passwordHash, s.now().UTC())
+	if err != nil {
+		return AdminRecoveryResult{}, err
+	}
+	return AdminRecoveryResult{AuthUserID: userID, RevokedSessionCount: revokedCount}, nil
+}
+
+func (s *Service) AdminLogin(ctx context.Context, email, password, clientIP, currentToken string) (SessionGrant, error) {
+	if s.admin == nil || s.hasher == nil {
+		return SessionGrant{}, errors.New("admin authentication is not configured")
+	}
+	normalized, normalizeErr := NormalizeEmail(email)
+	if normalizeErr != nil {
+		normalized = cases.Fold().String(strings.TrimSpace(email))
+	}
+	if len(normalized) > 320 {
+		normalized = normalized[:320]
+	}
+	limit, err := s.admin.CountAdminLoginAttempt(ctx, subjectHash("admin-login-ip", clientIP))
+	if err != nil {
+		return SessionGrant{}, err
+	}
+	if limit.Limited {
+		return SessionGrant{}, RateLimitedError{RetryAfter: limit.RetryAfter}
+	}
+	credential, findErr := s.admin.FindAdminCredential(ctx, normalized)
+	if findErr != nil && !errors.Is(findErr, ErrCredentialNotFound) {
+		return SessionGrant{}, findErr
+	}
+	if errors.Is(findErr, ErrCredentialNotFound) {
+		if _, err := s.hasher.Hash(ctx, "Closer invalid login timing work"); err != nil {
+			return SessionGrant{}, err
+		}
+		return SessionGrant{}, ErrInvalidCredentials
+	}
+	valid, err := s.hasher.Verify(ctx, credential.PasswordHash, password)
+	if err != nil {
+		return SessionGrant{}, err
+	}
+	if !valid || credential.Disabled || credential.Actor.Kind != UserKindAdmin || normalizeErr != nil {
+		return SessionGrant{}, ErrInvalidCredentials
+	}
+	var replacementHash string
+	if s.hasher.NeedsRehash(credential.PasswordHash) {
+		replacementHash, err = s.hasher.Hash(ctx, password)
+		if err != nil {
+			return SessionGrant{}, err
+		}
+	}
+	sessionID, err := NewID()
+	if err != nil {
+		return SessionGrant{}, err
+	}
+	token, err := NewSessionToken(rand.Reader)
+	if err != nil {
+		return SessionGrant{}, err
+	}
+	newHash := HashSessionToken(token)
+	var previousHash []byte
+	if hash, hashErr := ParseAndHashSessionToken(currentToken); hashErr == nil {
+		previousHash = hash[:]
+	}
+	now := s.now().UTC()
+	expiresAt := now.Add(SessionIdleTTL)
+	if err := s.admin.CreateAdminLoginSession(ctx, credential.Actor.AuthUserID, sessionID, newHash[:], previousHash, replacementHash, now, expiresAt); err != nil {
+		if errors.Is(err, ErrInvalidCredentials) {
+			return SessionGrant{}, ErrInvalidCredentials
+		}
+		return SessionGrant{}, err
+	}
+	return SessionGrant{Actor: credential.Actor, Token: token, ExpiresAt: expiresAt}, nil
+}
+
+func (s *Service) RequireAdminSession(ctx context.Context, token string) (Actor, error) {
+	if s.admin == nil {
+		return Actor{}, errors.New("admin authentication is not configured")
+	}
+	actor, err := s.ResolveSession(ctx, token)
+	if err != nil {
+		return Actor{}, err
+	}
+	if actor.Kind != UserKindAdmin {
+		return Actor{}, ErrUnauthenticated
+	}
+	isAdmin, err := s.admin.IsAdmin(ctx, actor.AuthUserID)
+	if err != nil {
+		return Actor{}, err
+	}
+	if !isAdmin {
+		return Actor{}, ErrUnauthenticated
+	}
+	return actor, nil
+}
+
+func (s *Service) LogoutAdmin(ctx context.Context, token string) error {
+	if _, err := s.RequireAdminSession(ctx, token); err != nil {
+		return err
+	}
+	return s.RevokeSession(ctx, token)
 }
 
 func subjectHash(scope, subject string) string {

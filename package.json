@@ -33,6 +33,8 @@
     "prepare": "husky",
     "test": "bun test",
     "api:run": "go -C apps/api run ./cmd/server",
+    "api:admin-bootstrap": "go -C apps/api run ./cmd/admin-bootstrap",
+    "api:admin-recover": "go -C apps/api run ./cmd/admin-recover",
     "api:test": "go -C apps/api test ./...",
     "api:build": "go -C apps/api build -o build/server ./cmd/server",
     "dev:web": "bun run --filter web dev",

@@ -233,3 +233,40 @@ func TestParseRejectsInvalidTrustedOrigins(t *testing.T) {
 		})
 	}
 }
+
+func TestParseLoadsTrustedProxyCIDRs(t *testing.T) {
+	values := map[string]string{
+		listenAddressEnv:  "127.0.0.1:8080",
+		databaseURLEnv:    testDatabaseURL,
+		trustedProxiesEnv: "10.0.0.0/8, 2001:db8::/32",
+	}
+	config, err := Parse(func(key string) (string, bool) {
+		value, ok := values[key]
+		return value, ok
+	})
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if len(config.TrustedProxyCIDRs) != 2 || config.TrustedProxyCIDRs[0] != "10.0.0.0/8" || config.TrustedProxyCIDRs[1] != "2001:db8::/32" {
+		t.Fatalf("TrustedProxyCIDRs = %#v", config.TrustedProxyCIDRs)
+	}
+}
+
+func TestParseRejectsInvalidTrustedProxyCIDRs(t *testing.T) {
+	for _, value := range []string{"10.0.0.1", "not-a-cidr", "10.0.0.0/8, 10.0.0.0/8"} {
+		t.Run(value, func(t *testing.T) {
+			values := map[string]string{
+				listenAddressEnv:  "127.0.0.1:8080",
+				databaseURLEnv:    testDatabaseURL,
+				trustedProxiesEnv: value,
+			}
+			_, err := Parse(func(key string) (string, bool) {
+				configured, ok := values[key]
+				return configured, ok
+			})
+			if err == nil || !strings.Contains(err.Error(), trustedProxiesEnv) {
+				t.Fatalf("Parse() error = %v, want invalid %s", err, trustedProxiesEnv)
+			}
+		})
+	}
+}

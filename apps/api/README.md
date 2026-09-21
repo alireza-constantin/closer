@@ -6,6 +6,12 @@ defaults to `10s`. Set `CLOSER_TRUSTED_ORIGINS` to comma-separated exact origins
 before using cookie-authenticated mutations. Local development can include the
 Vite origin (for example `http://localhost:5173`); Production must include the
 canonical HTTPS app origin. Empty configuration fails closed for auth writes.
+Set `CLOSER_TRUSTED_PROXY_CIDRS` only to the CIDRs of reverse proxies that
+overwrite `X-Forwarded-For`. Without a configured trusted proxy, rate limits use
+the direct connection address and ignore forwarded headers. For a trusted
+proxy, the API walks the validated forwarding chain from the API-facing side
+and selects the first untrusted address; malformed or oversized chains fall
+back to the proxy peer.
 Startup validates and pings PostgreSQL before opening the HTTP listener.
 `/healthz` reports process health; `/readyz` pings the pool and returns `503`
 while PostgreSQL is unavailable.
@@ -59,6 +65,26 @@ UUID auth identities, unique normalized-email credentials, and stores only
 SHA-256 session-token hashes. Consumer passwords use the frozen Argon2id policy
 in `internal/auth/credentials.go`. Anonymous identity creation is explicit at
 `POST /api/v1/auth/anonymous`; `GET /api/v1/me` and route prefetch remain
-read-only. Consumer login limits are durable in PostgreSQL. Daily cleanup
-removes expired or revoked sessions and old rate-limit windows in batches of
-at most 500 rows.
+read-only. The schema includes `auth_user`, `auth_credential`, `auth_session`,
+`auth_rate_limit`, and `admin_user`. Admin authorization requires both
+`auth_user.kind = 'admin'` and an `admin_user` row; no Admin identity creates a
+Participant.
+
+The Go Admin operator commands are separate from the legacy TypeScript
+`admin:bootstrap` and `admin:recover` scripts. They read only process
+environment variables and do not load dotenv files:
+
+- `api:admin-bootstrap` requires `DATABASE_URL`, `ADMIN_BOOTSTRAP_EMAIL`, and
+  `ADMIN_BOOTSTRAP_PASSWORD`. It creates a dedicated Admin only when that email
+  is unused; a retry is a no-op only for an existing Admin at that email.
+- `api:admin-recover` requires `DATABASE_URL`, the configured
+  `ADMIN_BOOTSTRAP_EMAIL`, and `ADMIN_RECOVERY_PASSWORD`. It changes only that
+  existing Admin's password and revokes that Admin's sessions.
+
+Both commands are manual operator actions, never deployment commands. They
+print the Admin auth user ID and operation result but never print passwords or
+hashes. Remove temporary password variables after the operation. Verify the
+database target before invoking either command; they are not run as part of
+GO-03 verification. Consumer and Admin login limits are durable in PostgreSQL.
+Daily cleanup removes expired or revoked sessions and old rate-limit windows
+in batches of at most 500 rows.

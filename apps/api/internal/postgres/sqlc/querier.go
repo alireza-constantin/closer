@@ -11,8 +11,10 @@ import (
 )
 
 type Querier interface {
+	CreateAdminUser(ctx context.Context, arg CreateAdminUserParams) error
 	CreateAuthCredential(ctx context.Context, arg CreateAuthCredentialParams) error
 	CreateAuthSession(ctx context.Context, arg CreateAuthSessionParams) (AuthSession, error)
+	CreateAuthSessionForEnabledAdminUser(ctx context.Context, arg CreateAuthSessionForEnabledAdminUserParams) (int64, error)
 	CreateAuthSessionForEnabledRegisteredUser(ctx context.Context, arg CreateAuthSessionForEnabledRegisteredUserParams) (int64, error)
 	CreateAuthUser(ctx context.Context, arg CreateAuthUserParams) (AuthUser, error)
 	CreateRegisteredAuthUser(ctx context.Context, arg CreateRegisteredAuthUserParams) (AuthUser, error)
@@ -21,11 +23,16 @@ type Querier interface {
 	CurrentDatabase(ctx context.Context) (string, error)
 	DeleteExpiredAuthSessions(ctx context.Context, arg DeleteExpiredAuthSessionsParams) (int64, error)
 	DeleteOldAuthRateLimits(ctx context.Context, dollar_1 interface{}) (int64, error)
+	GetAdminCredentialByEmail(ctx context.Context, emailNormalized string) (GetAdminCredentialByEmailRow, error)
 	GetAuthSessionActor(ctx context.Context, arg GetAuthSessionActorParams) (GetAuthSessionActorRow, error)
 	GetCredentialByEmail(ctx context.Context, emailNormalized string) (GetCredentialByEmailRow, error)
 	GetLocalTestValue(ctx context.Context) (string, error)
+	HasAdminUser(ctx context.Context, authUserID pgtype.UUID) (bool, error)
 	HasAuthSession(ctx context.Context, tokenHash []byte) (bool, error)
+	IsAdminAuthUser(ctx context.Context, id pgtype.UUID) (bool, error)
 	ListAuthSessionTokenHashes(ctx context.Context, authUserID pgtype.UUID) ([][]byte, error)
+	LockAdminBootstrapEmail(ctx context.Context, hashtextextended string) error
+	LockAdminByEmailForRecovery(ctx context.Context, emailNormalized string) (pgtype.UUID, error)
 	LockAuthUserForUpgrade(ctx context.Context, id pgtype.UUID) (AuthUser, error)
 	RenewAuthSession(ctx context.Context, arg RenewAuthSessionParams) (pgtype.Timestamptz, error)
 	RevokeAuthSession(ctx context.Context, arg RevokeAuthSessionParams) (int64, error)
@@ -34,6 +41,7 @@ type Querier interface {
 	SetLocalTestValue(ctx context.Context, value string) (string, error)
 	UpdateAuthCredentialPasswordHash(ctx context.Context, arg UpdateAuthCredentialPasswordHashParams) error
 	UpgradeAnonymousAuthUser(ctx context.Context, id pgtype.UUID) (int64, error)
+	UpsertAdminLoginRateLimit(ctx context.Context, subject string) (UpsertAdminLoginRateLimitRow, error)
 	UpsertAuthRateLimit(ctx context.Context, arg UpsertAuthRateLimitParams) (UpsertAuthRateLimitRow, error)
 }
 

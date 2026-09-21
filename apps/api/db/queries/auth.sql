@@ -141,3 +141,62 @@ WITH expired AS (
 DELETE FROM auth_rate_limit AS limits
 USING expired
 WHERE limits.scope = expired.scope AND limits.subject = expired.subject;
+
+-- name: LockAdminBootstrapEmail :exec
+SELECT pg_advisory_xact_lock(hashtextextended($1, 0));
+
+-- name: CreateAdminUser :exec
+INSERT INTO admin_user (auth_user_id, created_at)
+VALUES ($1, $2);
+
+-- name: HasAdminUser :one
+SELECT EXISTS (SELECT 1 FROM admin_user WHERE auth_user_id = $1);
+
+-- name: IsAdminAuthUser :one
+SELECT EXISTS (
+    SELECT 1
+    FROM auth_user AS u
+    JOIN admin_user AS a ON a.auth_user_id = u.id
+    WHERE u.id = $1 AND u.kind = 'admin' AND u.disabled_at IS NULL
+);
+
+-- name: GetAdminCredentialByEmail :one
+SELECT u.id AS auth_user_id, u.kind, u.disabled_at, c.password_hash
+FROM auth_credential AS c
+JOIN auth_user AS u ON u.id = c.auth_user_id
+JOIN admin_user AS a ON a.auth_user_id = u.id
+WHERE c.email_normalized = $1;
+
+-- name: LockAdminByEmailForRecovery :one
+SELECT u.id AS auth_user_id
+FROM auth_credential AS c
+JOIN auth_user AS u ON u.id = c.auth_user_id
+JOIN admin_user AS a ON a.auth_user_id = u.id
+WHERE c.email_normalized = $1 AND u.kind = 'admin'
+FOR UPDATE OF u, c;
+
+-- name: CreateAuthSessionForEnabledAdminUser :execrows
+INSERT INTO auth_session (id, auth_user_id, token_hash, created_at, expires_at, last_used_at)
+SELECT $1, u.id, $3, $4, $5, $4
+FROM auth_user AS u
+JOIN admin_user AS a ON a.auth_user_id = u.id
+WHERE u.id = $2 AND u.kind = 'admin' AND u.disabled_at IS NULL;
+
+-- name: UpsertAdminLoginRateLimit :one
+WITH db_clock AS MATERIALIZED (
+    SELECT clock_timestamp() AS now
+)
+INSERT INTO auth_rate_limit (scope, subject, window_started_at, count)
+SELECT 'admin_login_ip', $1, db_clock.now, 1
+FROM db_clock
+ON CONFLICT (scope, subject) DO UPDATE
+SET count = CASE
+        WHEN auth_rate_limit.window_started_at <= (SELECT now FROM db_clock) - interval '1 minute' THEN 1
+        ELSE auth_rate_limit.count + 1
+    END,
+    window_started_at = CASE
+        WHEN auth_rate_limit.window_started_at <= (SELECT now FROM db_clock) - interval '1 minute' THEN (SELECT now FROM db_clock)
+        ELSE auth_rate_limit.window_started_at
+    END
+RETURNING count,
+    GREATEST(0, CEIL(EXTRACT(EPOCH FROM (window_started_at + interval '1 minute' - (SELECT now FROM db_clock)))))::integer AS retry_after_seconds;

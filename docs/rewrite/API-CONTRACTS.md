@@ -194,6 +194,35 @@ projection without returning email, credential material, or a session token:
 | `POST /api/v1/auth/login`      | `{email,password}`              | 200 registered actor; fresh session cookie         | generic 401 `INVALID_CREDENTIALS`; 429 `RATE_LIMITED` with `Retry-After`    |
 | `POST /api/v1/auth/logout-all` | no body + authenticated session | 200 `{"actor":null}`; revoke all actor sessions    | 401 `UNAUTHENTICATED`                                                       |
 
+Admin auth uses the same opaque session cookie, but Admin authorization is
+resolved from both `auth_user.kind = 'admin'` and an `admin_user` row. Admin
+login is deliberately unlinked from consumer navigation; route secrecy is not
+authorization. Admin bootstrap and recovery are local operator commands, not
+HTTP endpoints. The login and logout endpoints are:
+
+| Method/path                 | Request                 | Success                                            | Failure behavior                                                         |
+| --------------------------- | ----------------------- | -------------------------------------------------- | ------------------------------------------------------------------------ |
+| `POST /api/v1/admin/login`  | `{email,password}`      | 200 Admin actor; fresh session cookie              | generic 401 `INVALID_CREDENTIALS`; 429 `RATE_LIMITED` with `Retry-After` |
+| `POST /api/v1/admin/logout` | no body + Admin session | 200 `{"actor":null}`; revoke current Admin session | 401 `UNAUTHENTICATED`                                                    |
+
+Admin login counts every request against five attempts per client IP in a
+database-backed fixed one-minute window. Attempt six returns 429 with
+`Retry-After`; another IP has an independent counter. Consumer login remains
+limited to ten attempts per IP and ten per normalized email per minute. IP
+subjects use the direct connection address unless it belongs to a configured
+trusted proxy CIDR. Only then is `X-Forwarded-For` walked from the API-facing
+side; untrusted direct clients cannot choose their rate-limit IP by supplying
+that header. Invalid or oversized proxy chains fall back to the proxy peer.
+
+Every cookie-authenticated mutation requires an exact allow-listed `Origin`;
+missing and foreign origins fail closed. Auth responses are private and
+no-store. The operator commands use `ADMIN_BOOTSTRAP_EMAIL` as the recovery
+identity locator, never accept an arbitrary user ID, and never run during API
+startup or deployment. Bootstrap creates a dedicated `auth_user`, credential,
+and `admin_user` transactionally; a consumer or unlisted existing identity is
+never promoted. Recovery changes only that Admin's password and revokes only
+that Admin's sessions.
+
 Registration is for a browser without a valid auth session. A signed-in
 anonymous browser uses `/upgrade` so it retains the same identity. Login
 revokes only the browser's current valid session and creates a fresh session
@@ -203,7 +232,8 @@ Unicode case-folding. Passwords are 8–128 UTF-8 bytes and use Argon2id v=19,
 64 MiB, 3 iterations, parallelism 1, a random 16-byte salt, and a 32-byte
 derived key. Consumer login counts every attempt against both 10/IP/minute and
 10/normalized-email/minute fixed windows; client IP comes from the direct
-connection address and arbitrary forwarded headers are ignored.
+connection address unless a configured trusted reverse proxy supplies a
+validated forwarding chain.
 
 Canonical public/participant reads are:
 

@@ -41,7 +41,8 @@ func run(logger *slog.Logger) error {
 	authStore := postgresauth.NewStore(database)
 	authService := auth.NewServiceWithCredentials(authStore, authStore, nil)
 	router := httpapi.NewRouterWithAuth(logger, database, authService, httpapi.SecurityConfig{
-		TrustedOrigins: cfg.TrustedOrigins,
+		TrustedOrigins:    cfg.TrustedOrigins,
+		TrustedProxyCIDRs: cfg.TrustedProxyCIDRs,
 	})
 	server := httpapi.NewServer(cfg.ListenAddress, router)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

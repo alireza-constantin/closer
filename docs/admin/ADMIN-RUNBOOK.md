@@ -6,6 +6,34 @@ checks are complete; the database steps and live smoke test below remain manual
 operator release steps. This guide does not claim that Production has been
 verified.
 
+## Go rewrite authentication commands
+
+The Go rewrite uses the persisted `admin_user` authorization model and has
+separate manual commands: `bun run api:admin-bootstrap` and
+`bun run api:admin-recover`. They read `DATABASE_URL` and their named inputs
+from the process environment only; they do not load dotenv files, run during
+deployment, or share implementation with the legacy TypeScript `admin:*`
+commands documented below. GO-03 verification does not execute either command.
+
+For a deliberate bootstrap, set a dedicated, unused `ADMIN_BOOTSTRAP_EMAIL`
+and `ADMIN_BOOTSTRAP_PASSWORD`, verify the exact `DATABASE_URL` target, then
+run `bun run api:admin-bootstrap`. It creates `auth_user`, credential, and
+`admin_user` records in one transaction without creating a Participant. A
+retry is a no-op only if the email already belongs to that Admin; an existing
+consumer or unlisted identity is left unchanged and the command fails.
+
+For recovery, set the same configured `ADMIN_BOOTSTRAP_EMAIL` and a temporary
+`ADMIN_RECOVERY_PASSWORD`, verify the exact `DATABASE_URL` target, then run
+`bun run api:admin-recover`. It targets only that Admin, changes the password,
+and revokes only that Admin's sessions. It accepts no arbitrary user ID. Both
+commands report the auth user ID and operation result without printing any
+password or hash. Remove temporary password variables immediately afterward.
+
+These commands are not the Better Auth production instructions below. The
+remaining `admin:bootstrap`, `admin:recover`, and `ADMIN_USER_ID` guidance
+describes the legacy TypeScript runtime only; do not use those commands or
+`ADMIN_USER_ID` to authorize the Go API.
+
 > **Pre-launch database warning:** Production is disposable only for the current
 > pre-launch stage. Deployments never mutate the database. A manual Production
 > `db:push` is allowed only after confirming that no real user data exists. Once

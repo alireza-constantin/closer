@@ -64,6 +64,7 @@ type SessionStore interface {
 type Service struct {
 	store       SessionStore
 	credentials CredentialStore
+	admin       AdminStore
 	hasher      PasswordHasher
 	now         func() time.Time
 }
@@ -87,6 +88,9 @@ func NewServiceWithCredentials(store SessionStore, credentials CredentialStore, 
 func NewServiceWithCredentialsAndClock(store SessionStore, credentials CredentialStore, hasher PasswordHasher, now func() time.Time) *Service {
 	service := NewServiceWithClock(store, now)
 	service.credentials = credentials
+	if adminStore, ok := credentials.(AdminStore); ok {
+		service.admin = adminStore
+	}
 	if hasher == nil {
 		hasher = Argon2idHasher{}
 	}

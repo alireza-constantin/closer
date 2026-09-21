@@ -48,7 +48,8 @@ func NewRouter(logger *slog.Logger, readiness ReadinessChecker) http.Handler {
 }
 
 type SecurityConfig struct {
-	TrustedOrigins []string
+	TrustedOrigins    []string
+	TrustedProxyCIDRs []string
 }
 
 func NewRouterWithAuth(

@@ -38,3 +38,8 @@ CREATE TABLE auth_rate_limit (
 
 CREATE INDEX auth_rate_limit_window_started_at_idx
     ON auth_rate_limit (window_started_at);
+
+CREATE TABLE admin_user (
+    auth_user_id uuid PRIMARY KEY REFERENCES auth_user(id) ON DELETE RESTRICT,
+    created_at timestamptz NOT NULL
+);

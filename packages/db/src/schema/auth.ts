@@ -169,6 +169,13 @@ export const authRateLimit = pgTable(
   ],
 );
 
+export const adminUser = pgTable("admin_user", {
+  authUserId: uuid("auth_user_id")
+    .primaryKey()
+    .references(() => authUser.id, { onDelete: "restrict" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+});
+
 export const userRelations = relations(user, ({ many }) => ({
   sessions: many(session),
   accounts: many(account),

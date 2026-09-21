@@ -11,6 +11,21 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const createAdminUser = `-- name: CreateAdminUser :exec
+INSERT INTO admin_user (auth_user_id, created_at)
+VALUES ($1, $2)
+`
+
+type CreateAdminUserParams struct {
+	AuthUserID pgtype.UUID        `json:"auth_user_id"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) CreateAdminUser(ctx context.Context, arg CreateAdminUserParams) error {
+	_, err := q.db.Exec(ctx, createAdminUser, arg.AuthUserID, arg.CreatedAt)
+	return err
+}
+
 const createAuthCredential = `-- name: CreateAuthCredential :exec
 INSERT INTO auth_credential (auth_user_id, email_normalized, password_hash, created_at, password_updated_at)
 VALUES ($1, $2, $3, $4, $4)
@@ -68,6 +83,36 @@ func (q *Queries) CreateAuthSession(ctx context.Context, arg CreateAuthSessionPa
 		&i.RevokedAt,
 	)
 	return i, err
+}
+
+const createAuthSessionForEnabledAdminUser = `-- name: CreateAuthSessionForEnabledAdminUser :execrows
+INSERT INTO auth_session (id, auth_user_id, token_hash, created_at, expires_at, last_used_at)
+SELECT $1, u.id, $3, $4, $5, $4
+FROM auth_user AS u
+JOIN admin_user AS a ON a.auth_user_id = u.id
+WHERE u.id = $2 AND u.kind = 'admin' AND u.disabled_at IS NULL
+`
+
+type CreateAuthSessionForEnabledAdminUserParams struct {
+	ID        pgtype.UUID        `json:"id"`
+	ID_2      pgtype.UUID        `json:"id_2"`
+	TokenHash []byte             `json:"token_hash"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
+}
+
+func (q *Queries) CreateAuthSessionForEnabledAdminUser(ctx context.Context, arg CreateAuthSessionForEnabledAdminUserParams) (int64, error) {
+	result, err := q.db.Exec(ctx, createAuthSessionForEnabledAdminUser,
+		arg.ID,
+		arg.ID_2,
+		arg.TokenHash,
+		arg.CreatedAt,
+		arg.ExpiresAt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const createAuthSessionForEnabledRegisteredUser = `-- name: CreateAuthSessionForEnabledRegisteredUser :execrows
@@ -195,6 +240,33 @@ func (q *Queries) DeleteOldAuthRateLimits(ctx context.Context, dollar_1 interfac
 	return result.RowsAffected(), nil
 }
 
+const getAdminCredentialByEmail = `-- name: GetAdminCredentialByEmail :one
+SELECT u.id AS auth_user_id, u.kind, u.disabled_at, c.password_hash
+FROM auth_credential AS c
+JOIN auth_user AS u ON u.id = c.auth_user_id
+JOIN admin_user AS a ON a.auth_user_id = u.id
+WHERE c.email_normalized = $1
+`
+
+type GetAdminCredentialByEmailRow struct {
+	AuthUserID   pgtype.UUID        `json:"auth_user_id"`
+	Kind         string             `json:"kind"`
+	DisabledAt   pgtype.Timestamptz `json:"disabled_at"`
+	PasswordHash string             `json:"password_hash"`
+}
+
+func (q *Queries) GetAdminCredentialByEmail(ctx context.Context, emailNormalized string) (GetAdminCredentialByEmailRow, error) {
+	row := q.db.QueryRow(ctx, getAdminCredentialByEmail, emailNormalized)
+	var i GetAdminCredentialByEmailRow
+	err := row.Scan(
+		&i.AuthUserID,
+		&i.Kind,
+		&i.DisabledAt,
+		&i.PasswordHash,
+	)
+	return i, err
+}
+
 const getAuthSessionActor = `-- name: GetAuthSessionActor :one
 SELECT
     s.id AS session_id,
@@ -268,6 +340,17 @@ func (q *Queries) GetCredentialByEmail(ctx context.Context, emailNormalized stri
 	return i, err
 }
 
+const hasAdminUser = `-- name: HasAdminUser :one
+SELECT EXISTS (SELECT 1 FROM admin_user WHERE auth_user_id = $1)
+`
+
+func (q *Queries) HasAdminUser(ctx context.Context, authUserID pgtype.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, hasAdminUser, authUserID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const hasAuthSession = `-- name: HasAuthSession :one
 SELECT EXISTS (
     SELECT 1 FROM auth_session WHERE token_hash = $1
@@ -276,6 +359,22 @@ SELECT EXISTS (
 
 func (q *Queries) HasAuthSession(ctx context.Context, tokenHash []byte) (bool, error) {
 	row := q.db.QueryRow(ctx, hasAuthSession, tokenHash)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const isAdminAuthUser = `-- name: IsAdminAuthUser :one
+SELECT EXISTS (
+    SELECT 1
+    FROM auth_user AS u
+    JOIN admin_user AS a ON a.auth_user_id = u.id
+    WHERE u.id = $1 AND u.kind = 'admin' AND u.disabled_at IS NULL
+)
+`
+
+func (q *Queries) IsAdminAuthUser(ctx context.Context, id pgtype.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, isAdminAuthUser, id)
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
@@ -305,6 +404,31 @@ func (q *Queries) ListAuthSessionTokenHashes(ctx context.Context, authUserID pgt
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockAdminBootstrapEmail = `-- name: LockAdminBootstrapEmail :exec
+SELECT pg_advisory_xact_lock(hashtextextended($1, 0))
+`
+
+func (q *Queries) LockAdminBootstrapEmail(ctx context.Context, hashtextextended string) error {
+	_, err := q.db.Exec(ctx, lockAdminBootstrapEmail, hashtextextended)
+	return err
+}
+
+const lockAdminByEmailForRecovery = `-- name: LockAdminByEmailForRecovery :one
+SELECT u.id AS auth_user_id
+FROM auth_credential AS c
+JOIN auth_user AS u ON u.id = c.auth_user_id
+JOIN admin_user AS a ON a.auth_user_id = u.id
+WHERE c.email_normalized = $1 AND u.kind = 'admin'
+FOR UPDATE OF u, c
+`
+
+func (q *Queries) LockAdminByEmailForRecovery(ctx context.Context, emailNormalized string) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, lockAdminByEmailForRecovery, emailNormalized)
+	var auth_user_id pgtype.UUID
+	err := row.Scan(&auth_user_id)
+	return auth_user_id, err
 }
 
 const lockAuthUserForUpgrade = `-- name: LockAuthUserForUpgrade :one
@@ -435,6 +559,38 @@ func (q *Queries) UpgradeAnonymousAuthUser(ctx context.Context, id pgtype.UUID) 
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const upsertAdminLoginRateLimit = `-- name: UpsertAdminLoginRateLimit :one
+WITH db_clock AS MATERIALIZED (
+    SELECT clock_timestamp() AS now
+)
+INSERT INTO auth_rate_limit (scope, subject, window_started_at, count)
+SELECT 'admin_login_ip', $1, db_clock.now, 1
+FROM db_clock
+ON CONFLICT (scope, subject) DO UPDATE
+SET count = CASE
+        WHEN auth_rate_limit.window_started_at <= (SELECT now FROM db_clock) - interval '1 minute' THEN 1
+        ELSE auth_rate_limit.count + 1
+    END,
+    window_started_at = CASE
+        WHEN auth_rate_limit.window_started_at <= (SELECT now FROM db_clock) - interval '1 minute' THEN (SELECT now FROM db_clock)
+        ELSE auth_rate_limit.window_started_at
+    END
+RETURNING count,
+    GREATEST(0, CEIL(EXTRACT(EPOCH FROM (window_started_at + interval '1 minute' - (SELECT now FROM db_clock)))))::integer AS retry_after_seconds
+`
+
+type UpsertAdminLoginRateLimitRow struct {
+	Count             int32 `json:"count"`
+	RetryAfterSeconds int32 `json:"retry_after_seconds"`
+}
+
+func (q *Queries) UpsertAdminLoginRateLimit(ctx context.Context, subject string) (UpsertAdminLoginRateLimitRow, error) {
+	row := q.db.QueryRow(ctx, upsertAdminLoginRateLimit, subject)
+	var i UpsertAdminLoginRateLimitRow
+	err := row.Scan(&i.Count, &i.RetryAfterSeconds)
+	return i, err
 }
 
 const upsertAuthRateLimit = `-- name: UpsertAuthRateLimit :one

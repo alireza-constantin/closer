@@ -131,7 +131,7 @@ func registerAuthRoutes(router chi.Router, service *auth.Service, security Secur
 				return
 			}
 			currentToken, _ := cookieToken(r)
-			created, err := service.Login(r.Context(), request.Email, request.Password, remoteClientIP(r.RemoteAddr), currentToken)
+			created, err := service.Login(r.Context(), request.Email, request.Password, requestClientIP(r, security.TrustedProxyCIDRs), currentToken)
 			if err != nil {
 				writeCredentialError(w, r, err)
 				return
@@ -178,6 +178,51 @@ func registerAuthRoutes(router chi.Router, service *auth.Service, security Secur
 			}
 			token, _ := cookieToken(r)
 			if err := service.RevokeSession(r.Context(), token); err != nil {
+				writeAuthInternalError(w, r)
+				return
+			}
+			clearSessionCookie(w, isSecureOrigin(origin))
+			writeJSON(w, http.StatusOK, meResponse{Actor: nil})
+		})
+
+		api.Post("/admin/login", func(w http.ResponseWriter, r *http.Request) {
+			setPrivateNoStore(w)
+			origin := requestOrigin(r)
+			if !trustedOrigin(origin, security.TrustedOrigins) {
+				writeAPIError(w, r, http.StatusForbidden, "FORBIDDEN", "Request origin is not allowed.")
+				return
+			}
+			var request credentialsRequest
+			if !decodeCredentialsRequest(w, r, &request) {
+				return
+			}
+			currentToken, _ := cookieToken(r)
+			created, err := service.AdminLogin(r.Context(), request.Email, request.Password, requestClientIP(r, security.TrustedProxyCIDRs), currentToken)
+			if err != nil {
+				writeCredentialError(w, r, err)
+				return
+			}
+			setSessionCookie(w, created.Token, created.ExpiresAt, isSecureOrigin(origin))
+			writeJSON(w, http.StatusOK, meResponse{Actor: projectActor(created.Actor)})
+		})
+
+		api.Post("/admin/logout", func(w http.ResponseWriter, r *http.Request) {
+			setPrivateNoStore(w)
+			origin := requestOrigin(r)
+			if !trustedOrigin(origin, security.TrustedOrigins) {
+				writeAPIError(w, r, http.StatusForbidden, "FORBIDDEN", "Request origin is not allowed.")
+				return
+			}
+			token, present := cookieToken(r)
+			if !present {
+				writeAPIError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Admin sign-in is required.")
+				return
+			}
+			if err := service.LogoutAdmin(r.Context(), token); err != nil {
+				if errors.Is(err, auth.ErrUnauthenticated) {
+					writeAPIError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Admin sign-in is required.")
+					return
+				}
 				writeAuthInternalError(w, r)
 				return
 			}
@@ -242,16 +287,50 @@ func writeCredentialError(w http.ResponseWriter, r *http.Request, err error) {
 	}
 }
 
-func remoteClientIP(remoteAddress string) string {
+func requestClientIP(r *http.Request, trustedProxyCIDRs []string) string {
+	peerIP := remoteAddressIP(r.RemoteAddr)
+	if peerIP == nil {
+		return "unknown"
+	}
+	if !isTrustedProxy(peerIP, trustedProxyCIDRs) {
+		return peerIP.String()
+	}
+	forwardedFor := r.Header.Get("X-Forwarded-For")
+	if forwardedFor == "" || len(forwardedFor) > 4096 {
+		return peerIP.String()
+	}
+	forwarded := strings.Split(forwardedFor, ",")
+	if len(forwarded) > 16 {
+		return peerIP.String()
+	}
+	for index := len(forwarded) - 1; index >= 0; index-- {
+		address := net.ParseIP(strings.TrimSpace(forwarded[index]))
+		if address == nil {
+			return peerIP.String()
+		}
+		if !isTrustedProxy(address, trustedProxyCIDRs) {
+			return address.String()
+		}
+	}
+	return peerIP.String()
+}
+
+func remoteAddressIP(remoteAddress string) net.IP {
 	host, _, err := net.SplitHostPort(remoteAddress)
-	if err != nil {
-		return "unknown"
+	if err == nil {
+		return net.ParseIP(host)
 	}
-	parsed := net.ParseIP(host)
-	if parsed == nil {
-		return "unknown"
+	return net.ParseIP(remoteAddress)
+}
+
+func isTrustedProxy(address net.IP, trustedProxyCIDRs []string) bool {
+	for _, cidr := range trustedProxyCIDRs {
+		_, network, err := net.ParseCIDR(cidr)
+		if err == nil && network.Contains(address) {
+			return true
+		}
 	}
-	return parsed.String()
+	return false
 }
 
 func authActorMiddleware(service *auth.Service) func(http.Handler) http.Handler {

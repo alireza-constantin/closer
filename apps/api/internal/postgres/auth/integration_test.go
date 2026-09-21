@@ -507,6 +507,253 @@ func TestConsumerRateLimitAcceptsTenThenResetsAtFixedWindowBoundary(t *testing.T
 	}
 }
 
+func TestAdminBootstrapLoginAndRecoveryAreIsolated(t *testing.T) {
+	pool := openAuthTestPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	service := appauth.NewServiceWithCredentials(store, store, nil)
+	adminEmail := uniqueAuthEmail(t)
+	adminPassword := "first admin password"
+
+	bootstrapped, err := service.BootstrapAdmin(ctx, adminEmail, adminPassword)
+	if err != nil || !bootstrapped.Created || bootstrapped.AuthUserID == "" {
+		t.Fatalf("BootstrapAdmin() = %+v, %v; want new Admin", bootstrapped, err)
+	}
+	if isAdmin, err := store.IsAdmin(ctx, bootstrapped.AuthUserID); err != nil || !isAdmin {
+		t.Fatalf("bootstrapped identity Admin membership=%t error=%v", isAdmin, err)
+	}
+	adminCredential, err := store.FindAdminCredential(ctx, mustNormalizeEmail(t, adminEmail))
+	if err != nil || adminCredential.PasswordHash == adminPassword || !strings.HasPrefix(adminCredential.PasswordHash, "$argon2id$v=19$") {
+		t.Fatalf("Admin bootstrap did not persist an encoded password hash; lookup error=%v", err)
+	}
+	assertNoParticipantForAuthUser(t, pool, bootstrapped.AuthUserID)
+	var initialSessionCount int64
+	if err := pool.WithConnection(ctx, func(db postgres.QueryDB) error {
+		return db.QueryRow(ctx, "SELECT count(*) FROM auth_session WHERE auth_user_id = $1", mustUUID(t, bootstrapped.AuthUserID)).Scan(&initialSessionCount)
+	}); err != nil {
+		t.Fatalf("read bootstrap session count: %v", err)
+	}
+	if initialSessionCount != 0 {
+		t.Fatalf("Admin bootstrap created %d sessions; want no session before explicit login", initialSessionCount)
+	}
+
+	noOp, err := service.BootstrapAdmin(ctx, adminEmail, "different bootstrap password")
+	if err != nil || noOp.Created || noOp.AuthUserID != bootstrapped.AuthUserID {
+		t.Fatalf("same-Admin bootstrap retry = %+v, %v; want unchanged no-op", noOp, err)
+	}
+	adminSession, err := service.AdminLogin(ctx, adminEmail, adminPassword, "127.0.0.21", "")
+	if err != nil || adminSession.Actor.AuthUserID != bootstrapped.AuthUserID {
+		t.Fatalf("AdminLogin() after bootstrap no-op = %+v, %v", adminSession.Actor, err)
+	}
+	secondDeviceAdminSession, err := service.AdminLogin(ctx, adminEmail, adminPassword, "127.0.0.25", "")
+	if err != nil || secondDeviceAdminSession.Actor.AuthUserID != bootstrapped.AuthUserID {
+		t.Fatalf("second Admin device login = %+v, %v", secondDeviceAdminSession.Actor, err)
+	}
+
+	consumerEmail := uniqueAuthEmail(t)
+	consumerSession, err := service.Register(ctx, consumerEmail, "consumer password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.BootstrapAdmin(ctx, consumerEmail, "attempted promotion password"); !errors.Is(err, appauth.ErrAdminEmailInUse) {
+		t.Fatalf("bootstrap over consumer email error=%v, want ErrAdminEmailInUse", err)
+	}
+	consumerCredential, err := store.FindCredential(ctx, mustNormalizeEmail(t, consumerEmail))
+	if err != nil || consumerCredential.Actor.AuthUserID != consumerSession.Actor.AuthUserID || consumerCredential.Actor.Kind != appauth.UserKindRegistered {
+		t.Fatalf("consumer changed after rejected bootstrap: %+v, %v", consumerCredential, err)
+	}
+
+	secondAdminEmail := uniqueAuthEmail(t)
+	secondAdmin, err := service.BootstrapAdmin(ctx, secondAdminEmail, "second admin password")
+	if err != nil || !secondAdmin.Created {
+		t.Fatalf("second BootstrapAdmin() = %+v, %v", secondAdmin, err)
+	}
+	secondAdminSession, err := service.AdminLogin(ctx, secondAdminEmail, "second admin password", "127.0.0.22", "")
+	if err != nil {
+		t.Fatalf("second AdminLogin() error=%v", err)
+	}
+
+	recovery, err := service.RecoverAdmin(ctx, adminEmail, "recovered admin password")
+	if err != nil || recovery.AuthUserID != bootstrapped.AuthUserID || recovery.RevokedSessionCount < 2 {
+		t.Fatalf("RecoverAdmin() = %+v, %v; want only first Admin and revoked sessions", recovery, err)
+	}
+	if _, err := service.ResolveSession(ctx, adminSession.Token); !errors.Is(err, appauth.ErrUnauthenticated) {
+		t.Fatalf("recovery left old Admin session valid: %v", err)
+	}
+	if _, err := service.ResolveSession(ctx, secondDeviceAdminSession.Token); !errors.Is(err, appauth.ErrUnauthenticated) {
+		t.Fatalf("recovery left second-device Admin session valid: %v", err)
+	}
+	if _, err := service.ResolveSession(ctx, secondAdminSession.Token); err != nil {
+		t.Fatalf("recovery revoked a different Admin session: %v", err)
+	}
+	if _, err := service.ResolveSession(ctx, consumerSession.Token); err != nil {
+		t.Fatalf("recovery revoked a consumer session: %v", err)
+	}
+	if _, err := service.AdminLogin(ctx, adminEmail, adminPassword, "127.0.0.23", ""); !errors.Is(err, appauth.ErrInvalidCredentials) {
+		t.Fatalf("old Admin password error=%v, want generic invalid credentials", err)
+	}
+	newAdminSession, err := service.AdminLogin(ctx, adminEmail, "recovered admin password", "127.0.0.24", "")
+	if err != nil || newAdminSession.Actor.AuthUserID != bootstrapped.AuthUserID {
+		t.Fatalf("AdminLogin() with recovered password = %+v, %v", newAdminSession.Actor, err)
+	}
+	if _, err := service.RecoverAdmin(ctx, consumerEmail, "consumer reset password"); !errors.Is(err, appauth.ErrAdminNotFound) {
+		t.Fatalf("consumer recovery error=%v, want ErrAdminNotFound", err)
+	}
+}
+
+func TestAdminBootstrapRacingConsumerSignupNeverPromotesTheConsumer(t *testing.T) {
+	pool := openAuthTestPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	email := uniqueAuthEmail(t)
+	adminUserID, err := appauth.NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumerUserID, err := appauth.NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumerSessionID, err := appauth.NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumerToken, err := appauth.NewSessionToken(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumerTokenHash := appauth.HashSessionToken(consumerToken)
+	now := time.Now().UTC()
+	start := make(chan struct{})
+	type outcome struct {
+		adminCreated bool
+		adminErr     error
+		consumerErr  error
+	}
+	result := make(chan outcome, 1)
+	var workers sync.WaitGroup
+	workers.Add(2)
+	go func() {
+		defer workers.Done()
+		<-start
+		_, created, adminErr := store.BootstrapAdmin(ctx, adminUserID, email, "operator-hash", now)
+		if adminErr != nil && !errors.Is(adminErr, appauth.ErrAdminEmailInUse) {
+			result <- outcome{adminCreated: created, adminErr: adminErr}
+			return
+		}
+		result <- outcome{adminCreated: created, adminErr: adminErr}
+	}()
+	consumerResult := make(chan error, 1)
+	go func() {
+		defer workers.Done()
+		<-start
+		consumerResult <- store.Register(ctx, consumerUserID, consumerSessionID, email, "consumer-hash", consumerTokenHash[:], now, now.Add(appauth.SessionIdleTTL))
+	}()
+	close(start)
+	workers.Wait()
+	adminOutcome := <-result
+	consumerErr := <-consumerResult
+	adminWon := adminOutcome.adminErr == nil && adminOutcome.adminCreated
+	consumerWon := consumerErr == nil
+	if adminWon == consumerWon {
+		t.Fatalf("bootstrap/signup race: admin=%+v consumerErr=%v; want exactly one winner", adminOutcome, consumerErr)
+	}
+	if adminWon && !errors.Is(consumerErr, appauth.ErrEmailInUse) {
+		t.Fatalf("Admin won but consumer error=%v, want duplicate-email rejection", consumerErr)
+	}
+	if consumerWon && !errors.Is(adminOutcome.adminErr, appauth.ErrAdminEmailInUse) {
+		t.Fatalf("consumer won but Admin error=%v, want no-promotion rejection", adminOutcome.adminErr)
+	}
+
+	var kind string
+	var adminMembership bool
+	err = pool.WithConnection(ctx, func(db postgres.QueryDB) error {
+		return db.QueryRow(ctx, `SELECT u.kind, EXISTS (
+			SELECT 1 FROM admin_user AS a WHERE a.auth_user_id = u.id
+		) FROM auth_user AS u JOIN auth_credential AS c ON c.auth_user_id = u.id
+		WHERE c.email_normalized = $1`, mustNormalizeEmail(t, email)).Scan(&kind, &adminMembership)
+	})
+	if err != nil {
+		t.Fatalf("read signup/bootstrap race winner: %v", err)
+	}
+	if consumerWon && (kind != string(appauth.UserKindRegistered) || adminMembership) {
+		t.Fatalf("consumer identity kind=%q admin membership=%t after race", kind, adminMembership)
+	}
+	if adminWon && (kind != string(appauth.UserKindAdmin) || !adminMembership) {
+		t.Fatalf("Admin identity kind=%q admin membership=%t after race", kind, adminMembership)
+	}
+}
+
+func TestAdminRateLimitIsFivePerIPAtomicAndResetsAtWindowBoundary(t *testing.T) {
+	pool := openAuthTestPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	runID, err := appauth.NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sharedIPSubject := testSubject("admin-ip", runID)
+	const attempts = 20
+	results := make(chan appauth.LoginRateResult, attempts)
+	errs := make(chan error, attempts)
+	var workers sync.WaitGroup
+	for i := 0; i < attempts; i++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			result, err := store.CountAdminLoginAttempt(ctx, sharedIPSubject)
+			results <- result
+			errs <- err
+		}()
+	}
+	workers.Wait()
+	close(results)
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("CountAdminLoginAttempt() error=%v", err)
+		}
+	}
+	limited := 0
+	for result := range results {
+		if result.Limited {
+			limited++
+		}
+	}
+	if limited != attempts-appauth.AdminLoginLimit {
+		t.Fatalf("concurrent Admin throttles=%d, want %d", limited, attempts-appauth.AdminLoginLimit)
+	}
+
+	independent, err := store.CountAdminLoginAttempt(ctx, testSubject("admin-ip", runID+"-other-ip"))
+	if err != nil || independent.Limited {
+		t.Fatalf("different Admin IP result=%+v, error=%v; want independent allowance", independent, err)
+	}
+
+	boundarySubject := testSubject("admin-ip", runID+"-boundary")
+	for attempt := 1; attempt <= appauth.AdminLoginLimit; attempt++ {
+		result, err := store.CountAdminLoginAttempt(ctx, boundarySubject)
+		if err != nil || result.Limited {
+			t.Fatalf("Admin attempt %d result=%+v error=%v; expected accepted", attempt, result, err)
+		}
+	}
+	sixth, err := store.CountAdminLoginAttempt(ctx, boundarySubject)
+	if err != nil || !sixth.Limited || sixth.RetryAfter <= 0 || sixth.RetryAfter > time.Minute {
+		t.Fatalf("Admin attempt 6 result=%+v error=%v; want limited within one minute", sixth, err)
+	}
+	err = pool.WithConnection(ctx, func(db postgres.QueryDB) error {
+		_, queryErr := db.Exec(ctx, `UPDATE auth_rate_limit SET window_started_at = clock_timestamp() - interval '1 minute'
+			WHERE scope = 'admin_login_ip' AND subject = $1`, boundarySubject)
+		return queryErr
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstAfterWindow, err := store.CountAdminLoginAttempt(ctx, boundarySubject)
+	if err != nil || firstAfterWindow.Limited {
+		t.Fatalf("first Admin attempt after window=%+v error=%v; want accepted", firstAfterWindow, err)
+	}
+}
+
 func testSubject(scope, value string) string {
 	hash := sha256.Sum256([]byte(scope + ":" + value))
 	return fmt.Sprintf("%x", hash[:])

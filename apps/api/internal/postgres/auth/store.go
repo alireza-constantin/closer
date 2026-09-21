@@ -317,6 +317,186 @@ func (s *Store) DeleteOldRateLimits(ctx context.Context, now time.Time) (int64, 
 	return deleted, err
 }
 
+func (s *Store) BootstrapAdmin(ctx context.Context, userID, email, passwordHash string, now time.Time) (string, bool, error) {
+	newUserUUID, err := parseUUID(userID)
+	if err != nil {
+		return "", false, err
+	}
+	var actualUserID string
+	created := false
+	err = s.pool.WithinTx(ctx, func(db postgres.QueryDB) error {
+		queries := sqlc.New(db)
+		if err := queries.LockAdminBootstrapEmail(ctx, email); err != nil {
+			return err
+		}
+		existing, err := queries.GetCredentialByEmail(ctx, email)
+		if err == nil {
+			isAdmin, adminErr := queries.HasAdminUser(ctx, existing.AuthUserID)
+			if adminErr != nil {
+				return adminErr
+			}
+			if existing.Kind != string(auth.UserKindAdmin) || !isAdmin {
+				return auth.ErrAdminEmailInUse
+			}
+			actualUserID = formatUUID(existing.AuthUserID)
+			return nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		if _, err := queries.CreateAuthUser(ctx, sqlc.CreateAuthUserParams{
+			ID: newUserUUID, Kind: string(auth.UserKindAdmin), CreatedAt: timestamptz(now),
+		}); err != nil {
+			return err
+		}
+		if err := queries.CreateAuthCredential(ctx, sqlc.CreateAuthCredentialParams{
+			AuthUserID: newUserUUID, EmailNormalized: email, PasswordHash: passwordHash, CreatedAt: timestamptz(now),
+		}); err != nil {
+			if errors.Is(classifyCredentialWriteError(err), auth.ErrEmailInUse) {
+				return auth.ErrAdminEmailInUse
+			}
+			return err
+		}
+		if err := queries.CreateAdminUser(ctx, sqlc.CreateAdminUserParams{
+			AuthUserID: newUserUUID, CreatedAt: timestamptz(now),
+		}); err != nil {
+			return err
+		}
+		actualUserID = userID
+		created = true
+		return nil
+	})
+	if err != nil {
+		return "", false, err
+	}
+	return actualUserID, created, nil
+}
+
+func (s *Store) FindAdminCredential(ctx context.Context, email string) (auth.Credential, error) {
+	var credential auth.Credential
+	err := s.pool.WithConnection(ctx, func(db postgres.QueryDB) error {
+		row, err := sqlc.New(db).GetAdminCredentialByEmail(ctx, email)
+		if err != nil {
+			return err
+		}
+		credential = auth.Credential{
+			Actor:        auth.Actor{AuthUserID: formatUUID(row.AuthUserID), Kind: auth.UserKind(row.Kind)},
+			PasswordHash: row.PasswordHash,
+			Disabled:     row.DisabledAt.Valid,
+		}
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return auth.Credential{}, auth.ErrCredentialNotFound
+	}
+	return credential, err
+}
+
+func (s *Store) CreateAdminLoginSession(
+	ctx context.Context,
+	userID, sessionID string,
+	tokenHash, previousTokenHash []byte,
+	passwordHash string,
+	now, expiresAt time.Time,
+) error {
+	userUUID, err := parseUUID(userID)
+	if err != nil {
+		return err
+	}
+	sessionUUID, err := parseUUID(sessionID)
+	if err != nil {
+		return err
+	}
+	err = s.pool.WithinTx(ctx, func(db postgres.QueryDB) error {
+		queries := sqlc.New(db)
+		if passwordHash != "" {
+			if err := queries.UpdateAuthCredentialPasswordHash(ctx, sqlc.UpdateAuthCredentialPasswordHashParams{
+				AuthUserID: userUUID, PasswordHash: passwordHash, PasswordUpdatedAt: timestamptz(now),
+			}); err != nil {
+				return err
+			}
+		}
+		if len(previousTokenHash) != 0 {
+			if _, err := queries.RevokeAuthSessionByTokenHash(ctx, sqlc.RevokeAuthSessionByTokenHashParams{
+				TokenHash: previousTokenHash, RevokedAt: timestamptz(now),
+			}); err != nil {
+				return err
+			}
+		}
+		created, err := queries.CreateAuthSessionForEnabledAdminUser(ctx, sqlc.CreateAuthSessionForEnabledAdminUserParams{
+			ID: sessionUUID, ID_2: userUUID, TokenHash: tokenHash,
+			CreatedAt: timestamptz(now), ExpiresAt: timestamptz(expiresAt),
+		})
+		if err != nil {
+			return err
+		}
+		if created != 1 {
+			return auth.ErrInvalidCredentials
+		}
+		return nil
+	})
+	return err
+}
+
+func (s *Store) RecoverAdmin(ctx context.Context, email, passwordHash string, now time.Time) (string, int64, error) {
+	var userID string
+	var revokedCount int64
+	err := s.pool.WithinTx(ctx, func(db postgres.QueryDB) error {
+		queries := sqlc.New(db)
+		locked, err := queries.LockAdminByEmailForRecovery(ctx, email)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return auth.ErrAdminNotFound
+		}
+		if err != nil {
+			return err
+		}
+		userID = formatUUID(locked)
+		if err := queries.UpdateAuthCredentialPasswordHash(ctx, sqlc.UpdateAuthCredentialPasswordHashParams{
+			AuthUserID: locked, PasswordHash: passwordHash, PasswordUpdatedAt: timestamptz(now),
+		}); err != nil {
+			return err
+		}
+		revokedCount, err = queries.RevokeAuthSessionsForUser(ctx, sqlc.RevokeAuthSessionsForUserParams{
+			AuthUserID: locked, RevokedAt: timestamptz(now),
+		})
+		return err
+	})
+	if err != nil {
+		return "", 0, err
+	}
+	return userID, revokedCount, nil
+}
+
+func (s *Store) IsAdmin(ctx context.Context, userID string) (bool, error) {
+	userUUID, err := parseUUID(userID)
+	if err != nil {
+		return false, err
+	}
+	var isAdmin bool
+	err = s.pool.WithConnection(ctx, func(db postgres.QueryDB) error {
+		var queryErr error
+		isAdmin, queryErr = sqlc.New(db).IsAdminAuthUser(ctx, userUUID)
+		return queryErr
+	})
+	return isAdmin, err
+}
+
+func (s *Store) CountAdminLoginAttempt(ctx context.Context, ipSubject string) (auth.LoginRateResult, error) {
+	var result auth.LoginRateResult
+	err := s.pool.WithinTx(ctx, func(db postgres.QueryDB) error {
+		row, err := sqlc.New(db).UpsertAdminLoginRateLimit(ctx, ipSubject)
+		if err != nil {
+			return err
+		}
+		if row.Count > auth.AdminLoginLimit {
+			result.Limited = true
+			result.RetryAfter = time.Duration(row.RetryAfterSeconds) * time.Second
+		}
+		return nil
+	})
+	return result, err
+}
+
 func classifyCredentialWriteError(err error) error {
 	if err == nil {
 		return nil

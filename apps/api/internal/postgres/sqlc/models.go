@@ -8,6 +8,11 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AdminUser struct {
+	AuthUserID pgtype.UUID        `json:"auth_user_id"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
 type AuthCredential struct {
 	AuthUserID        pgtype.UUID        `json:"auth_user_id"`
 	EmailNormalized   string             `json:"email_normalized"`

@@ -19,6 +19,7 @@ const (
 	databaseUnpooledEnv = "DATABASE_URL_UNPOOLED"
 	realtimeDatabaseEnv = "REALTIME_DATABASE_URL"
 	trustedOriginsEnv   = "CLOSER_TRUSTED_ORIGINS"
+	trustedProxiesEnv   = "CLOSER_TRUSTED_PROXY_CIDRS"
 	defaultShutdownTime = 10 * time.Second
 )
 
@@ -30,6 +31,7 @@ type Config struct {
 	DatabaseURL         string
 	RealtimeDatabaseURL string
 	TrustedOrigins      []string
+	TrustedProxyCIDRs   []string
 }
 
 // Load reads process environment once and validates the resulting settings.
@@ -75,6 +77,10 @@ func Parse(lookup func(string) (string, bool)) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("invalid %s", trustedOriginsEnv)
 	}
+	trustedProxyCIDRs, err := parseTrustedProxyCIDRs(lookupString(lookup, trustedProxiesEnv))
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid %s", trustedProxiesEnv)
+	}
 
 	shutdownTimeout := defaultShutdownTime
 	if value, ok := lookup(shutdownTimeoutEnv); ok {
@@ -91,7 +97,30 @@ func Parse(lookup func(string) (string, bool)) (Config, error) {
 		DatabaseURL:         databaseURL,
 		RealtimeDatabaseURL: realtimeDatabaseURL,
 		TrustedOrigins:      trustedOrigins,
+		TrustedProxyCIDRs:   trustedProxyCIDRs,
 	}, nil
+}
+
+func parseTrustedProxyCIDRs(value string) ([]string, error) {
+	if value == "" {
+		return nil, nil
+	}
+	var cidrs []string
+	seen := make(map[string]struct{})
+	for _, value := range strings.Split(value, ",") {
+		value = strings.TrimSpace(value)
+		_, network, err := net.ParseCIDR(value)
+		if err != nil {
+			return nil, fmt.Errorf("proxy value must be an IP CIDR")
+		}
+		canonical := network.String()
+		if _, ok := seen[canonical]; ok {
+			return nil, fmt.Errorf("duplicate proxy CIDR")
+		}
+		seen[canonical] = struct{}{}
+		cidrs = append(cidrs, canonical)
+	}
+	return cidrs, nil
 }
 
 func lookupString(lookup func(string) (string, bool), name string) string {

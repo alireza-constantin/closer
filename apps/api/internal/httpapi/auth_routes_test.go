@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -393,6 +394,112 @@ func TestCredentialMutationsRequireConfiguredOriginAndStrictJson(t *testing.T) {
 	}
 }
 
+func TestAdminLoginAndLogoutRequireTrustedOriginAndAdminMembership(t *testing.T) {
+	store := newRouteCredentialStore()
+	admin := auth.Credential{
+		Actor:        auth.Actor{AuthUserID: "00000000-0000-4000-8000-000000000201", Kind: auth.UserKindAdmin},
+		PasswordHash: "test-hash:correct password",
+	}
+	consumer := auth.Credential{
+		Actor:        auth.Actor{AuthUserID: "00000000-0000-4000-8000-000000000202", Kind: auth.UserKindRegistered},
+		PasswordHash: "test-hash:correct password",
+	}
+	store.credentials["admin@example.com"] = admin
+	store.credentials["consumer@example.com"] = consumer
+	store.userKinds[admin.Actor.AuthUserID] = auth.UserKindAdmin
+	store.userKinds[consumer.Actor.AuthUserID] = auth.UserKindRegistered
+	service := auth.NewServiceWithCredentials(store, store, routePasswordHasher{})
+	router := NewRouterWithAuth(nil, nil, service, SecurityConfig{TrustedOrigins: []string{"https://closer.example"}})
+
+	foreign := credentialRequest(t, router, "/api/v1/admin/login", "https://evil.example", "", `{"email":"admin@example.com","password":"correct password"}`)
+	if foreign.Code != http.StatusForbidden {
+		t.Fatalf("foreign-origin Admin login status=%d body=%s", foreign.Code, foreign.Body.String())
+	}
+
+	consumerLogin := credentialRequest(t, router, "/api/v1/admin/login", "https://closer.example", "", `{"email":"consumer@example.com","password":"correct password"}`)
+	var consumerBody apiErrorBody
+	if err := json.Unmarshal(consumerLogin.Body.Bytes(), &consumerBody); err != nil {
+		t.Fatal(err)
+	}
+	if consumerLogin.Code != http.StatusUnauthorized || consumerBody.Error.Code != "INVALID_CREDENTIALS" {
+		t.Fatalf("consumer Admin-login response status=%d body=%s", consumerLogin.Code, consumerLogin.Body.String())
+	}
+
+	login := credentialRequest(t, router, "/api/v1/admin/login", "https://closer.example", "", `{"email":"admin@example.com","password":"correct password"}`)
+	if login.Code != http.StatusOK || login.Header().Get("Cache-Control") != "private, no-store" {
+		t.Fatalf("Admin login status=%d cache=%q body=%s", login.Code, login.Header().Get("Cache-Control"), login.Body.String())
+	}
+	cookie := onlySessionCookie(t, login)
+	if !cookie.HttpOnly || !cookie.Secure || cookie.SameSite != http.SameSiteLaxMode || cookie.Path != "/" {
+		t.Fatalf("Admin session cookie attributes = %+v", cookie)
+	}
+	if actor, err := service.RequireAdminSession(context.Background(), cookie.Value); err != nil || actor.AuthUserID != admin.Actor.AuthUserID {
+		t.Fatalf("RequireAdminSession() actor=%+v error=%v", actor, err)
+	}
+
+	foreignLogout := credentialRequest(t, router, "/api/v1/admin/logout", "https://evil.example", cookie.Value, "")
+	if foreignLogout.Code != http.StatusForbidden {
+		t.Fatalf("foreign-origin Admin logout status=%d body=%s", foreignLogout.Code, foreignLogout.Body.String())
+	}
+	if _, err := service.RequireAdminSession(context.Background(), cookie.Value); err != nil {
+		t.Fatalf("foreign Origin revoked Admin session: %v", err)
+	}
+	missingLogout := credentialRequest(t, router, "/api/v1/admin/logout", "https://closer.example", "", "")
+	if missingLogout.Code != http.StatusUnauthorized {
+		t.Fatalf("Admin logout without a session status=%d body=%s", missingLogout.Code, missingLogout.Body.String())
+	}
+
+	consumerStore := newRouteCredentialStore()
+	consumerService := auth.NewServiceWithCredentials(consumerStore, consumerStore, routePasswordHasher{})
+	consumerSession, err := consumerService.Register(context.Background(), "consumer@example.net", "correct password")
+	if err != nil {
+		t.Fatalf("create registered session for Admin authorization check: %v", err)
+	}
+	consumerRouter := NewRouterWithAuth(nil, nil, consumerService, SecurityConfig{TrustedOrigins: []string{"https://closer.example"}})
+	consumerLogout := credentialRequest(t, consumerRouter, "/api/v1/admin/logout", "https://closer.example", consumerSession.Token, "")
+	if consumerLogout.Code != http.StatusUnauthorized {
+		t.Fatalf("consumer session accessed Admin logout status=%d body=%s", consumerLogout.Code, consumerLogout.Body.String())
+	}
+
+	logout := credentialRequest(t, router, "/api/v1/admin/logout", "https://closer.example", cookie.Value, "")
+	if logout.Code != http.StatusOK || onlySessionCookie(t, logout).MaxAge >= 0 {
+		t.Fatalf("Admin logout status=%d cookie=%+v body=%s", logout.Code, onlySessionCookie(t, logout), logout.Body.String())
+	}
+	if _, err := service.RequireAdminSession(context.Background(), cookie.Value); !errors.Is(err, auth.ErrUnauthenticated) {
+		t.Fatalf("Admin session after logout error=%v, want unauthenticated", err)
+	}
+}
+
+func TestAdminLoginRateLimitIncludesRetryAfter(t *testing.T) {
+	store := newRouteCredentialStore()
+	store.adminRateLimit = auth.LoginRateResult{Limited: true, RetryAfter: 18 * time.Second}
+	router := NewRouterWithAuth(nil, nil, auth.NewServiceWithCredentials(store, store, routePasswordHasher{}), SecurityConfig{TrustedOrigins: []string{"https://closer.example"}})
+	response := credentialRequest(t, router, "/api/v1/admin/login", "https://closer.example", "", `{"email":"admin@example.com","password":"correct password"}`)
+	if response.Code != http.StatusTooManyRequests || response.Header().Get("Retry-After") != "18" {
+		t.Fatalf("Admin rate limit status=%d Retry-After=%q body=%s", response.Code, response.Header().Get("Retry-After"), response.Body.String())
+	}
+}
+
+func TestRequestClientIPIgnoresUntrustedForwardedHeaders(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/", nil)
+	request.RemoteAddr = "198.51.100.9:4567"
+	request.Header.Set("X-Forwarded-For", "203.0.113.7")
+	if got := requestClientIP(request, []string{"10.0.0.0/8"}); got != "198.51.100.9" {
+		t.Fatalf("untrusted peer client IP = %q, want direct peer", got)
+	}
+
+	request.RemoteAddr = "10.2.0.9:4567"
+	request.Header.Set("X-Forwarded-For", "203.0.113.7, 10.1.0.4")
+	if got := requestClientIP(request, []string{"10.0.0.0/8"}); got != "203.0.113.7" {
+		t.Fatalf("trusted proxy client IP = %q, want leftmost untrusted hop", got)
+	}
+
+	request.Header.Set("X-Forwarded-For", "203.0.113.7, not-an-ip")
+	if got := requestClientIP(request, []string{"10.0.0.0/8"}); got != "10.2.0.9" {
+		t.Fatalf("malformed proxy chain client IP = %q, want proxy peer", got)
+	}
+}
+
 func credentialRequest(t *testing.T, router http.Handler, path, origin, token, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	var requestBody *strings.Reader
@@ -420,6 +527,7 @@ type routeCredentialStore struct {
 	upgradeCount       int
 	activeSession      bool
 	rateLimit          auth.LoginRateResult
+	adminRateLimit     auth.LoginRateResult
 	allSessionsRevoked bool
 }
 
@@ -529,6 +637,50 @@ func (store *routeCredentialStore) CountConsumerLoginAttempt(_ context.Context, 
 
 func (store *routeCredentialStore) DeleteOldRateLimits(context.Context, time.Time) (int64, error) {
 	return 0, nil
+}
+
+func (store *routeCredentialStore) BootstrapAdmin(_ context.Context, userID, email, passwordHash string, _ time.Time) (string, bool, error) {
+	if existing, ok := store.credentials[email]; ok {
+		if existing.Actor.Kind != auth.UserKindAdmin {
+			return "", false, auth.ErrAdminEmailInUse
+		}
+		return existing.Actor.AuthUserID, false, nil
+	}
+	actor := auth.Actor{AuthUserID: userID, Kind: auth.UserKindAdmin}
+	store.credentials[email] = auth.Credential{Actor: actor, PasswordHash: passwordHash}
+	store.userKinds[userID] = auth.UserKindAdmin
+	return userID, true, nil
+}
+
+func (store *routeCredentialStore) FindAdminCredential(_ context.Context, email string) (auth.Credential, error) {
+	credential, ok := store.credentials[email]
+	if !ok || credential.Actor.Kind != auth.UserKindAdmin {
+		return auth.Credential{}, auth.ErrCredentialNotFound
+	}
+	return credential, nil
+}
+
+func (store *routeCredentialStore) CreateAdminLoginSession(ctx context.Context, userID, sessionID string, tokenHash, previousTokenHash []byte, passwordHash string, now, expiresAt time.Time) error {
+	return store.CreateLoginSession(ctx, userID, sessionID, tokenHash, previousTokenHash, passwordHash, now, expiresAt)
+}
+
+func (store *routeCredentialStore) RecoverAdmin(_ context.Context, email, passwordHash string, _ time.Time) (string, int64, error) {
+	credential, ok := store.credentials[email]
+	if !ok || credential.Actor.Kind != auth.UserKindAdmin {
+		return "", 0, auth.ErrAdminNotFound
+	}
+	credential.PasswordHash = passwordHash
+	store.credentials[email] = credential
+	store.activeSession = false
+	return credential.Actor.AuthUserID, 1, nil
+}
+
+func (store *routeCredentialStore) IsAdmin(_ context.Context, userID string) (bool, error) {
+	return store.userKinds[userID] == auth.UserKindAdmin, nil
+}
+
+func (store *routeCredentialStore) CountAdminLoginAttempt(context.Context, string) (auth.LoginRateResult, error) {
+	return store.adminRateLimit, nil
 }
 
 type routePasswordHasher struct{}
