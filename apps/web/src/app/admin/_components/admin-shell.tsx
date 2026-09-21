@@ -32,6 +32,12 @@ export function AdminShell({
 
   return (
     <div className="bg-closer-cream text-closer-navy min-h-svh lg:grid lg:grid-cols-[224px_minmax(0,1fr)]">
+      <a
+        className="focus:bg-closer-navy focus-visible:ring-closer-coral sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:rounded-xl focus:px-4 focus:py-3 focus:text-white focus-visible:ring-2 focus-visible:outline-none"
+        href="#admin-main"
+      >
+        Skip to main content
+      </a>
       <aside className="border-closer-navy/10 flex flex-col border-b bg-white/65 px-4 py-4 lg:min-h-svh lg:border-r lg:border-b-0 lg:px-3 lg:py-5">
         <div className="flex flex-col gap-3 lg:items-stretch">
           <div className="flex items-center gap-2.5 px-2 lg:px-3">
@@ -101,7 +107,11 @@ export function AdminShell({
             <AdminLogoutButton />
           </div>
         </header>
-        <main className="mx-auto w-full max-w-[1600px] px-4 py-6 sm:px-6 md:px-8 md:py-8">
+        <main
+          className="mx-auto w-full max-w-[1600px] px-4 py-6 sm:px-6 md:px-8 md:py-8"
+          id="admin-main"
+          tabIndex={-1}
+        >
           {children}
         </main>
       </div>

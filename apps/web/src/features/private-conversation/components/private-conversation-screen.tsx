@@ -248,6 +248,7 @@ export default function PrivateConversationScreen({ view }: { view: Conversation
                   Skip
                 </AsyncButton>
                 <AsyncButton
+                  aria-pressed={conversation.candidate?.liked ?? false}
                   onClick={() => void toggleLike()}
                   pending={isLiking}
                   pendingText="Saving…"
