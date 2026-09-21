@@ -1,5 +1,7 @@
 import { relations } from "drizzle-orm";
 import {
+  check,
+  customType,
   pgTable,
   text,
   timestamp,
@@ -8,7 +10,13 @@ import {
   uniqueIndex,
   integer,
   bigint,
+  uuid,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType: () => "bytea",
+});
 
 export const rateLimit = pgTable("rate_limit", {
   id: text("id").primaryKey(),
@@ -92,6 +100,43 @@ export const verification = pgTable(
       .notNull(),
   },
   (table) => [index("verification_identifier_idx").on(table.identifier)],
+);
+
+// Purpose-built Go authentication tables are additive during the rewrite.
+// The Better Auth tables above remain in place until the separately gated
+// production cutover.
+export const authUser = pgTable(
+  "auth_user",
+  {
+    id: uuid("id").primaryKey(),
+    kind: text("kind").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    disabledAt: timestamp("disabled_at", { withTimezone: true }),
+  },
+  (table) => [
+    check("auth_user_kind_check", sql`${table.kind} in ('anonymous', 'registered', 'admin')`),
+  ],
+);
+
+export const authSession = pgTable(
+  "auth_session",
+  {
+    id: uuid("id").primaryKey(),
+    authUserId: uuid("auth_user_id")
+      .notNull()
+      .references(() => authUser.id, { onDelete: "restrict" }),
+    tokenHash: bytea("token_hash").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex("auth_session_token_hash_uidx").on(table.tokenHash),
+    index("auth_session_auth_user_id_expires_at_idx").on(table.authUserId, table.expiresAt),
+    index("auth_session_expires_at_idx").on(table.expiresAt),
+    check("auth_session_token_hash_length_check", sql`octet_length(${table.tokenHash}) = 32`),
+  ],
 );
 
 export const userRelations = relations(user, ({ many }) => ({

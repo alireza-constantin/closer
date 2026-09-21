@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -17,6 +18,7 @@ const (
 	databaseURLEnv      = "DATABASE_URL"
 	databaseUnpooledEnv = "DATABASE_URL_UNPOOLED"
 	realtimeDatabaseEnv = "REALTIME_DATABASE_URL"
+	trustedOriginsEnv   = "CLOSER_TRUSTED_ORIGINS"
 	defaultShutdownTime = 10 * time.Second
 )
 
@@ -27,6 +29,7 @@ type Config struct {
 	ShutdownTimeout     time.Duration
 	DatabaseURL         string
 	RealtimeDatabaseURL string
+	TrustedOrigins      []string
 }
 
 // Load reads process environment once and validates the resulting settings.
@@ -68,6 +71,11 @@ func Parse(lookup func(string) (string, bool)) (Config, error) {
 		return Config{}, fmt.Errorf("%s is invalid", realtimeDatabaseEnv)
 	}
 
+	trustedOrigins, err := parseTrustedOrigins(lookupString(lookup, trustedOriginsEnv))
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid %s", trustedOriginsEnv)
+	}
+
 	shutdownTimeout := defaultShutdownTime
 	if value, ok := lookup(shutdownTimeoutEnv); ok {
 		parsed, err := time.ParseDuration(value)
@@ -82,7 +90,36 @@ func Parse(lookup func(string) (string, bool)) (Config, error) {
 		ShutdownTimeout:     shutdownTimeout,
 		DatabaseURL:         databaseURL,
 		RealtimeDatabaseURL: realtimeDatabaseURL,
+		TrustedOrigins:      trustedOrigins,
 	}, nil
+}
+
+func lookupString(lookup func(string) (string, bool), name string) string {
+	value, _ := lookup(name)
+	return strings.TrimSpace(value)
+}
+
+func parseTrustedOrigins(value string) ([]string, error) {
+	if value == "" {
+		return nil, nil
+	}
+	var origins []string
+	seen := make(map[string]struct{})
+	for _, origin := range strings.Split(value, ",") {
+		origin = strings.TrimSpace(origin)
+		parsed, err := url.Parse(origin)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") ||
+			parsed.Host == "" || parsed.User != nil || parsed.Path != "" ||
+			parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Opaque != "" {
+			return nil, fmt.Errorf("origin must be an exact http(s) origin")
+		}
+		if _, ok := seen[origin]; ok {
+			return nil, fmt.Errorf("duplicate origin")
+		}
+		seen[origin] = struct{}{}
+		origins = append(origins, origin)
+	}
+	return origins, nil
 }
 
 func validateDatabaseURL(databaseURL string) error {

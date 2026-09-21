@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alireza-constantin/closer/apps/api/internal/auth"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -43,6 +44,19 @@ type ReadinessChecker interface {
 
 // NewRouter constructs the HTTP transport without opening a listening socket.
 func NewRouter(logger *slog.Logger, readiness ReadinessChecker) http.Handler {
+	return NewRouterWithAuth(logger, readiness, nil, SecurityConfig{})
+}
+
+type SecurityConfig struct {
+	TrustedOrigins []string
+}
+
+func NewRouterWithAuth(
+	logger *slog.Logger,
+	readiness ReadinessChecker,
+	authService *auth.Service,
+	security SecurityConfig,
+) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -76,6 +90,9 @@ func NewRouter(logger *slog.Logger, readiness ReadinessChecker) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, healthResponse{Status: "ready"})
 	})
+	if authService != nil {
+		registerAuthRoutes(router, authService, security)
+	}
 
 	return router
 }

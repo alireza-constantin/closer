@@ -3,3 +3,24 @@
 //   sqlc v1.31.1
 
 package sqlc
+
+import (
+	"github.com/jackc/pgx/v5/pgtype"
+)
+
+type AuthSession struct {
+	ID         pgtype.UUID        `json:"id"`
+	AuthUserID pgtype.UUID        `json:"auth_user_id"`
+	TokenHash  []byte             `json:"token_hash"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
+	LastUsedAt pgtype.Timestamptz `json:"last_used_at"`
+	RevokedAt  pgtype.Timestamptz `json:"revoked_at"`
+}
+
+type AuthUser struct {
+	ID         pgtype.UUID        `json:"id"`
+	Kind       string             `json:"kind"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	DisabledAt pgtype.Timestamptz `json:"disabled_at"`
+}

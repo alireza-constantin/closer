@@ -6,13 +6,23 @@ package sqlc
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Querier interface {
+	CreateAuthSession(ctx context.Context, arg CreateAuthSessionParams) (AuthSession, error)
+	CreateAuthUser(ctx context.Context, arg CreateAuthUserParams) (AuthUser, error)
 	// Infrastructure-only query used by the test-database guard and transaction
 	// smoke tests. Domain query files belong to their owning tickets.
 	CurrentDatabase(ctx context.Context) (string, error)
+	DeleteExpiredAuthSessions(ctx context.Context, arg DeleteExpiredAuthSessionsParams) (int64, error)
+	GetAuthSessionActor(ctx context.Context, arg GetAuthSessionActorParams) (GetAuthSessionActorRow, error)
 	GetLocalTestValue(ctx context.Context) (string, error)
+	HasAuthSession(ctx context.Context, tokenHash []byte) (bool, error)
+	ListAuthSessionTokenHashes(ctx context.Context, authUserID pgtype.UUID) ([][]byte, error)
+	RenewAuthSession(ctx context.Context, arg RenewAuthSessionParams) (pgtype.Timestamptz, error)
+	RevokeAuthSession(ctx context.Context, arg RevokeAuthSessionParams) (int64, error)
 	SetLocalTestValue(ctx context.Context, value string) (string, error)
 }
 

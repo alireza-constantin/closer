@@ -2,9 +2,13 @@
 
 The API uses Go 1.25.1, as declared in `go.mod`. Set `HTTP_ADDR` and
 `DATABASE_URL` before starting it. `HTTP_SHUTDOWN_TIMEOUT` is optional and
-defaults to `10s`. Startup validates and pings PostgreSQL before opening the
-HTTP listener. `/healthz` reports process health; `/readyz` pings the pool and
-returns `503` while PostgreSQL is unavailable.
+defaults to `10s`. Set `CLOSER_TRUSTED_ORIGINS` to comma-separated exact origins
+before using cookie-authenticated mutations. Local development can include the
+Vite origin (for example `http://localhost:5173`); Production must include the
+canonical HTTPS app origin. Empty configuration fails closed for auth writes.
+Startup validates and pings PostgreSQL before opening the HTTP listener.
+`/healthz` reports process health; `/readyz` pings the pool and returns `503`
+while PostgreSQL is unavailable.
 
 ```powershell
 $env:HTTP_ADDR = '127.0.0.1:8080'
@@ -47,3 +51,11 @@ The guard accepts only a loopback/local host and a database named exactly
 `closer_test` or beginning with `closer_test_`; there is no fallback to
 `DATABASE_URL`. Tests skip when the variable is absent and fail if it points to
 an unsafe target.
+
+The purpose-built auth schema is additive while the rewrite runs beside
+Better Auth. It is defined in `packages/db/src/schema/auth.ts` and is applied
+to disposable databases through the existing Drizzle schema workflow. It uses
+UUID auth identities and stores only SHA-256 session-token hashes. The Go API
+creates anonymous identity only from explicit `POST /api/v1/auth/anonymous`;
+`GET /api/v1/me` and route prefetch remain read-only. A daily cleanup removes
+expired or revoked sessions in batches of at most 500.

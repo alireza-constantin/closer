@@ -187,3 +187,49 @@ func TestParseRejectsInvalidShutdownTimeout(t *testing.T) {
 		})
 	}
 }
+
+func TestParseLoadsExactTrustedOrigins(t *testing.T) {
+	values := map[string]string{
+		listenAddressEnv:  "127.0.0.1:8080",
+		databaseURLEnv:    testDatabaseURL,
+		trustedOriginsEnv: "http://localhost:5173, https://closer.example",
+	}
+	config, err := Parse(func(key string) (string, bool) {
+		value, ok := values[key]
+		return value, ok
+	})
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if len(config.TrustedOrigins) != 2 || config.TrustedOrigins[0] != "http://localhost:5173" || config.TrustedOrigins[1] != "https://closer.example" {
+		t.Fatalf("TrustedOrigins = %#v", config.TrustedOrigins)
+	}
+}
+
+func TestParseRejectsInvalidTrustedOrigins(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{name: "wildcard origin", key: trustedOriginsEnv, value: "*"},
+		{name: "origin path", key: trustedOriginsEnv, value: "https://closer.example/path"},
+		{name: "origin slash", key: trustedOriginsEnv, value: "https://closer.example/"},
+		{name: "duplicate origin", key: trustedOriginsEnv, value: "https://closer.example,https://closer.example"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			values := map[string]string{
+				listenAddressEnv: "127.0.0.1:8080",
+				databaseURLEnv:   testDatabaseURL,
+				test.key:         test.value,
+			}
+			_, err := Parse(func(key string) (string, bool) {
+				value, ok := values[key]
+				return value, ok
+			})
+			if err == nil || !strings.Contains(err.Error(), test.key) {
+				t.Fatalf("Parse() error = %v, want invalid %s", err, test.key)
+			}
+		})
+	}
+}

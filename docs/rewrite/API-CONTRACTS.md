@@ -166,6 +166,24 @@ There is no anonymous creation on `GET /me`, no Better Auth catch-all route,
 no client-chosen actor ID, no JWT endpoint, and no consumer password-reset
 endpoint in V1. All cookie mutations require an allow-listed Origin.
 
+The current GO-03A contract returns `GET /api/v1/me` as
+`{"actor":null}` when no valid session exists, or
+`{"actor":{"authUserId":"<uuid>","kind":"anonymous|registered|admin"}}`
+for the authenticated identity. It is read-only: it does not create identity
+or Participant rows and does not renew a session. Explicit
+`POST /api/v1/auth/anonymous` returns `201` with the same actor projection and
+sets the raw session token only in the `closer_session` cookie. Logout returns
+`{"actor":null}` and expires that cookie. Auth projections and responses use
+`Cache-Control: private, no-store`.
+
+The cookie is `HttpOnly`, `Path=/`, and `SameSite=Lax`; `Secure` is set for an
+allow-listed HTTPS origin and omitted for configured local HTTP development.
+The token is 32 random bytes encoded as unpadded base64url; persistence stores
+only SHA-256(token). Safe reads such as `/me` never renew it. Future
+authenticated state-changing routes may renew after 24 hours, extending the
+seven-day idle expiry up to the 30-day absolute ceiling. A daily bounded cleanup
+removes expired or revoked session rows without deleting auth identities.
+
 Canonical public/participant reads are:
 
 ```text

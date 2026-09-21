@@ -1,8 +1,12 @@
 version: "2"
 sql:
   - engine: "postgresql"
-    schema: "db/queries/test_helpers.sql"
-    queries: "db/queries/test_helpers.sql"
+    schema:
+      - "db/queries/auth_schema.sql"
+      - "db/queries/test_helpers.sql"
+    queries:
+      - "db/queries/auth.sql"
+      - "db/queries/test_helpers.sql"
     gen:
       go:
         package: "sqlc"

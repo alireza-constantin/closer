@@ -8,10 +8,13 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"github.com/alireza-constantin/closer/apps/api/internal/auth"
 	"github.com/alireza-constantin/closer/apps/api/internal/config"
 	"github.com/alireza-constantin/closer/apps/api/internal/httpapi"
 	"github.com/alireza-constantin/closer/apps/api/internal/postgres"
+	postgresauth "github.com/alireza-constantin/closer/apps/api/internal/postgres/auth"
 )
 
 func main() {
@@ -35,10 +38,14 @@ func run(logger *slog.Logger) error {
 	}
 	defer database.Close()
 
-	router := httpapi.NewRouter(logger, database)
+	authService := auth.NewService(postgresauth.NewStore(database))
+	router := httpapi.NewRouterWithAuth(logger, database, authService, httpapi.SecurityConfig{
+		TrustedOrigins: cfg.TrustedOrigins,
+	})
 	server := httpapi.NewServer(cfg.ListenAddress, router)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	startAuthSessionCleanup(ctx, logger, authService)
 
 	listener, err := net.Listen("tcp", cfg.ListenAddress)
 	if err != nil {
@@ -52,4 +59,26 @@ func run(logger *slog.Logger) error {
 
 	logger.Info("HTTP server starting")
 	return httpapi.Serve(ctx, server, listener, cfg.ShutdownTimeout)
+}
+
+func startAuthSessionCleanup(ctx context.Context, logger *slog.Logger, service *auth.Service) {
+	go func() {
+		ticker := time.NewTicker(auth.SessionCleanupEvery)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				cleanupCtx, cancel := context.WithTimeout(ctx, postgres.CommandTimeout)
+				deleted, err := service.CleanupExpiredSessions(cleanupCtx)
+				cancel()
+				if err != nil {
+					logger.Warn("expired auth session cleanup failed")
+				} else if deleted > 0 {
+					logger.Info("expired auth sessions cleaned", "count", deleted)
+				}
+			}
+		}
+	}()
 }
