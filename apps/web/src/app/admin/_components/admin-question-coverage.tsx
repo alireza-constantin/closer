@@ -54,7 +54,7 @@ export function getMostUrgentQuestionCoverage(lanes: readonly QuestionCoverageLa
 
 function CoverageLaneRow({ lane }: { lane: QuestionCoverageLane }) {
   return (
-    <li className="border-closer-navy/10 flex flex-wrap items-start justify-between gap-3 rounded-xl border bg-white/75 px-3 py-3">
+    <li className="border-closer-navy/10 flex min-w-0 flex-col gap-3 rounded-xl border bg-white/75 px-3 py-3 sm:flex-row sm:items-start sm:justify-between">
       <div className="min-w-0">
         <p className="leading-tight font-extrabold">
           <CategoryValue category={lane.category} />
@@ -68,7 +68,7 @@ function CoverageLaneRow({ lane }: { lane: QuestionCoverageLane }) {
           Medium {lane.intensityBreakdown.medium} · Deep {lane.intensityBreakdown.deep}
         </p>
       </div>
-      <div className="flex shrink-0 flex-wrap items-center gap-2">
+      <div className="flex w-full min-w-0 flex-wrap items-center justify-between gap-2 sm:w-auto sm:shrink-0 sm:justify-end">
         <span
           className={`rounded-lg px-2.5 py-1 text-xs font-extrabold ${lane.level === "critical" ? "bg-closer-error/10 text-closer-error" : lane.level === "low" ? "bg-closer-coral/30 text-closer-navy" : "bg-closer-mint text-closer-navy"}`}
         >
@@ -90,7 +90,7 @@ export function QuestionCoverageSummary({ lanes }: { lanes: readonly QuestionCov
       aria-labelledby="coverage-heading"
       className="rounded-closer-panel shadow-closer-soft bg-white/90 p-5 md:p-6"
     >
-      <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h2 className="font-extrabold" id="coverage-heading">
             Question coverage

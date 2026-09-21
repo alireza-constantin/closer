@@ -57,14 +57,14 @@ export function AdminQuestionWorkspace({
 
   return (
     <>
-      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+      <div className="mb-5 flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-between">
         <AdminWorkspaceTabs
           active={view}
           filters={{ ...filters, ...(view === "operations" ? {} : { revisionScope }) }}
         />
         {view === "operations" ? (
           <Link
-            className="bg-closer-coral focus-visible:ring-closer-navy inline-flex min-h-11 items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-extrabold shadow-sm transition-transform hover:-translate-y-0.5 focus-visible:ring-2 focus-visible:outline-none"
+            className="bg-closer-coral focus-visible:ring-closer-navy inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-extrabold shadow-sm transition-transform hover:-translate-y-0.5 focus-visible:ring-2 focus-visible:outline-none sm:w-auto"
             href={newQuestionHref}
           >
             <span aria-hidden="true" className="text-lg leading-none">
@@ -81,7 +81,7 @@ export function AdminQuestionWorkspace({
         <>
           <section
             aria-label="Question catalog operations"
-            className="rounded-closer-panel shadow-closer-soft overflow-hidden bg-white/90"
+            className="rounded-closer-panel shadow-closer-soft max-w-full min-w-0 overflow-hidden bg-white/90"
           >
             <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-4 md:px-5">
               <p className="text-sm font-extrabold">{data.total.toLocaleString("en")} questions</p>
@@ -91,7 +91,7 @@ export function AdminQuestionWorkspace({
             </div>
             <div
               aria-label="Question operations table"
-              className="overflow-x-auto focus-visible:ring-2 focus-visible:outline-none"
+              className="max-w-full min-w-0 overflow-x-auto focus-visible:ring-2 focus-visible:outline-none"
               role="region"
               tabIndex={0}
             >
@@ -175,11 +175,11 @@ export function AdminQuestionWorkspace({
                 </tbody>
               </table>
             </div>
-            <div className="border-closer-navy/10 flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3 md:px-5">
+            <div className="border-closer-navy/10 flex flex-col items-start gap-3 border-t px-4 py-3 sm:flex-row sm:items-center sm:justify-between md:px-5">
               <p aria-live="polite" className="text-closer-muted text-xs">
                 Showing {start}–{end} of {data.total.toLocaleString("en")}
               </p>
-              <div className="flex items-center gap-2">
+              <div className="flex w-full items-center justify-between gap-2 sm:w-auto">
                 <PageLink
                   page={data.page - 1}
                   disabled={data.page <= 1}
@@ -277,11 +277,11 @@ function QuestionPagination({
   const end = Math.min(data.page * data.pageSize, data.total);
   const maxPage = Math.max(1, Math.ceil(data.total / data.pageSize));
   return (
-    <div className="border-closer-navy/10 flex flex-wrap items-center justify-between gap-3 border-x border-b bg-white/90 px-4 py-3 md:px-5">
+    <div className="border-closer-navy/10 flex flex-col items-start gap-3 border-x border-b bg-white/90 px-4 py-3 sm:flex-row sm:items-center sm:justify-between md:px-5">
       <p aria-live="polite" className="text-closer-muted text-xs">
         Showing {start}–{end} of {data.total.toLocaleString("en")}
       </p>
-      <div className="flex items-center gap-2">
+      <div className="flex w-full items-center justify-between gap-2 sm:w-auto">
         <PageLink
           page={data.page - 1}
           disabled={data.page <= 1}

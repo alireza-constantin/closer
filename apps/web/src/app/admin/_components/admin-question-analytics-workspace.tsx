@@ -259,7 +259,7 @@ function AnalyticsTableFrame({
   return (
     <section
       aria-label={title}
-      className="rounded-closer-panel shadow-closer-soft overflow-hidden bg-white/90"
+      className="rounded-closer-panel shadow-closer-soft max-w-full min-w-0 overflow-hidden bg-white/90"
     >
       <div className="flex flex-wrap items-end justify-between gap-3 px-4 py-4 md:px-5">
         <div>
@@ -270,7 +270,7 @@ function AnalyticsTableFrame({
       </div>
       <div
         aria-label={`${title} table`}
-        className="overflow-x-auto focus-visible:ring-2 focus-visible:outline-none"
+        className="max-w-full min-w-0 overflow-x-auto focus-visible:ring-2 focus-visible:outline-none"
         role="region"
         tabIndex={0}
       >

@@ -139,9 +139,9 @@ export function AdminQuestionEditor({
     (form.watch("category") === "friendship" && form.watch("relationshipFit") !== "friend");
 
   return (
-    <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1.25fr)_minmax(300px,.75fr)]">
+    <div className="grid min-w-0 items-start gap-5 xl:grid-cols-[minmax(0,1.25fr)_minmax(300px,.75fr)]">
       <form
-        className="rounded-closer-panel shadow-closer-soft bg-white/90 p-5 md:p-6"
+        className="rounded-closer-panel shadow-closer-soft min-w-0 bg-white/90 p-5 md:p-6"
         onSubmit={form.handleSubmit(onSubmit)}
       >
         {questionId ? (
@@ -262,7 +262,7 @@ export function AdminQuestionEditor({
         </div>
       </form>
 
-      <aside aria-label="Wording checks" className="flex flex-col gap-3">
+      <aside aria-label="Wording checks" className="flex min-w-0 flex-col gap-3">
         {duplicateError ? (
           <Callout tone="yellow" title="Duplicate check unavailable">
             {duplicateError}
@@ -281,7 +281,7 @@ export function AdminQuestionEditor({
                   key={match.questionId}
                 >
                   <Link
-                    className="text-closer-navy font-bold underline-offset-4 hover:underline focus-visible:ring-2"
+                    className="text-closer-navy font-bold break-words underline-offset-4 hover:underline focus-visible:ring-2"
                     href={`/admin/questions/${match.questionId}` as Route}
                   >
                     {match.text}
@@ -358,7 +358,7 @@ function Callout({
   return (
     <section className={`${colors[tone]} rounded-closer-panel shadow-closer-soft p-4`}>
       <h2 className="font-extrabold">{title}</h2>
-      <div className="mt-2 text-sm leading-relaxed">{children}</div>
+      <div className="mt-2 text-sm leading-relaxed break-words">{children}</div>
     </section>
   );
 }

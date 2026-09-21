@@ -25,7 +25,7 @@ export function AdminQuestionFilters({
   return (
     <form
       action="/admin/questions"
-      className="rounded-closer-panel shadow-closer-soft mb-5 bg-white/85 p-4"
+      className="rounded-closer-panel shadow-closer-soft mb-5 min-w-0 bg-white/85 p-4"
       method="get"
     >
       <input name="view" type="hidden" value={view} />
@@ -115,7 +115,7 @@ export function AdminQuestionFilters({
             ]}
           />
         )}
-        <div className="flex items-end gap-2">
+        <div className="flex items-end gap-2 sm:col-span-2 xl:col-span-1">
           <button
             className="bg-closer-navy focus-visible:ring-closer-coral min-h-10 rounded-xl px-4 text-sm font-bold text-white focus-visible:ring-2 focus-visible:outline-none"
             type="submit"

@@ -48,8 +48,8 @@ export function AdminLoginForm() {
   const passwordError = form.formState.errors.password;
 
   return (
-    <main className="bg-closer-cream text-closer-navy flex min-h-svh items-center justify-center px-6 py-8">
-      <section className="rounded-closer-panel shadow-closer-soft w-full max-w-md bg-white/80 p-7">
+    <main className="bg-closer-cream text-closer-navy flex min-h-svh min-w-0 items-center justify-center px-4 py-6 sm:px-6 sm:py-8">
+      <section className="rounded-closer-panel shadow-closer-soft w-full max-w-md min-w-0 bg-white/80 p-5 sm:p-7">
         <CloserEyebrow className="text-center">Closer editorial workspace</CloserEyebrow>
         <h1 className="mt-3 text-center text-3xl font-extrabold tracking-[-.05em]">
           Admin sign in

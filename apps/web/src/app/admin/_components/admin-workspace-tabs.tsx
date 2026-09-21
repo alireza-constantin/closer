@@ -18,7 +18,7 @@ export function AdminWorkspaceTabs({
   return (
     <nav
       aria-label="Questions views"
-      className="mb-5 flex w-fit max-w-full flex-wrap gap-1 rounded-2xl bg-white/70 p-1.5 shadow-sm"
+      className="mb-5 flex w-full max-w-full flex-wrap gap-1 rounded-2xl bg-white/70 p-1.5 shadow-sm sm:w-fit"
     >
       {tabs.map((tab) => (
         <QuestionViewLink active={active === tab.id} filters={filters} key={tab.id} tab={tab} />
@@ -41,7 +41,7 @@ function QuestionViewLink({
   return (
     <Link
       aria-current={active ? "page" : undefined}
-      className={`focus-visible:ring-closer-navy rounded-xl px-4 py-2.5 text-sm font-extrabold transition-colors focus-visible:ring-2 focus-visible:outline-none ${active ? "bg-closer-coral text-closer-navy shadow-sm" : "text-closer-navy/70 hover:bg-closer-cream"}`}
+      className={`focus-visible:ring-closer-navy flex min-w-0 flex-1 justify-center rounded-xl px-3 py-2.5 text-sm font-extrabold transition-colors focus-visible:ring-2 focus-visible:outline-none sm:flex-none sm:px-4 ${active ? "bg-closer-coral text-closer-navy shadow-sm" : "text-closer-navy/70 hover:bg-closer-cream"}`}
       href={`/admin/questions?${query.toString()}` as Route}
     >
       {tab.label}

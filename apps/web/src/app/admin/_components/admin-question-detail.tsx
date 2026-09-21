@@ -116,26 +116,26 @@ export function AdminQuestionDetail({
       >
         ← Back to questions
       </Link>
-      <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
-        <div className="max-w-3xl">
+      <div className="mb-6 flex min-w-0 flex-col items-start gap-4 sm:flex-row sm:flex-wrap sm:justify-between">
+        <div className="max-w-3xl min-w-0">
           <p className="text-closer-muted text-xs font-bold">
             Question · {detail.questionId.slice(0, 8)}
           </p>
-          <h1 className="mt-1 text-2xl leading-tight font-extrabold tracking-[-.04em] md:text-3xl">
+          <h1 className="mt-1 text-2xl leading-tight font-extrabold tracking-[-.04em] break-words md:text-3xl">
             {detail.currentRevision.text}
           </h1>
           <p className="text-closer-muted mt-2 text-sm">
             Current revision v{detail.currentRevision.revisionNumber}
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex w-full flex-col items-start gap-2 sm:w-auto sm:flex-row sm:items-center">
           <ActivityBadge active={active} />
           <RevisionHealthBadge withdrawn={detail.revisionHealth === "withdrawn"} />
         </div>
       </div>
 
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap gap-2">
+        <div className="flex w-full flex-wrap gap-2 sm:w-auto">
           <QuestionActivityControl
             blocked={detail.blockedFromActivation}
             isActive={active}
@@ -159,7 +159,7 @@ export function AdminQuestionDetail({
 
       <nav
         aria-label="Question detail views"
-        className="mb-5 flex w-fit max-w-full flex-wrap gap-1 rounded-2xl bg-white/70 p-1.5 shadow-sm"
+        className="mb-5 flex w-full max-w-full flex-wrap gap-1 rounded-2xl bg-white/70 p-1.5 shadow-sm sm:w-fit"
       >
         {(
           [
@@ -170,7 +170,7 @@ export function AdminQuestionDetail({
         ).map(([id, label]) => (
           <Link
             aria-current={view === id ? "page" : undefined}
-            className={`focus-visible:ring-closer-navy rounded-xl px-4 py-2.5 text-sm font-extrabold focus-visible:ring-2 focus-visible:outline-none ${view === id ? "bg-closer-coral" : "text-closer-navy/70 hover:bg-closer-cream"}`}
+            className={`focus-visible:ring-closer-navy flex min-w-0 flex-1 justify-center rounded-xl px-2 py-2.5 text-sm font-extrabold focus-visible:ring-2 focus-visible:outline-none sm:flex-none sm:px-4 ${view === id ? "bg-closer-coral" : "text-closer-navy/70 hover:bg-closer-cream"}`}
             href={`/admin/questions/${detail.questionId}?view=${id}` as Route}
             key={id}
           >
@@ -180,10 +180,10 @@ export function AdminQuestionDetail({
       </nav>
 
       {view === "overview" ? (
-        <div className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(300px,.8fr)]">
+        <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(300px,.8fr)]">
           <section className="rounded-closer-panel shadow-closer-soft bg-white/90 p-5 md:p-6">
             <h2 className="font-extrabold">Current wording</h2>
-            <blockquote className="border-closer-coral mt-4 border-l-4 pl-4 text-lg leading-relaxed">
+            <blockquote className="border-closer-coral mt-4 border-l-4 pl-4 text-lg leading-relaxed break-words">
               {detail.currentRevision.text}
             </blockquote>
             <div className="mt-5 grid gap-3 sm:grid-cols-2">
@@ -248,7 +248,7 @@ export function AdminQuestionDetail({
       {view === "history" ? (
         <section
           aria-labelledby="history-heading"
-          className="rounded-closer-panel shadow-closer-soft overflow-hidden bg-white/90"
+          className="rounded-closer-panel shadow-closer-soft max-w-full min-w-0 overflow-hidden bg-white/90"
         >
           <div className="px-4 py-4 md:px-5">
             <h2 className="font-extrabold" id="history-heading">
@@ -260,7 +260,7 @@ export function AdminQuestionDetail({
           </div>
           <div
             aria-label="Question revision history table"
-            className="overflow-x-auto focus-visible:ring-2 focus-visible:outline-none"
+            className="max-w-full min-w-0 overflow-x-auto focus-visible:ring-2 focus-visible:outline-none"
             role="region"
             tabIndex={0}
           >
@@ -302,7 +302,7 @@ export function AdminQuestionDetail({
                       ) : null}
                     </th>
                     <td className="max-w-[480px] px-3 py-4">
-                      <p className="leading-relaxed font-semibold">{revision.text}</p>
+                      <p className="leading-relaxed font-semibold break-words">{revision.text}</p>
                       <p className="text-closer-muted mt-2 text-xs">
                         <span>
                           Category:{" "}
@@ -365,11 +365,11 @@ export function AdminQuestionDetail({
             </table>
           </div>
           {pageCount > 1 ? (
-            <div className="border-closer-navy/10 flex items-center justify-between border-t px-5 py-3">
+            <div className="border-closer-navy/10 flex flex-col items-start gap-3 border-t px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
               <span className="text-closer-muted text-xs">
                 Page {page} of {pageCount}
               </span>
-              <div className="flex gap-3">
+              <div className="flex w-full justify-between gap-3 sm:w-auto">
                 {page <= 1 ? (
                   <span aria-disabled="true" className="text-closer-muted text-sm font-bold">
                     Previous

@@ -1,13 +1,11 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
-import type { Route } from "next";
-import { BookOpenText, House } from "lucide-react";
 
 import { CloserWordmark } from "@/components/closer/page-shell";
 
 import { AdminLogoutButton } from "./admin-logout-button";
-
-type AdminSection = "overview" | "questions";
+import { AdminMobileNav } from "./admin-mobile-nav";
+import { AdminNavIcon, adminNavItems, type AdminSection } from "./admin-nav";
 
 export function AdminShell({
   activeSection,
@@ -20,25 +18,15 @@ export function AdminShell({
   userName?: string | null;
   userEmail: string;
 }) {
-  const navItems = [
-    { href: "/admin" as Route, label: "Overview", section: "overview" as const, Icon: House },
-    {
-      href: "/admin/questions" as Route,
-      label: "Questions",
-      section: "questions" as const,
-      Icon: BookOpenText,
-    },
-  ];
-
   return (
-    <div className="bg-closer-cream text-closer-navy min-h-svh lg:grid lg:grid-cols-[224px_minmax(0,1fr)]">
+    <div className="bg-closer-cream text-closer-navy min-h-svh min-w-0 lg:grid lg:grid-cols-[224px_minmax(0,1fr)]">
       <a
         className="focus:bg-closer-navy focus-visible:ring-closer-coral sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:rounded-xl focus:px-4 focus:py-3 focus:text-white focus-visible:ring-2 focus-visible:outline-none"
         href="#admin-main"
       >
         Skip to main content
       </a>
-      <aside className="border-closer-navy/10 flex flex-col border-b bg-white/65 px-4 py-4 lg:min-h-svh lg:border-r lg:border-b-0 lg:px-3 lg:py-5">
+      <aside className="border-closer-navy/10 hidden flex-col border-b bg-white/65 px-4 py-4 lg:flex lg:min-h-svh lg:border-r lg:border-b-0 lg:px-3 lg:py-5">
         <div className="flex flex-col gap-3 lg:items-stretch">
           <div className="flex items-center gap-2.5 px-2 lg:px-3">
             <span
@@ -61,7 +49,7 @@ export function AdminShell({
             aria-label="Admin"
             className="flex items-center gap-1 lg:mt-7 lg:flex-col lg:items-stretch"
           >
-            {navItems.map(({ href, label, section, Icon }) => {
+            {adminNavItems.map(({ href, label, section, icon }) => {
               const active = activeSection === section;
               return (
                 <Link
@@ -70,7 +58,7 @@ export function AdminShell({
                   href={href}
                   key={section}
                 >
-                  <Icon aria-hidden="true" className="size-[18px]" />
+                  <AdminNavIcon icon={icon} />
                   {label}
                 </Link>
               );
@@ -96,19 +84,25 @@ export function AdminShell({
         </div>
       </aside>
       <div className="min-w-0">
-        <header className="border-closer-navy/10 flex min-h-[58px] items-center justify-between gap-4 border-b bg-white/40 px-5 py-3 md:px-8">
-          <p className="text-closer-muted text-xs font-semibold">
-            Closer Admin · Editorial workspace
-          </p>
+        <header className="border-closer-navy/10 flex min-h-[58px] items-center justify-between gap-3 border-b bg-white/40 px-4 py-3 sm:px-6 lg:px-8">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="lg:hidden">
+              <AdminMobileNav
+                activeSection={activeSection}
+                userEmail={userEmail}
+                userName={userName}
+              />
+            </div>
+            <p className="text-closer-muted min-w-0 text-xs font-semibold">
+              Closer Admin · Editorial workspace
+            </p>
+          </div>
           <p className="text-closer-coral hidden text-right text-xs font-extrabold sm:block">
             Better conversations, every day <span aria-hidden="true">♥</span>
           </p>
-          <div className="lg:hidden">
-            <AdminLogoutButton />
-          </div>
         </header>
         <main
-          className="mx-auto w-full max-w-[1600px] px-4 py-6 sm:px-6 md:px-8 md:py-8"
+          className="mx-auto max-w-[1600px] min-w-0 px-4 py-5 sm:px-6 md:py-7 lg:px-8 lg:py-8"
           id="admin-main"
           tabIndex={-1}
         >
