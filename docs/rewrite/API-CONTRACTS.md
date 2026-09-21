@@ -166,11 +166,13 @@ There is no anonymous creation on `GET /me`, no Better Auth catch-all route,
 no client-chosen actor ID, no JWT endpoint, and no consumer password-reset
 endpoint in V1. All cookie mutations require an allow-listed Origin.
 
-The current GO-03A contract returns `GET /api/v1/me` as
-`{"actor":null}` when no valid session exists, or
-`{"actor":{"authUserId":"<uuid>","kind":"anonymous|registered|admin"}}`
-for the authenticated identity. It is read-only: it does not create identity
-or Participant rows and does not renew a session. Explicit
+The auth contract returns `GET /api/v1/me` as `{"actor":null}` when no valid
+session exists. GO-04 extends an authenticated actor to include
+`participant:null` or
+`participant:{"participantId":"<uuid>","displayName":"..."}`. The
+projection distinguishes an authenticated user without a Participant from one
+with a Participant; Admin always receives `participant:null`. It is read-only:
+it does not create identity or Participant rows and does not renew a session. Explicit
 `POST /api/v1/auth/anonymous` returns `201` with the same actor projection and
 sets the raw session token only in the `closer_session` cookie. Logout returns
 `{"actor":null}` and expires that cookie. Auth projections and responses use
@@ -251,6 +253,30 @@ returns inviter display name, relationship type, and contextual intended name;
 `GET /api/v1/rejoin/:token` returns only target slot/context needed by the page.
 Neither endpoint proves authority to redeem. Redemption remains an explicit
 POST.
+
+### GO-04 Participant and Pair foundation
+
+These routes are served by the new Go runtime. The legacy Next application
+keeps its independent Better Auth schema and is used only as the behavioral
+reference.
+
+| Method/path                        | Auth                                              | Request                                                  | Success projection                                                                                                             | Behavior                                                                                   |
+| ---------------------------------- | ------------------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| `POST /api/v1/onboarding`          | anonymous or registered consumer session          | `{displayName}`                                          | `{participantId,displayName}`                                                                                                  | explicit, transactional, idempotent; keeps the first stored display name on retry          |
+| `GET /api/v1/pairs`                | authenticated Participant                         | none                                                     | array of `{pairId,relationshipType,state,otherParticipantDisplayName,intendedPersonName}`                                      | active memberships only; bounded single-query Spaces projection                            |
+| `POST /api/v1/pairs`               | authenticated Participant                         | `{intendedPersonName,relationshipType,clientRequestId?}` | `{pairId,intendedPersonName}`                                                                                                  | transactionally creates Pair and creator's first-slot membership; creates no invite or era |
+| `GET /api/v1/pairs/:pairId`        | active member; former member for terminated state | none                                                     | active Pair projection with relationship, state, intended label, and active member slot/name; or `{pairId,state:"terminated"}` | unrelated Pair IDs collapse to 404                                                         |
+| `GET /api/v1/pairs/:pairId/status` | active member                                     | none                                                     | `{state:"waiting"}` or `{state:"connected",otherParticipantDisplayName}`                                                       | no unrelated Pair disclosure                                                               |
+| `PATCH /api/v1/pairs/:pairId`      | active member                                     | `{intendedPersonName}`                                   | `{pairId,intendedPersonName}`                                                                                                  | Pair row locked; only before slot two is occupied                                          |
+
+Display names are established during explicit onboarding; no separate profile
+edit command exists in the current product. Pair relationship is fixed to
+`partner` or `friend` at creation and has no update command. Pair creation has
+no claim side effects: slot two remains empty and no membership era starts
+until GO-05 claim. A creation `clientRequestId` retry returns the original Pair
+for its creator; different request IDs may create distinct unclaimed Pairs.
+Each mutation uses the configured exact-Origin check and private no-store
+responses. Pair reads are also private no-store.
 
 Resource routes in the existing tables retain their resource/command shape with
 the `/api/v1` prefix. The canonical Private collection is

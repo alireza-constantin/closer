@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/alireza-constantin/closer/apps/api/internal/auth"
+	"github.com/alireza-constantin/closer/apps/api/internal/participant"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -33,202 +34,229 @@ type actorProjection struct {
 }
 
 type meResponse struct {
+	Actor *meActorProjection `json:"actor"`
+}
+
+type actorResponse struct {
 	Actor *actorProjection `json:"actor"`
+}
+
+type meActorProjection struct {
+	AuthUserID  string                 `json:"authUserId"`
+	Kind        auth.UserKind          `json:"kind"`
+	Participant *participantProjection `json:"participant"`
+}
+
+type participantProjection struct {
+	ParticipantID string `json:"participantId"`
+	DisplayName   string `json:"displayName"`
 }
 
 type authenticatedActorKey struct{}
 
-func registerAuthRoutes(router chi.Router, service *auth.Service, security SecurityConfig) {
-	router.Route("/api/v1", func(api chi.Router) {
-		api.With(authActorMiddleware(service)).Get("/me", func(w http.ResponseWriter, r *http.Request) {
-			setPrivateNoStore(w)
-			actor, ok := actorFromContext(r.Context())
-			if !ok {
-				writeJSON(w, http.StatusOK, meResponse{Actor: nil})
-				return
-			}
-			writeJSON(w, http.StatusOK, meResponse{Actor: projectActor(actor)})
-		})
-
-		api.Post("/auth/anonymous", func(w http.ResponseWriter, r *http.Request) {
-			setPrivateNoStore(w)
-			origin := requestOrigin(r)
-			if !trustedOrigin(origin, security.TrustedOrigins) {
-				writeAPIError(w, r, http.StatusForbidden, "FORBIDDEN", "Request origin is not allowed.")
-				return
-			}
-			created, err := service.CreateAnonymous(r.Context())
+func registerAuthRoutes(router chi.Router, service *auth.Service, participantService *participant.Service, security SecurityConfig) {
+	api := router
+	api.With(authActorMiddleware(service)).Get("/me", func(w http.ResponseWriter, r *http.Request) {
+		setPrivateNoStore(w)
+		actor, ok := actorFromContext(r.Context())
+		if !ok {
+			writeJSON(w, http.StatusOK, meResponse{Actor: nil})
+			return
+		}
+		var participantView *participantProjection
+		if participantService != nil {
+			resolved, err := participantService.Resolve(r.Context(), actor)
 			if err != nil {
 				writeAuthInternalError(w, r)
 				return
 			}
-			setSessionCookie(w, created.Token, created.ExpiresAt, isSecureOrigin(origin))
-			writeJSON(w, http.StatusCreated, meResponse{Actor: projectActor(created.Actor)})
-		})
+			if resolved != nil {
+				participantView = &participantProjection{ParticipantID: resolved.ID, DisplayName: resolved.DisplayName}
+			}
+		}
+		writeJSON(w, http.StatusOK, meResponse{Actor: &meActorProjection{
+			AuthUserID: actor.AuthUserID, Kind: actor.Kind, Participant: participantView,
+		}})
+	})
 
-		api.Post("/auth/register", func(w http.ResponseWriter, r *http.Request) {
-			setPrivateNoStore(w)
-			origin := requestOrigin(r)
-			if !trustedOrigin(origin, security.TrustedOrigins) {
-				writeAPIError(w, r, http.StatusForbidden, "FORBIDDEN", "Request origin is not allowed.")
-				return
-			}
-			if token, present := cookieToken(r); present {
-				if _, err := service.ResolveSession(r.Context(), token); err == nil {
-					writeAPIError(w, r, http.StatusConflict, "CONFLICT", "An authentication session is already active.")
-					return
-				} else if !errors.Is(err, auth.ErrUnauthenticated) {
-					writeAuthInternalError(w, r)
-					return
-				}
-			}
-			var request credentialsRequest
-			if !decodeCredentialsRequest(w, r, &request) {
-				return
-			}
-			created, err := service.Register(r.Context(), request.Email, request.Password)
-			if err != nil {
-				writeCredentialError(w, r, err)
-				return
-			}
-			setSessionCookie(w, created.Token, created.ExpiresAt, isSecureOrigin(origin))
-			writeJSON(w, http.StatusCreated, meResponse{Actor: projectActor(created.Actor)})
-		})
+	api.Post("/auth/anonymous", func(w http.ResponseWriter, r *http.Request) {
+		setPrivateNoStore(w)
+		origin := requestOrigin(r)
+		if !trustedOrigin(origin, security.TrustedOrigins) {
+			writeAPIError(w, r, http.StatusForbidden, "FORBIDDEN", "Request origin is not allowed.")
+			return
+		}
+		created, err := service.CreateAnonymous(r.Context())
+		if err != nil {
+			writeAuthInternalError(w, r)
+			return
+		}
+		setSessionCookie(w, created.Token, created.ExpiresAt, isSecureOrigin(origin))
+		writeJSON(w, http.StatusCreated, actorResponse{Actor: projectActor(created.Actor)})
+	})
 
-		api.Post("/auth/upgrade", func(w http.ResponseWriter, r *http.Request) {
-			setPrivateNoStore(w)
-			origin := requestOrigin(r)
-			if !trustedOrigin(origin, security.TrustedOrigins) {
-				writeAPIError(w, r, http.StatusForbidden, "FORBIDDEN", "Request origin is not allowed.")
+	api.Post("/auth/register", func(w http.ResponseWriter, r *http.Request) {
+		setPrivateNoStore(w)
+		origin := requestOrigin(r)
+		if !trustedOrigin(origin, security.TrustedOrigins) {
+			writeAPIError(w, r, http.StatusForbidden, "FORBIDDEN", "Request origin is not allowed.")
+			return
+		}
+		if token, present := cookieToken(r); present {
+			if _, err := service.ResolveSession(r.Context(), token); err == nil {
+				writeAPIError(w, r, http.StatusConflict, "CONFLICT", "An authentication session is already active.")
+				return
+			} else if !errors.Is(err, auth.ErrUnauthenticated) {
+				writeAuthInternalError(w, r)
 				return
 			}
-			var request credentialsRequest
-			if !decodeCredentialsRequest(w, r, &request) {
-				return
-			}
-			token, present := cookieToken(r)
-			if !present {
+		}
+		var request credentialsRequest
+		if !decodeCredentialsRequest(w, r, &request) {
+			return
+		}
+		created, err := service.Register(r.Context(), request.Email, request.Password)
+		if err != nil {
+			writeCredentialError(w, r, err)
+			return
+		}
+		setSessionCookie(w, created.Token, created.ExpiresAt, isSecureOrigin(origin))
+		writeJSON(w, http.StatusCreated, actorResponse{Actor: projectActor(created.Actor)})
+	})
+
+	api.Post("/auth/upgrade", func(w http.ResponseWriter, r *http.Request) {
+		setPrivateNoStore(w)
+		origin := requestOrigin(r)
+		if !trustedOrigin(origin, security.TrustedOrigins) {
+			writeAPIError(w, r, http.StatusForbidden, "FORBIDDEN", "Request origin is not allowed.")
+			return
+		}
+		var request credentialsRequest
+		if !decodeCredentialsRequest(w, r, &request) {
+			return
+		}
+		token, present := cookieToken(r)
+		if !present {
+			writeAPIError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Sign in is required.")
+			return
+		}
+		actor, err := service.Upgrade(r.Context(), token, request.Email, request.Password)
+		if err != nil {
+			writeCredentialError(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, actorResponse{Actor: projectActor(actor)})
+	})
+
+	api.Post("/auth/login", func(w http.ResponseWriter, r *http.Request) {
+		setPrivateNoStore(w)
+		origin := requestOrigin(r)
+		if !trustedOrigin(origin, security.TrustedOrigins) {
+			writeAPIError(w, r, http.StatusForbidden, "FORBIDDEN", "Request origin is not allowed.")
+			return
+		}
+		var request credentialsRequest
+		if !decodeCredentialsRequest(w, r, &request) {
+			return
+		}
+		currentToken, _ := cookieToken(r)
+		created, err := service.Login(r.Context(), request.Email, request.Password, requestClientIP(r, security.TrustedProxyCIDRs), currentToken)
+		if err != nil {
+			writeCredentialError(w, r, err)
+			return
+		}
+		setSessionCookie(w, created.Token, created.ExpiresAt, isSecureOrigin(origin))
+		writeJSON(w, http.StatusOK, actorResponse{Actor: projectActor(created.Actor)})
+	})
+
+	api.Post("/auth/logout-all", func(w http.ResponseWriter, r *http.Request) {
+		setPrivateNoStore(w)
+		origin := requestOrigin(r)
+		if !trustedOrigin(origin, security.TrustedOrigins) {
+			writeAPIError(w, r, http.StatusForbidden, "FORBIDDEN", "Request origin is not allowed.")
+			return
+		}
+		token, present := cookieToken(r)
+		if !present {
+			writeAPIError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Sign in is required.")
+			return
+		}
+		actor, err := service.ResolveSession(r.Context(), token)
+		if err != nil {
+			if errors.Is(err, auth.ErrUnauthenticated) {
 				writeAPIError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Sign in is required.")
 				return
 			}
-			actor, err := service.Upgrade(r.Context(), token, request.Email, request.Password)
-			if err != nil {
-				writeCredentialError(w, r, err)
-				return
-			}
-			writeJSON(w, http.StatusOK, meResponse{Actor: projectActor(actor)})
-		})
+			writeAuthInternalError(w, r)
+			return
+		}
+		if err := service.RevokeAllSessions(r.Context(), actor); err != nil {
+			writeAuthInternalError(w, r)
+			return
+		}
+		clearSessionCookie(w, isSecureOrigin(origin))
+		writeJSON(w, http.StatusOK, meResponse{Actor: nil})
+	})
 
-		api.Post("/auth/login", func(w http.ResponseWriter, r *http.Request) {
-			setPrivateNoStore(w)
-			origin := requestOrigin(r)
-			if !trustedOrigin(origin, security.TrustedOrigins) {
-				writeAPIError(w, r, http.StatusForbidden, "FORBIDDEN", "Request origin is not allowed.")
-				return
-			}
-			var request credentialsRequest
-			if !decodeCredentialsRequest(w, r, &request) {
-				return
-			}
-			currentToken, _ := cookieToken(r)
-			created, err := service.Login(r.Context(), request.Email, request.Password, requestClientIP(r, security.TrustedProxyCIDRs), currentToken)
-			if err != nil {
-				writeCredentialError(w, r, err)
-				return
-			}
-			setSessionCookie(w, created.Token, created.ExpiresAt, isSecureOrigin(origin))
-			writeJSON(w, http.StatusOK, meResponse{Actor: projectActor(created.Actor)})
-		})
+	api.Post("/auth/logout", func(w http.ResponseWriter, r *http.Request) {
+		setPrivateNoStore(w)
+		origin := requestOrigin(r)
+		if !trustedOrigin(origin, security.TrustedOrigins) {
+			writeAPIError(w, r, http.StatusForbidden, "FORBIDDEN", "Request origin is not allowed.")
+			return
+		}
+		token, _ := cookieToken(r)
+		if err := service.RevokeSession(r.Context(), token); err != nil {
+			writeAuthInternalError(w, r)
+			return
+		}
+		clearSessionCookie(w, isSecureOrigin(origin))
+		writeJSON(w, http.StatusOK, meResponse{Actor: nil})
+	})
 
-		api.Post("/auth/logout-all", func(w http.ResponseWriter, r *http.Request) {
-			setPrivateNoStore(w)
-			origin := requestOrigin(r)
-			if !trustedOrigin(origin, security.TrustedOrigins) {
-				writeAPIError(w, r, http.StatusForbidden, "FORBIDDEN", "Request origin is not allowed.")
-				return
-			}
-			token, present := cookieToken(r)
-			if !present {
-				writeAPIError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Sign in is required.")
-				return
-			}
-			actor, err := service.ResolveSession(r.Context(), token)
-			if err != nil {
-				if errors.Is(err, auth.ErrUnauthenticated) {
-					writeAPIError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Sign in is required.")
-					return
-				}
-				writeAuthInternalError(w, r)
-				return
-			}
-			if err := service.RevokeAllSessions(r.Context(), actor); err != nil {
-				writeAuthInternalError(w, r)
-				return
-			}
-			clearSessionCookie(w, isSecureOrigin(origin))
-			writeJSON(w, http.StatusOK, meResponse{Actor: nil})
-		})
+	api.Post("/admin/login", func(w http.ResponseWriter, r *http.Request) {
+		setPrivateNoStore(w)
+		origin := requestOrigin(r)
+		if !trustedOrigin(origin, security.TrustedOrigins) {
+			writeAPIError(w, r, http.StatusForbidden, "FORBIDDEN", "Request origin is not allowed.")
+			return
+		}
+		var request credentialsRequest
+		if !decodeCredentialsRequest(w, r, &request) {
+			return
+		}
+		currentToken, _ := cookieToken(r)
+		created, err := service.AdminLogin(r.Context(), request.Email, request.Password, requestClientIP(r, security.TrustedProxyCIDRs), currentToken)
+		if err != nil {
+			writeCredentialError(w, r, err)
+			return
+		}
+		setSessionCookie(w, created.Token, created.ExpiresAt, isSecureOrigin(origin))
+		writeJSON(w, http.StatusOK, actorResponse{Actor: projectActor(created.Actor)})
+	})
 
-		api.Post("/auth/logout", func(w http.ResponseWriter, r *http.Request) {
-			setPrivateNoStore(w)
-			origin := requestOrigin(r)
-			if !trustedOrigin(origin, security.TrustedOrigins) {
-				writeAPIError(w, r, http.StatusForbidden, "FORBIDDEN", "Request origin is not allowed.")
-				return
-			}
-			token, _ := cookieToken(r)
-			if err := service.RevokeSession(r.Context(), token); err != nil {
-				writeAuthInternalError(w, r)
-				return
-			}
-			clearSessionCookie(w, isSecureOrigin(origin))
-			writeJSON(w, http.StatusOK, meResponse{Actor: nil})
-		})
-
-		api.Post("/admin/login", func(w http.ResponseWriter, r *http.Request) {
-			setPrivateNoStore(w)
-			origin := requestOrigin(r)
-			if !trustedOrigin(origin, security.TrustedOrigins) {
-				writeAPIError(w, r, http.StatusForbidden, "FORBIDDEN", "Request origin is not allowed.")
-				return
-			}
-			var request credentialsRequest
-			if !decodeCredentialsRequest(w, r, &request) {
-				return
-			}
-			currentToken, _ := cookieToken(r)
-			created, err := service.AdminLogin(r.Context(), request.Email, request.Password, requestClientIP(r, security.TrustedProxyCIDRs), currentToken)
-			if err != nil {
-				writeCredentialError(w, r, err)
-				return
-			}
-			setSessionCookie(w, created.Token, created.ExpiresAt, isSecureOrigin(origin))
-			writeJSON(w, http.StatusOK, meResponse{Actor: projectActor(created.Actor)})
-		})
-
-		api.Post("/admin/logout", func(w http.ResponseWriter, r *http.Request) {
-			setPrivateNoStore(w)
-			origin := requestOrigin(r)
-			if !trustedOrigin(origin, security.TrustedOrigins) {
-				writeAPIError(w, r, http.StatusForbidden, "FORBIDDEN", "Request origin is not allowed.")
-				return
-			}
-			token, present := cookieToken(r)
-			if !present {
+	api.Post("/admin/logout", func(w http.ResponseWriter, r *http.Request) {
+		setPrivateNoStore(w)
+		origin := requestOrigin(r)
+		if !trustedOrigin(origin, security.TrustedOrigins) {
+			writeAPIError(w, r, http.StatusForbidden, "FORBIDDEN", "Request origin is not allowed.")
+			return
+		}
+		token, present := cookieToken(r)
+		if !present {
+			writeAPIError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Admin sign-in is required.")
+			return
+		}
+		if err := service.LogoutAdmin(r.Context(), token); err != nil {
+			if errors.Is(err, auth.ErrUnauthenticated) {
 				writeAPIError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Admin sign-in is required.")
 				return
 			}
-			if err := service.LogoutAdmin(r.Context(), token); err != nil {
-				if errors.Is(err, auth.ErrUnauthenticated) {
-					writeAPIError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Admin sign-in is required.")
-					return
-				}
-				writeAuthInternalError(w, r)
-				return
-			}
-			clearSessionCookie(w, isSecureOrigin(origin))
-			writeJSON(w, http.StatusOK, meResponse{Actor: nil})
-		})
+			writeAuthInternalError(w, r)
+			return
+		}
+		clearSessionCookie(w, isSecureOrigin(origin))
+		writeJSON(w, http.StatusOK, meResponse{Actor: nil})
 	})
 }
 

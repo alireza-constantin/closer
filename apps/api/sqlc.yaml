@@ -6,6 +6,8 @@ sql:
       - "db/schema/002_participant_pair.sql"
     queries:
       - "db/queries/auth.sql"
+      - "db/queries/participant.sql"
+      - "db/queries/pair.sql"
       - "db/queries/test_helpers.sql"
     gen:
       go:

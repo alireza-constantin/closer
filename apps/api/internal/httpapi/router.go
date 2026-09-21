@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/alireza-constantin/closer/apps/api/internal/auth"
+	"github.com/alireza-constantin/closer/apps/api/internal/pair"
+	"github.com/alireza-constantin/closer/apps/api/internal/participant"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -58,6 +60,17 @@ func NewRouterWithAuth(
 	authService *auth.Service,
 	security SecurityConfig,
 ) http.Handler {
+	return NewRouterWithServices(logger, readiness, authService, nil, nil, security)
+}
+
+func NewRouterWithServices(
+	logger *slog.Logger,
+	readiness ReadinessChecker,
+	authService *auth.Service,
+	participantService *participant.Service,
+	pairService *pair.Service,
+	security SecurityConfig,
+) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -92,7 +105,12 @@ func NewRouterWithAuth(
 		writeJSON(w, http.StatusOK, healthResponse{Status: "ready"})
 	})
 	if authService != nil {
-		registerAuthRoutes(router, authService, security)
+		router.Route("/api/v1", func(api chi.Router) {
+			registerAuthRoutes(api, authService, participantService, security)
+			if participantService != nil && pairService != nil {
+				registerParticipantPairRoutes(api, authService, participantService, pairService, security)
+			}
+		})
 	}
 
 	return router
