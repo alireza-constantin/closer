@@ -31,17 +31,36 @@ Never commit credentials or put real database credentials in documentation.
    consumer account. Do not leave these values in persistent Production
    configuration. The password must be 8–128 characters.
 3. During the disposable-data pre-launch phase only, confirm that no
-   Production data requires preservation and that the direct URL targets Neon
-   `main`. Manually reset or clear the database, then run from the repository
-   root:
+   Production data requires preservation and that the direct URL targets the
+   Neon `main` branch and the clean `closer_prod` database. Create the ignored
+   file `apps/web/.env.production.local` with only these operator values:
 
-   ```sh
-   bun run db:push
+   ```dotenv
+   CLOSER_DB_TARGET=production
+   CLOSER_DB_BRANCH=main
+   CLOSER_DB_DATABASE=closer_prod
+   DATABASE_URL_UNPOOLED=<verified direct Neon main-branch URL for closer_prod>
    ```
 
-   This is an explicit operator action. The Vercel Production build only runs
-   `cd ../.. && bun run --filter web build`; it never runs `db:migrate`,
-   `db:push`, or any other database mutation.
+   Do not copy Development credentials into this file. Do not put the file in
+   Vercel or commit it. Verify that the file is ignored before continuing, then
+   run exactly once from the repository root:
+
+   ```sh
+   bun run db:push:production
+   ```
+
+   The command refuses missing or mismatched Production markers, requires a
+   direct/unpooled PostgreSQL URL whose database path is `closer_prod`, refuses
+   Neon pooler hostnames, requires an interactive terminal, and asks you to
+   type `PUSH_PRODUCTION_SCHEMA`. It passes the explicit file to Drizzle and
+   never falls back to `.env.local`. It does not print the URL or any other
+   credential. After the successful push, remove the temporary file securely.
+
+   This remains an explicit operator action. The Vercel Production build only
+   runs `cd ../.. && bun run --filter web build`; it never runs
+   `db:migrate`, `db:push`, `db:push:production`, or any other database
+   mutation. Do not reintroduce migrations during this disposable-data phase.
 
 4. With the Production database and required auth environment available to the
    trusted operator process, run the bootstrap command manually from the root:
@@ -66,9 +85,13 @@ Never commit credentials or put real database credentials in documentation.
 
 The Admin scripts load the first existing file among `apps/web/.env.local`,
 `apps/web/.env`, and root `.env`; shell-provided environment values take
-precedence. When running a Production command locally, explicitly provide and
-verify the intended Production target and auth values without printing or
-logging credentials. Do not rely on an unrelated local `.env.local` value.
+precedence. The guarded Production schema command is separate: it requires
+`apps/web/.env.production.local` and explicitly selects that file, so the
+normal Development `apps/web/.env.local` remains untouched and cannot be
+selected as a fallback. When running any other Production command locally,
+explicitly provide and verify the intended Production target and auth values
+without printing or logging credentials. Do not rely on an unrelated local
+`.env.local` value.
 
 Bootstrap is a no-op only when the email already belongs to the configured
 `ADMIN_USER_ID`. Any other existing-email case fails without changing or

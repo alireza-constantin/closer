@@ -34,6 +34,7 @@
     "test": "bun test",
     "dev:web": "bun run --filter web dev",
     "db:push": "bun run --filter @Closer/db db:push",
+    "db:push:production": "tsx scripts/db-push-production.ts",
     "db:studio": "bun run --filter @Closer/db db:studio",
     "db:start": "bun run --filter @Closer/db db:start",
     "db:watch": "bun run --filter @Closer/db db:watch",

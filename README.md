@@ -184,6 +184,11 @@ The Vercel build command is `cd ../.. && bun run --filter web build`. It only
 builds the application: it does not run `db:migrate`, `db:push`, or any other
 database mutation. Schema changes are explicit operator actions.
 
+For the disposable pre-launch Production database only, use the guarded
+`bun run db:push:production` workflow documented in the [Admin production
+runbook](docs/admin/ADMIN-RUNBOOK.md). Keep the normal `bun run db:push`
+command pointed at Development.
+
 The `env:preview` helper warns if a local `.env` value looks like localhost. Treat that as a stop signal: configure the Preview value in Vercel (or use a deployment-safe env file) before deploying.
 
 ### Realtime invalidation
@@ -215,6 +220,7 @@ Closer/
 - `bun run dev:web`: Start only the web application
 - `bun run check-types`: Check TypeScript types across all apps
 - `bun run db:push`: Apply the current Drizzle schema to the configured database
+- `bun run db:push:production`: Guarded, interactive one-time pre-launch Production schema push
 - `bun run db:studio`: Open database studio UI
 - `cd apps/web && bun run generate-pwa-assets`: Generate PWA assets
 - `bun run deploy:setup`: Link this repo to a Vercel project (first-time setup)
