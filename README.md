@@ -56,10 +56,11 @@ Open [http://localhost:3001](http://localhost:3001) in your browser to see the f
 
 Create a separate Neon TEST branch. Do not point tests at Production or share a
 manually used Development database: the integration tests create and delete
-fixtures. Copy the test-only values to `apps/web/.env.test.local` and set
-`TEST_DATABASE_URL` to a direct/session-capable URL for that TEST branch. Keep
-`DATABASE_URL` pointed at Development in `.env.local`; the test bootstrap
-requires `TEST_DATABASE_URL` and maps it only inside the test process.
+fixtures. Copy `apps/web/.env.test.example` to
+`apps/web/.env.test.local` and set `TEST_DATABASE_URL` to a
+direct/session-capable URL for that TEST branch. Keep `DATABASE_URL` pointed at
+Development in `.env.local`; the test bootstrap requires `TEST_DATABASE_URL`
+and maps it only inside the test process.
 
 Initialize the TEST branch with the same tracked migrations before running
 integration tests:
@@ -74,6 +75,12 @@ $env:NODE_ENV = "test"; bun run db:migrate
 
 The test helper refuses to run without `TEST_DATABASE_URL` and refuses to use
 the same value as `DATABASE_URL`.
+
+Production values are configured through Vercel, not a committed local file.
+Use `apps/web/.env.production.example` as the checklist for the Neon
+PRODUCTION branch, including the pooled application URL, direct migration URL,
+realtime URL, Better Auth values, and permanent Admin authorization value.
+Never use Production Neon credentials for Development or Test.
 
 ## UI Customization
 

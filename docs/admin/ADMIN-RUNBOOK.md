@@ -6,7 +6,7 @@ checks are complete; applying Production migrations and running the live smoke
 test below remain manual operator release steps. This guide does not claim
 that Production has been verified.
 
-Use [apps/web/.env.example](../../apps/web/.env.example) as the environment-variable inventory.
+Use [apps/web/.env.production.example](../../apps/web/.env.production.example) as the Production environment-variable checklist.
 Never commit credentials or put real database credentials in documentation.
 
 ## Production deployment checklist
