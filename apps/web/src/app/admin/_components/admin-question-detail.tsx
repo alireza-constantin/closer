@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { Route } from "next";
 
+import type { AdminQuestionAnalyticsDetail } from "@/contracts/admin/question.schema";
 import type { getAdminQuestionDetail } from "@/server/modules/admin-questions/admin-question.service";
 
 import {
@@ -48,18 +49,58 @@ function actionLabel(action: string) {
   );
 }
 
+function formatRate(value: number | null) {
+  return value === null
+    ? "—"
+    : new Intl.NumberFormat("en", { style: "percent", maximumFractionDigits: 0 }).format(value);
+}
+
+function AnalyticsMetricGroup({
+  title,
+  status,
+  metrics,
+}: {
+  title: string;
+  status: "available" | "insufficient_data";
+  metrics: Array<[string, string | number]>;
+}) {
+  return (
+    <section aria-label={title} className="border-closer-navy/10 rounded-xl border p-4">
+      <h3 className="font-extrabold">{title}</h3>
+      {status === "insufficient_data" ? (
+        <p className="text-closer-muted mt-3 text-sm font-semibold" role="status">
+          Insufficient data
+        </p>
+      ) : (
+        <dl className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {metrics.map(([label, value]) => (
+            <div className="bg-closer-cream/70 rounded-lg px-3 py-2" key={label}>
+              <dt className="text-closer-muted text-xs font-semibold">{label}</dt>
+              <dd className="mt-1 text-sm font-extrabold">{value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+    </section>
+  );
+}
+
 export function AdminQuestionDetail({
   detail,
   revisions,
   view,
   page,
   total,
+  analytics,
+  analyticsRevision,
 }: {
   detail: Detail;
   revisions: Revision[];
   view: "overview" | "history" | "analytics";
   page: number;
   total: number;
+  analytics: AdminQuestionAnalyticsDetail | null;
+  analyticsRevision: string;
 }) {
   const active = detail.activity === "active";
   const latestAction = detail.recentEditorialActivity[0]?.action;
@@ -295,11 +336,21 @@ export function AdminQuestionDetail({
                           : "Safe historical revision"}
                     </td>
                     <td className="px-4 py-4">
-                      <RevisionActions
-                        currentRevisionId={detail.currentRevisionId}
-                        questionId={detail.questionId}
-                        revision={revision}
-                      />
+                      <div className="flex flex-col items-start gap-2">
+                        <Link
+                          className="text-closer-navy text-xs font-bold underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:outline-none"
+                          href={
+                            `/admin/questions/${detail.questionId}?view=analytics&analyticsRevision=${revision.isCurrent ? "current" : revision.revisionId}` as Route
+                          }
+                        >
+                          View analytics
+                        </Link>
+                        <RevisionActions
+                          currentRevisionId={detail.currentRevisionId}
+                          questionId={detail.questionId}
+                          revision={revision}
+                        />
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -358,14 +409,94 @@ export function AdminQuestionDetail({
           aria-labelledby="detail-analytics-heading"
           className="rounded-closer-panel shadow-closer-soft bg-white/90 p-5 md:p-6"
         >
-          <h2 className="font-extrabold" id="detail-analytics-heading">
-            Question analytics
-          </h2>
-          <p className="text-closer-muted mt-1 text-sm">All time · Current revision</p>
-          <p className="text-closer-muted bg-closer-cream mt-6 rounded-xl px-4 py-8 text-center text-sm">
-            Analytics values will appear here when the protected projections are connected. No
-            metric values are shown yet.
-          </p>
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <h2 className="font-extrabold" id="detail-analytics-heading">
+                Question analytics
+              </h2>
+              <p className="text-closer-muted mt-1 text-sm">
+                All time ·{" "}
+                {analytics?.revisionScope === "all"
+                  ? "All revisions — historical aggregate"
+                  : analytics?.revisionScope === "revision"
+                    ? `Revision v${analytics.selectedRevisionNumber} — historical`
+                    : `Current revision v${analytics?.selectedRevisionNumber ?? detail.currentRevision.revisionNumber}`}
+              </p>
+            </div>
+            <form
+              action={`/admin/questions/${detail.questionId}`}
+              className="flex flex-wrap items-end gap-2"
+              method="get"
+            >
+              <input name="view" type="hidden" value="analytics" />
+              <label className="text-closer-muted flex flex-col gap-1.5 text-xs font-bold">
+                Revision scope
+                <select
+                  className="border-closer-navy/15 bg-closer-cream text-closer-navy focus-visible:ring-closer-navy min-h-10 rounded-xl border px-3 text-sm font-medium outline-none focus-visible:ring-2"
+                  defaultValue={analyticsRevision}
+                  name="analyticsRevision"
+                >
+                  <option value="current">
+                    Current revision (v{detail.currentRevision.revisionNumber})
+                  </option>
+                  {analytics?.revisionScope === "revision" &&
+                  analytics.selectedRevisionId &&
+                  !revisions.some(
+                    (revision) => revision.revisionId === analytics.selectedRevisionId,
+                  ) ? (
+                    <option value={analytics.selectedRevisionId}>
+                      Revision v{analytics.selectedRevisionNumber} — historical
+                    </option>
+                  ) : null}
+                  {revisions
+                    .filter((revision) => !revision.isCurrent)
+                    .map((revision) => (
+                      <option key={revision.revisionId} value={revision.revisionId}>
+                        Revision v{revision.revisionNumber} — historical
+                      </option>
+                    ))}
+                  <option value="all">All revisions — historical aggregate</option>
+                </select>
+              </label>
+              <button
+                className="bg-closer-navy focus-visible:ring-closer-coral min-h-10 rounded-xl px-4 text-sm font-bold text-white focus-visible:ring-2 focus-visible:outline-none"
+                type="submit"
+              >
+                View
+              </button>
+            </form>
+          </div>
+          {analytics ? (
+            <div className="mt-5 grid gap-4">
+              <AnalyticsMetricGroup
+                title="Private"
+                status={analytics.private.status}
+                metrics={[
+                  ["Valid Offers", analytics.private.validOffers?.toLocaleString("en") ?? "—"],
+                  ["Decisions", analytics.private.decisions?.toLocaleString("en") ?? "—"],
+                  ["Decision Rate", formatRate(analytics.private.decisionRate)],
+                  ["Ask Rate", formatRate(analytics.private.askRate)],
+                  ["Skip Rate", formatRate(analytics.private.skipRate)],
+                  ["Like Rate", formatRate(analytics.private.likeRate)],
+                ]}
+              />
+              <AnalyticsMetricGroup
+                title="Together"
+                status={analytics.together.status}
+                metrics={[
+                  ["Shown", analytics.together.shown?.toLocaleString("en") ?? "—"],
+                  ["Decisions", analytics.together.decisions?.toLocaleString("en") ?? "—"],
+                  ["Continue Rate", formatRate(analytics.together.continueRate)],
+                  ["Skip Rate", formatRate(analytics.together.skipRate)],
+                  ["Like Rate", formatRate(analytics.together.likeRate)],
+                ]}
+              />
+            </div>
+          ) : (
+            <p className="text-closer-error mt-5 text-sm" role="alert">
+              Analytics could not be loaded for this question.
+            </p>
+          )}
         </section>
       ) : null}
     </>

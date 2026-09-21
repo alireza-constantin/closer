@@ -1,4 +1,5 @@
-import { adminQuestionListQuerySchema } from "@/contracts/admin/question.schema";
+import { adminQuestionAnalyticsQuerySchema } from "@/contracts/admin/question.schema";
+import { listAdminQuestionAnalytics } from "@/server/modules/admin-questions/admin-question-analytics.service";
 import { listAdminQuestions } from "@/server/modules/admin-questions/admin-question.service";
 
 import { AdminSectionHeading } from "../_components/admin-facets";
@@ -24,8 +25,15 @@ export default async function AdminQuestionsPage({
       typeof value === "string" ? [[key, value]] : [],
     ),
   );
-  const query = adminQuestionListQuerySchema.parse(queryInput);
+  const query = adminQuestionAnalyticsQuerySchema.parse(queryInput);
   const data = await listAdminQuestions(query, admin);
+  const analytics =
+    view === "private" || view === "together"
+      ? await listAdminQuestionAnalytics(
+          { questions: data.items, revisionScope: query.revisionScope, mode: view },
+          admin,
+        )
+      : undefined;
 
   return (
     <AdminShell activeSection="questions" userEmail={admin.user.email} userName={admin.user.name}>
@@ -33,7 +41,13 @@ export default async function AdminQuestionsPage({
         description="Manage the question catalog, create and revise wording, and keep question content healthy."
         title="Questions"
       />
-      <AdminQuestionWorkspace data={data} filters={query} view={view} />
+      <AdminQuestionWorkspace
+        analytics={analytics}
+        data={data}
+        filters={query}
+        revisionScope={query.revisionScope}
+        view={view}
+      />
     </AdminShell>
   );
 }

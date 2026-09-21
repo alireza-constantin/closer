@@ -54,6 +54,44 @@ export const adminQuestionListQuerySchema = z.object({
   revisionHealth: z.enum(["safe", "withdrawn"]).optional(),
 });
 
+export const adminQuestionAnalyticsQuerySchema = adminQuestionListQuerySchema.extend({
+  revisionScope: z.enum(["current", "all"]).default("current"),
+});
+
+const adminAnalyticsBucketStatusSchema = z.enum(["available", "insufficient_data"]);
+const nullableMetricCountSchema = z.number().int().nonnegative().nullable();
+const nullableMetricRateSchema = z.number().min(0).max(1).nullable();
+
+export const adminPrivateQuestionAnalyticsItemSchema = z.object({
+  questionId: z.string().uuid(),
+  status: adminAnalyticsBucketStatusSchema,
+  validOffers: nullableMetricCountSchema,
+  decisions: nullableMetricCountSchema,
+  decisionRate: nullableMetricRateSchema,
+  askRate: nullableMetricRateSchema,
+  skipRate: nullableMetricRateSchema,
+  likeRate: nullableMetricRateSchema,
+});
+
+export const adminTogetherQuestionAnalyticsItemSchema = z.object({
+  questionId: z.string().uuid(),
+  status: adminAnalyticsBucketStatusSchema,
+  shown: nullableMetricCountSchema,
+  decisions: nullableMetricCountSchema,
+  continueRate: nullableMetricRateSchema,
+  skipRate: nullableMetricRateSchema,
+  likeRate: nullableMetricRateSchema,
+});
+
+export const adminQuestionAnalyticsDetailSchema = z.object({
+  questionId: z.string().uuid(),
+  revisionScope: z.enum(["current", "revision", "all"]),
+  selectedRevisionId: z.string().uuid().nullable(),
+  selectedRevisionNumber: z.number().int().positive().nullable(),
+  private: adminPrivateQuestionAnalyticsItemSchema.omit({ questionId: true }),
+  together: adminTogetherQuestionAnalyticsItemSchema.omit({ questionId: true }),
+});
+
 export const adminPaginationQuerySchema = z.object({
   page: z.coerce.number().int().min(1).max(1_000_000).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(25),
@@ -161,3 +199,11 @@ export const adminQuestionWithdrawalResponseSchema = z.object({
 export type QuestionRevisionFields = z.infer<typeof questionRevisionFieldsSchema>;
 export type AdminQuestionListQuery = z.infer<typeof adminQuestionListQuerySchema>;
 export type AdminQuestionListItem = z.infer<typeof adminQuestionListItemSchema>;
+export type AdminQuestionAnalyticsQuery = z.infer<typeof adminQuestionAnalyticsQuerySchema>;
+export type AdminPrivateQuestionAnalyticsItem = z.infer<
+  typeof adminPrivateQuestionAnalyticsItemSchema
+>;
+export type AdminTogetherQuestionAnalyticsItem = z.infer<
+  typeof adminTogetherQuestionAnalyticsItemSchema
+>;
+export type AdminQuestionAnalyticsDetail = z.infer<typeof adminQuestionAnalyticsDetailSchema>;

@@ -1,6 +1,17 @@
 import Link from "next/link";
 import type { Route } from "next";
 
+import type {
+  AdminPrivateQuestionAnalyticsItem,
+  AdminQuestionAnalyticsQuery,
+  AdminTogetherQuestionAnalyticsItem,
+} from "@/contracts/admin/question.schema";
+
+import { AdminQuestionFilters } from "./admin-question-filters";
+import {
+  PrivateAnalyticsTable,
+  TogetherAnalyticsTable,
+} from "./admin-question-analytics-workspace";
 import { ActivityBadge, CategoryValue, IntensityValue, RevisionHealthBadge } from "./admin-facets";
 import { AdminWorkspaceTabs, type AdminQuestionView } from "./admin-workspace-tabs";
 import type { listAdminQuestions } from "@/server/modules/admin-questions/admin-question.service";
@@ -22,9 +33,13 @@ export function AdminQuestionWorkspace({
   data,
   view,
   filters,
+  revisionScope,
+  analytics,
 }: {
   data: AdminQuestionList;
   view: AdminQuestionView;
+  revisionScope: AdminQuestionAnalyticsQuery["revisionScope"];
+  analytics?: AdminPrivateQuestionAnalyticsItem[] | AdminTogetherQuestionAnalyticsItem[];
   filters: {
     search?: string;
     category?: string;
@@ -43,7 +58,10 @@ export function AdminQuestionWorkspace({
   return (
     <>
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-        <AdminWorkspaceTabs active={view} filters={filters} />
+        <AdminWorkspaceTabs
+          active={view}
+          filters={{ ...filters, ...(view === "operations" ? {} : { revisionScope }) }}
+        />
         {view === "operations" ? (
           <Link
             className="bg-closer-coral focus-visible:ring-closer-navy inline-flex min-h-11 items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-extrabold shadow-sm transition-transform hover:-translate-y-0.5 focus-visible:ring-2 focus-visible:outline-none"
@@ -57,101 +75,10 @@ export function AdminQuestionWorkspace({
         ) : null}
       </div>
 
+      <AdminQuestionFilters filters={filters} revisionScope={revisionScope} view={view} />
+
       {view === "operations" ? (
         <>
-          <form
-            action="/admin/questions"
-            className="rounded-closer-panel shadow-closer-soft mb-5 bg-white/85 p-4"
-            method="get"
-          >
-            <input name="view" type="hidden" value="operations" />
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <label className="text-closer-muted flex min-w-0 flex-col gap-1.5 text-xs font-bold xl:col-span-1">
-                Search questions
-                <input
-                  className="border-closer-navy/15 bg-closer-cream text-closer-navy focus-visible:ring-closer-navy min-h-10 rounded-xl border px-3 text-sm font-medium outline-none focus-visible:ring-2"
-                  defaultValue={filters.search}
-                  name="search"
-                  placeholder="Search wording…"
-                  type="search"
-                />
-              </label>
-              <FilterSelect
-                label="Category"
-                name="category"
-                value={filters.category}
-                options={[
-                  ["fun", "Fun"],
-                  ["deep", "Deep"],
-                  ["memories", "Memories"],
-                  ["relationship", "Relationship"],
-                  ["friendship", "Friendship"],
-                ]}
-              />
-              <FilterSelect
-                label="Intensity"
-                name="intensity"
-                value={filters.intensity}
-                options={[
-                  ["light", "Light"],
-                  ["medium", "Medium"],
-                  ["deep", "Deep"],
-                ]}
-              />
-              <FilterSelect
-                label="Relationship fit"
-                name="relationshipFit"
-                value={filters.relationshipFit}
-                options={[
-                  ["both", "Both"],
-                  ["partner", "Partner"],
-                  ["friend", "Friend"],
-                ]}
-              />
-              <FilterSelect
-                label="Mode fit"
-                name="modeFit"
-                value={filters.modeFit}
-                options={[
-                  ["both", "Both"],
-                  ["together", "Together"],
-                  ["private", "Private"],
-                ]}
-              />
-              <FilterSelect
-                label="Activity"
-                name="activity"
-                value={filters.activity}
-                options={[
-                  ["active", "Active"],
-                  ["inactive", "Inactive"],
-                ]}
-              />
-              <FilterSelect
-                label="Revision health"
-                name="revisionHealth"
-                value={filters.revisionHealth}
-                options={[
-                  ["safe", "Safe"],
-                  ["withdrawn", "Current revision withdrawn"],
-                ]}
-              />
-              <div className="flex items-end gap-2">
-                <button
-                  className="bg-closer-navy focus-visible:ring-closer-coral min-h-10 rounded-xl px-4 text-sm font-bold text-white focus-visible:ring-2 focus-visible:outline-none"
-                  type="submit"
-                >
-                  Apply filters
-                </button>
-                <Link
-                  className="text-closer-navy focus-visible:ring-closer-navy min-h-10 rounded-xl px-3 py-2.5 text-sm font-bold underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:outline-none"
-                  href={"/admin/questions?view=operations" as Route}
-                >
-                  Clear
-                </Link>
-              </div>
-            </div>
-          </form>
           <section
             aria-label="Question catalog operations"
             className="rounded-closer-panel shadow-closer-soft overflow-hidden bg-white/90"
@@ -253,7 +180,12 @@ export function AdminQuestionWorkspace({
                 Showing {start}–{end} of {data.total.toLocaleString("en")}
               </p>
               <div className="flex items-center gap-2">
-                <PageLink page={data.page - 1} disabled={data.page <= 1} filters={filters} />
+                <PageLink
+                  page={data.page - 1}
+                  disabled={data.page <= 1}
+                  filters={filters}
+                  view="operations"
+                />
                 <span className="text-xs font-bold">
                   Page {data.page} of {maxPage}
                 </span>
@@ -261,6 +193,7 @@ export function AdminQuestionWorkspace({
                   page={data.page + 1}
                   disabled={data.page >= maxPage}
                   filters={filters}
+                  view="operations"
                   next
                 />
               </div>
@@ -268,39 +201,29 @@ export function AdminQuestionWorkspace({
           </section>
         </>
       ) : (
-        <AnalyticsWorkspacePlaceholder view={view} />
+        <>
+          {view === "private" ? (
+            <PrivateAnalyticsTable
+              data={data}
+              metrics={(analytics ?? []) as AdminPrivateQuestionAnalyticsItem[]}
+              revisionScope={revisionScope}
+            />
+          ) : (
+            <TogetherAnalyticsTable
+              data={data}
+              metrics={(analytics ?? []) as AdminTogetherQuestionAnalyticsItem[]}
+              revisionScope={revisionScope}
+            />
+          )}
+          <QuestionPagination
+            data={data}
+            filters={filters}
+            revisionScope={revisionScope}
+            view={view}
+          />
+        </>
       )}
     </>
-  );
-}
-
-function FilterSelect({
-  label,
-  name,
-  value,
-  options,
-}: {
-  label: string;
-  name: string;
-  value?: string;
-  options: Array<[string, string]>;
-}) {
-  return (
-    <label className="text-closer-muted flex min-w-0 flex-col gap-1.5 text-xs font-bold">
-      {label}
-      <select
-        className="border-closer-navy/15 bg-closer-cream text-closer-navy focus-visible:ring-closer-navy min-h-10 rounded-xl border px-3 text-sm font-medium outline-none focus-visible:ring-2"
-        defaultValue={value ?? ""}
-        name={name}
-      >
-        <option value="">All</option>
-        {options.map(([optionValue, optionLabel]) => (
-          <option key={optionValue} value={optionValue}>
-            {optionLabel}
-          </option>
-        ))}
-      </select>
-    </label>
   );
 }
 
@@ -308,14 +231,19 @@ function PageLink({
   page,
   filters,
   disabled,
+  view,
+  revisionScope,
   next = false,
 }: {
   page: number;
   filters: Record<string, string | undefined>;
   disabled: boolean;
+  view: AdminQuestionView;
+  revisionScope?: AdminQuestionAnalyticsQuery["revisionScope"];
   next?: boolean;
 }) {
-  const query = new URLSearchParams({ view: "operations", page: String(page) });
+  const query = new URLSearchParams({ view, page: String(page) });
+  if (view !== "operations" && revisionScope) query.set("revisionScope", revisionScope);
   for (const [key, value] of Object.entries(filters)) if (value) query.set(key, value);
   return disabled ? (
     <span
@@ -334,62 +262,45 @@ function PageLink({
   );
 }
 
-function AnalyticsWorkspacePlaceholder({ view }: { view: "private" | "together" }) {
-  const privateView = view === "private";
+function QuestionPagination({
+  data,
+  filters,
+  revisionScope,
+  view,
+}: {
+  data: AdminQuestionList;
+  filters: Record<string, string | undefined>;
+  revisionScope: AdminQuestionAnalyticsQuery["revisionScope"];
+  view: "private" | "together";
+}) {
+  const start = data.total === 0 ? 0 : (data.page - 1) * data.pageSize + 1;
+  const end = Math.min(data.page * data.pageSize, data.total);
+  const maxPage = Math.max(1, Math.ceil(data.total / data.pageSize));
   return (
-    <section
-      aria-labelledby="analytics-heading"
-      className="rounded-closer-panel shadow-closer-soft bg-white/90 p-5 md:p-6"
-    >
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-extrabold" id="analytics-heading">
-            {privateView ? "Private question analytics" : "Together question analytics"}
-          </h2>
-          <p className="text-closer-muted mt-1 text-sm">All time · Current revision</p>
-        </div>
-        <p className="text-closer-muted text-xs">Question-level aggregates only</p>
+    <div className="border-closer-navy/10 flex flex-wrap items-center justify-between gap-3 border-x border-b bg-white/90 px-4 py-3 md:px-5">
+      <p aria-live="polite" className="text-closer-muted text-xs">
+        Showing {start}–{end} of {data.total.toLocaleString("en")}
+      </p>
+      <div className="flex items-center gap-2">
+        <PageLink
+          page={data.page - 1}
+          disabled={data.page <= 1}
+          filters={filters}
+          revisionScope={revisionScope}
+          view={view}
+        />
+        <span className="text-xs font-bold">
+          Page {data.page} of {maxPage}
+        </span>
+        <PageLink
+          page={data.page + 1}
+          disabled={data.page >= maxPage}
+          filters={filters}
+          revisionScope={revisionScope}
+          view={view}
+          next
+        />
       </div>
-      <div className="border-closer-navy/10 mt-5 overflow-x-auto rounded-xl border">
-        <table className="w-full min-w-[820px] border-collapse text-left text-sm">
-          <thead className="bg-closer-cream/80 text-closer-muted text-xs">
-            <tr>
-              <th className="px-4 py-3 font-bold" scope="col">
-                Question
-              </th>
-              <th className="px-3 py-3 font-bold" scope="col">
-                Category
-              </th>
-              {(privateView
-                ? [
-                    "Valid Offers",
-                    "Decisions",
-                    "Decision Rate",
-                    "Ask Rate",
-                    "Skip Rate",
-                    "Like Rate",
-                  ]
-                : ["Shown", "Decisions", "Continue Rate", "Skip Rate", "Like Rate"]
-              ).map((label) => (
-                <th className="px-3 py-3 font-bold" key={label} scope="col">
-                  {label}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td
-                className="text-closer-muted px-4 py-12 text-center text-sm"
-                colSpan={privateView ? 8 : 7}
-              >
-                Analytics values will appear here when the protected projections are connected. No
-                metric values are shown yet.
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
+    </div>
   );
 }
