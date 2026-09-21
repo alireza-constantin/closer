@@ -302,6 +302,9 @@ retain both normalized command traces and DB state digests for diagnosis.
       SSE connect, and `/api/v1/me` never create auth/session/Participant rows.
 - [ ] MUST PORT: auth identity remains distinct from Participant; an auth user
       can have no Participant and an Admin always has no Participant.
+- [ ] MUST PORT: Go `auth_user.id` is UUID; `participant.auth_user_id` is a
+      unique UUID FK with RESTRICT deletion. Legacy Better Auth text identity is
+      legacy-only; no mapping/bridge exists and parity needs no shared DB rows.
 - [ ] MUST PORT: anonymous credential upgrade preserves the same auth-user ID,
       Participant ID, memberships, Pair/history ownership, and valid sessions.
 - [ ] MUST PORT: direct signup creates a registered auth user/session but no
@@ -371,7 +374,11 @@ and the listed event—not merely that concurrent requests eventually return.
 ## 13. Schema and test-database cutover gate
 
 - [ ] MUST PORT: while porting, Go tests use `CLOSER_TEST_DATABASE_URL` and
-      refuse any database name other than `closer_test`/`closer_test_*`.
+      refuse any database name other than exactly `closer_test`; integration
+      tests use the new Go executable schema, isolated from legacy Next tables.
+- [ ] MUST PORT: ordered `apps/api/db/schema/` bootstrap DDL is reproducible;
+      its guarded reset command cannot target Development, Production, or a
+      database other than local `closer_test`.
 - [ ] MUST PORT: the Go-independent reviewed SQL baseline installs on a clean
       disposable database and reproduces every required domain constraint.
 - [ ] MUST PORT: baseline replaces Better Auth tables with `auth_user`,

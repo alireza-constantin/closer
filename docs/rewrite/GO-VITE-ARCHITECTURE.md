@@ -32,8 +32,11 @@ apps/api/
   internal/realtime/                 NOTIFY listener, registry, SSE handler
   internal/postgres/                 pool, transaction and adapter infrastructure
     sqlc/                             generated code; never hand edited
+  db/schema/                         ordered pre-launch Go schema bootstrap DDL
+    001_auth.sql
+    002_participant_pair.sql
   db/queries/                        sqlc SQL source
-  db/migrations/                     reviewed baseline and later SQL migrations
+  db/migrations/                     future reviewed production baseline/migrations
   sqlc.yaml
 ```
 
@@ -501,22 +504,34 @@ assets, installs updates waiting for explicit user reload, and never caches
 authenticated JSON, mutation responses, cookies, SSE, or `/api/v1/**`. V1 has
 no offline write queue and no offline domain state machine.
 
-During Go port tickets, existing Drizzle schema/migrations remain canonical for
-the disposable local dev/test database, and Go targets that schema. Before any
-Go production cutover, `CUTOVER-01` creates a reviewed Go-independent SQL
-baseline from the final canonical schema, verifies it on an empty disposable
-database, and makes `apps/api/db/migrations` the only production schema source.
-It replaces Better Auth tables with the frozen auth tables but does not redesign
-Pair, membership-era, Private, Together, Question, or history tables. No
-`db:push` is allowed after that boundary.
+### Schema ownership amendment
+
+The existing Drizzle schema remains the **semantic reference** for Closer
+domain concepts and constraints: Participant, Pair, memberships, membership
+eras, Question/QuestionRevision, Together, Private, history, and Admin
+analytics. It is not the executable schema for the new Go runtime where the
+architecture intentionally diverges from Better Auth.
+
+The Go runtime owns executable rewrite schema under `apps/api/db/schema/`.
+`auth_user.id` is UUID and `participant.auth_user_id` is a unique UUID foreign
+key to it. Legacy Better Auth text IDs remain exclusive to the legacy Next
+application. There is no identity mapping, text-to-UUID bridge, or dual auth
+foreign key. Go and legacy runtimes may be compared by observable behavior but
+do not share physical identity rows or auth tables.
+
+The ordered `db/schema/*.sql` files are a reproducible pre-launch bootstrap for
+local rewrite and `closer_test` databases, not the production migration
+framework. Before real production users exist, create and verify a proper
+versioned migration baseline from the final Go schema. The test-database reset
+command is guarded to the local database named exactly `closer_test`; ordinary
+Go tests never reset a database. No `db:push` is used to install Go schema.
 
 Use an isolated local `closer_test` database selected only by
 `CLOSER_TEST_DATABASE_URL`; `closer_dev` is never a test target. The test
-harness refuses to run unless the parsed database name is exactly `closer_test`
-or begins `closer_test_`, uses one transaction/schema per test where possible,
-and truncates only named test schemas for integration/concurrency fixtures. CI
-creates ephemeral PostgreSQL plus the same guard. A hosted Neon test branch is
-not required for V1.
+harness refuses any target other than the exact database name `closer_test`.
+Only the explicit schema-reset command can drop its `public` schema; ordinary
+tests do not reset or truncate the database. CI creates ephemeral PostgreSQL
+and bootstraps the same Go schema. A hosted Neon test branch is not required.
 
 ## 1. Current repository map
 
@@ -526,7 +541,8 @@ not required for V1.
 | Shared UI          | `packages/ui/src/components/` and `packages/ui/src/styles/globals.css`                                  | shadcn-style primitives, Tailwind v4, Closer tokens                                    |
 | Domain/persistence | `packages/db/src/closer.ts`                                                                             | transactional Closer operations and projections                                        |
 | DB schema          | `packages/db/src/schema/closer.ts`                                                                      | Closer tables, enums, indexes, checks, composite FKs                                   |
-| Auth schema        | `packages/db/src/schema/auth.ts`                                                                        | Better Auth user/session/account/verification/rate-limit tables                        |
+| Legacy auth schema | `packages/db/src/schema/auth.ts`                                                                        | Better Auth tables used only by the legacy Next runtime                                |
+| Go auth/domain DDL | `apps/api/db/schema/*.sql`                                                                              | Executable custom-auth and Go-owned domain schema for local rewrite/closer_test        |
 | Auth package       | `packages/auth/src/index.ts`, `admin-provisioning.ts`                                                   | consumer anonymous/email auth, admin auth, bootstrap/recovery                          |
 | HTTP contracts     | `apps/web/src/contracts/`                                                                               | Zod request and Admin response contracts                                               |
 | HTTP adapters      | `apps/web/src/app/api/**/route.ts`                                                                      | auth, parse, call domain, map error, publish invalidation                              |
@@ -634,9 +650,12 @@ candidate confidentiality, answer projection confidentiality, intensity ramp,
 history visibility, terminal lifecycle semantics, and the rule that Ask/Skip
 must freeze candidate Like.
 
-The current schema is pre-launch and applied with manual `db:push`; no migration
-history is authoritative. The Go rewrite should first snapshot this schema into
-a reviewed baseline, then add only auth compatibility changes.
+The legacy Drizzle schema is pre-launch and applied with manual `db:push`; no
+migration history is authoritative. It remains the semantic domain reference.
+The Go runtime owns ordered executable bootstrap DDL under `apps/api/db/schema/`
+and intentionally replaces the old auth dependency with UUID `auth_user` rows.
+That bootstrap is not the final production migration framework; a proper
+versioned baseline must be established before real production users exist.
 
 ## 5. Transaction and locking map
 
@@ -706,11 +725,11 @@ Design choices:
   to Participant. Never accept auth or Participant IDs from JSON as ownership.
 - Use Argon2id for email/password credentials. Preserve the current 8–128
   password policy and dedicated Admin account.
-- Anonymous user registration must run in one transaction that locks the
-  anonymous auth user and Participant mapping, creates or finds the registered
-  auth user, repoints `participant.auth_user_id`, and deletes or retires the
-  anonymous auth user only after the mapping is durable. A retry returns the
-  same Participant; it never creates a second Participant or copies Pair data.
+- Anonymous upgrade attaches credentials to the same Go `auth_user` UUID in
+  one transaction. Once GO-04 has created a Participant, that unchanged UUID
+  preserves the Participant and Pair ownership directly; no mapping repoint,
+  second identity, ownership rewrite, or Better Auth compatibility layer is
+  involved.
 - Admin is a dedicated auth identity with no Participant row. Bootstrap is
   explicit and idempotent only for the configured email; recovery targets only
   the configured Admin and revokes all its sessions.
@@ -718,11 +737,12 @@ Design choices:
   not add global account lockout. Keep trusted-origin/CSRF checks for cookie
   mutations.
 
-Required schema changes are limited to replacing Better Auth's implementation
-tables or adding a compatibility layer. `participant`, `pair`, membership,
-history, and question tables do not need ownership changes. Nice-to-have auth
-changes (OAuth, email verification, password reset, multi-admin RBAC) are out
-of scope until separately specified.
+The Go executable schema uses the frozen custom auth tables and references
+Participants directly through `participant.auth_user_id UUID REFERENCES
+auth_user(id) ON DELETE RESTRICT`. It ports Closer domain tables and constraints
+from the semantic Drizzle reference without retaining Better Auth IDs or adding
+an identity mapping. Nice-to-have auth changes (OAuth, email verification,
+password reset, multi-admin RBAC) are out of scope until separately specified.
 
 ## 7. Participant, Pair, era, replacement, and termination parity
 

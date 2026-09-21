@@ -1,6 +1,6 @@
 // Package testdb provides the explicit, local-only database boundary for
-// destructive PostgreSQL integration tests. It never falls back to
-// DATABASE_URL and does not reset or truncate any database itself.
+// PostgreSQL integration tests. It never falls back to DATABASE_URL. Schema
+// reset is a separate explicit command and is guarded to closer_test only.
 package testdb
 
 import (
@@ -49,8 +49,8 @@ func ValidateTarget(databaseURL string) error {
 	if err != nil {
 		return errors.New("invalid test database URL")
 	}
-	if config.Database != "closer_test" && !strings.HasPrefix(config.Database, "closer_test_") {
-		return errors.New("test database name must be closer_test or start with closer_test_")
+	if config.Database != "closer_test" {
+		return errors.New("test database name must be exactly closer_test")
 	}
 	if !localHostList(config.Host) {
 		return errors.New("test database host must be loopback or localhost")
@@ -82,7 +82,7 @@ func OpenPool(ctx context.Context) (*postgres.Pool, error) {
 		pool.Close()
 		return nil, errors.New("unable to confirm the PostgreSQL test database")
 	}
-	if connectedDatabase != "closer_test" && !strings.HasPrefix(connectedDatabase, "closer_test_") {
+	if connectedDatabase != "closer_test" {
 		pool.Close()
 		return nil, errors.New("connected PostgreSQL database is not an approved test target")
 	}

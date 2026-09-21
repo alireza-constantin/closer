@@ -2,8 +2,8 @@ version: "2"
 sql:
   - engine: "postgresql"
     schema:
-      - "db/queries/auth_schema.sql"
-      - "db/queries/test_helpers.sql"
+      - "db/schema/001_auth.sql"
+      - "db/schema/002_participant_pair.sql"
     queries:
       - "db/queries/auth.sql"
       - "db/queries/test_helpers.sql"

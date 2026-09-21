@@ -5,8 +5,95 @@
 package sqlc
 
 import (
+	"database/sql/driver"
+	"fmt"
+
 	"github.com/jackc/pgx/v5/pgtype"
 )
+
+type PairRelationshipType string
+
+const (
+	PairRelationshipTypePartner PairRelationshipType = "partner"
+	PairRelationshipTypeFriend  PairRelationshipType = "friend"
+)
+
+func (e *PairRelationshipType) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = PairRelationshipType(s)
+	case string:
+		*e = PairRelationshipType(s)
+	default:
+		return fmt.Errorf("unsupported scan type for PairRelationshipType: %T", src)
+	}
+	return nil
+}
+
+type NullPairRelationshipType struct {
+	PairRelationshipType PairRelationshipType `json:"pair_relationship_type"`
+	Valid                bool                 `json:"valid"` // Valid is true if PairRelationshipType is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullPairRelationshipType) Scan(value interface{}) error {
+	if value == nil {
+		ns.PairRelationshipType, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.PairRelationshipType.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullPairRelationshipType) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.PairRelationshipType), nil
+}
+
+type PairSlot string
+
+const (
+	PairSlotFirst  PairSlot = "first"
+	PairSlotSecond PairSlot = "second"
+)
+
+func (e *PairSlot) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = PairSlot(s)
+	case string:
+		*e = PairSlot(s)
+	default:
+		return fmt.Errorf("unsupported scan type for PairSlot: %T", src)
+	}
+	return nil
+}
+
+type NullPairSlot struct {
+	PairSlot PairSlot `json:"pair_slot"`
+	Valid    bool     `json:"valid"` // Valid is true if PairSlot is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullPairSlot) Scan(value interface{}) error {
+	if value == nil {
+		ns.PairSlot, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.PairSlot.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullPairSlot) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.PairSlot), nil
+}
 
 type AdminUser struct {
 	AuthUserID pgtype.UUID        `json:"auth_user_id"`
@@ -43,4 +130,40 @@ type AuthUser struct {
 	Kind       string             `json:"kind"`
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 	DisabledAt pgtype.Timestamptz `json:"disabled_at"`
+}
+
+type Pair struct {
+	ID                 pgtype.UUID          `json:"id"`
+	RelationshipType   PairRelationshipType `json:"relationship_type"`
+	IntendedPersonName pgtype.Text          `json:"intended_person_name"`
+	CreationRequestID  pgtype.UUID          `json:"creation_request_id"`
+	TerminatedAt       pgtype.Timestamptz   `json:"terminated_at"`
+	CreatedAt          pgtype.Timestamptz   `json:"created_at"`
+}
+
+type PairMembership struct {
+	ID               pgtype.UUID        `json:"id"`
+	PairID           pgtype.UUID        `json:"pair_id"`
+	ParticipantID    pgtype.UUID        `json:"participant_id"`
+	Slot             PairSlot           `json:"slot"`
+	StartedAt        pgtype.Timestamptz `json:"started_at"`
+	EndedAt          pgtype.Timestamptz `json:"ended_at"`
+	EndedDisplayName pgtype.Text        `json:"ended_display_name"`
+}
+
+type PairMembershipEra struct {
+	ID                 pgtype.UUID        `json:"id"`
+	PairID             pgtype.UUID        `json:"pair_id"`
+	FirstMembershipID  pgtype.UUID        `json:"first_membership_id"`
+	SecondMembershipID pgtype.UUID        `json:"second_membership_id"`
+	StartedAt          pgtype.Timestamptz `json:"started_at"`
+	EndedAt            pgtype.Timestamptz `json:"ended_at"`
+}
+
+type Participant struct {
+	ID          pgtype.UUID        `json:"id"`
+	AuthUserID  pgtype.UUID        `json:"auth_user_id"`
+	DisplayName string             `json:"display_name"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }

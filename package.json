@@ -33,6 +33,8 @@
     "prepare": "husky",
     "test": "bun test",
     "api:run": "go -C apps/api run ./cmd/server",
+    "api:schema:apply:test": "go -C apps/api run ./cmd/testdb-schema apply",
+    "api:schema:reset:test": "go -C apps/api run ./cmd/testdb-schema reset",
     "api:admin-bootstrap": "go -C apps/api run ./cmd/admin-bootstrap",
     "api:admin-recover": "go -C apps/api run ./cmd/admin-recover",
     "api:test": "go -C apps/api test ./...",

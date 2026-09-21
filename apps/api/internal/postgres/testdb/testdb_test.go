@@ -24,7 +24,7 @@ func TestValidateTargetRequiresApprovedDatabaseAndLocalHost(t *testing.T) {
 		want bool
 	}{
 		{name: "exact test database", url: "postgres://tester:secret@localhost:5432/closer_test?sslmode=disable", want: true},
-		{name: "isolated suffix", url: "postgres://tester:secret@127.0.0.1:5432/closer_test_go02?sslmode=disable", want: true},
+		{name: "isolated suffix is rejected", url: "postgres://tester:secret@127.0.0.1:5432/closer_test_go02?sslmode=disable"},
 		{name: "development database", url: "postgres://tester:secret@localhost:5432/closer_dev?sslmode=disable"},
 		{name: "production database", url: "postgres://tester:secret@localhost:5432/closer_prod?sslmode=disable"},
 		{name: "test-like but not prefixed", url: "postgres://tester:secret@localhost:5432/not_closer_test?sslmode=disable"},

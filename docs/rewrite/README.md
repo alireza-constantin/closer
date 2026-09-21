@@ -44,6 +44,18 @@ candidate projections, Ask/Skip races, logical-question consumption, answer
 confidentiality, Decline, and both-view Reveal progression. Pair termination,
 guest replacement, and auth identity linking are the next highest-risk seams.
 
+## Identity and schema ownership amendment
+
+The new Go runtime owns executable schema and UUID authentication identity:
+`auth_user.id` is UUID, and each Participant has one unique
+`participant.auth_user_id UUID` foreign key to it with restricted deletion.
+Legacy Better Auth text IDs remain only in the Next reference. No identity
+mapping or compatibility bridge exists, and the two runtimes never share
+physical auth/Participant rows; parity compares observable behavior. Drizzle
+remains the semantic reference for Closer domain concepts, while Go owns the
+ordered `apps/api/db/schema/` pre-launch bootstrap. A proper versioned migration
+baseline must be established before real production users exist.
+
 ## Portability boundary
 
 The same domain code must run against local PostgreSQL in development, Neon in
@@ -89,9 +101,9 @@ can serve deep-link fallbacks and proxy the API without changing this contract.
    is accurate for the current app but is deployment history, not a constraint
    on the proposed VPS target.
 4. ADR 001 correctly preserves a stable Participant through Better Auth's old
-   identity-linking behavior. The Go auth model supersedes only that provider
-   workaround: an anonymous user attaches a credential to the **same**
-   `auth_user`, so `participant.auth_user_id` does not need repointing.
+   identity-linking behavior. Go has no Better Auth identity replacement: an
+   anonymous user attaches credentials to the **same UUID `auth_user`**, so the
+   Participant and Pair ownership remain unchanged without an identity map.
 5. `apps/web/src/app/api/pairs/[pairId]/private-rounds/route.ts` returns the
    conversation list despite its name. The Go API uses canonical
    `/api/v1/pairs/:pairId/private-conversations`; there is no new ambiguous

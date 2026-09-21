@@ -49,18 +49,23 @@ git diff --exit-code -- internal/postgres/sqlc
 ```
 
 The first command regenerates checked-in code; the second is the drift check.
-GO-02 includes only test/infrastructure SQL and no Closer domain queries or
-schema migrations.
+Schema bootstrap DDL is kept separately in `db/schema/` and applied in numeric
+order. This is the reproducible pre-launch rewrite schema, not the final
+production migration framework. A reviewed, versioned migration baseline must
+be created and tested before any real production users exist. Query source stays
+in `db/queries/`; schema DDL does not belong there.
 
 PostgreSQL integration tests require an explicit `CLOSER_TEST_DATABASE_URL`.
-The guard accepts only a loopback/local host and a database named exactly
-`closer_test` or beginning with `closer_test_`; there is no fallback to
-`DATABASE_URL`. Tests skip when the variable is absent and fail if it points to
-an unsafe target.
+The guard accepts only a loopback/local host and the exact database name
+`closer_test`; there is no fallback to application DB URLs. Tests skip when the
+variable is absent and fail if it points elsewhere.
 
-The purpose-built auth schema is additive while the rewrite runs beside
-Better Auth. It is defined in `packages/db/src/schema/auth.ts` and is applied
-to disposable databases through the existing Drizzle schema workflow. It uses
+The purpose-built Go auth schema is defined in `db/schema/001_auth.sql` and is
+independent of the legacy Better Auth schema. The new Go runtime owns UUID
+`auth_user.id`; the legacy Next runtime retains its Better Auth text IDs only
+as a behavioral reference. The runtimes do not share physical identity rows,
+and no identity mapping layer exists. Drizzle remains the semantic reference
+for Closer domain behavior while Go owns executable rewrite DDL. It uses
 UUID auth identities, unique normalized-email credentials, and stores only
 SHA-256 session-token hashes. Consumer passwords use the frozen Argon2id policy
 in `internal/auth/credentials.go`. Anonymous identity creation is explicit at
@@ -68,7 +73,8 @@ in `internal/auth/credentials.go`. Anonymous identity creation is explicit at
 read-only. The schema includes `auth_user`, `auth_credential`, `auth_session`,
 `auth_rate_limit`, and `admin_user`. Admin authorization requires both
 `auth_user.kind = 'admin'` and an `admin_user` row; no Admin identity creates a
-Participant.
+Participant. `db/schema/002_participant_pair.sql` adds the GO-04 domain
+foundation and references the Go UUID auth identity.
 
 The Go Admin operator commands are separate from the legacy TypeScript
 `admin:bootstrap` and `admin:recover` scripts. They read only process
