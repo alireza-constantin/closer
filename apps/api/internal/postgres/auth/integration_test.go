@@ -3,8 +3,12 @@ package auth
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"os"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +17,7 @@ import (
 	"github.com/alireza-constantin/closer/apps/api/internal/postgres/sqlc"
 	"github.com/alireza-constantin/closer/apps/api/internal/postgres/testdb"
 	"github.com/jackc/pgx/v5/pgtype"
+	"golang.org/x/crypto/argon2"
 )
 
 func openAuthTestPool(t *testing.T) *postgres.Pool {
@@ -206,6 +211,349 @@ func TestExpiredSessionCleanupIsBoundedAndRetainsActiveSessions(t *testing.T) {
 	})
 	if err != nil || expiredExists {
 		t.Fatalf("expired session exists after cleanup = %t, error = %v", expiredExists, err)
+	}
+}
+
+func TestCredentialRegistrationUpgradeLoginAndLogoutPreserveIdentity(t *testing.T) {
+	pool := openAuthTestPool(t)
+	store := NewStore(pool)
+	service := appauth.NewServiceWithCredentials(store, store, nil)
+	ctx := context.Background()
+	password := "correct horse battery staple"
+
+	registered, err := service.Register(ctx, uniqueAuthEmail(t), password)
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	if registered.Actor.Kind != appauth.UserKindRegistered {
+		t.Fatalf("registered actor kind = %q", registered.Actor.Kind)
+	}
+	registeredEmail := uniqueEmailFromCredential(t, store, registered.Actor.AuthUserID)
+	if _, err := service.Register(ctx, " "+strings.ToUpper(registeredEmail)+" ", password); !errors.Is(err, appauth.ErrEmailInUse) {
+		t.Fatalf("normalized duplicate registration error = %v, want email in use", err)
+	}
+	if _, err := service.ResolveSession(ctx, registered.Token); err != nil {
+		t.Fatalf("registration did not create a usable session: %v", err)
+	}
+	credential, err := store.FindCredential(ctx, mustNormalizeEmail(t, registeredEmail))
+	if err != nil || credential.Actor.AuthUserID != registered.Actor.AuthUserID {
+		t.Fatalf("registered credential lookup = %+v, %v", credential, err)
+	}
+	if credential.PasswordHash == password || !strings.HasPrefix(credential.PasswordHash, "$argon2id$v=19$") {
+		t.Fatal("registered credential did not persist an encoded Argon2id hash")
+	}
+	assertNoParticipantForAuthUser(t, pool, registered.Actor.AuthUserID)
+
+	upgradedEmail := uniqueAuthEmail(t)
+	anonymous, err := service.CreateAnonymous(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upgraded, err := service.Upgrade(ctx, anonymous.Token, upgradedEmail, password)
+	if err != nil {
+		t.Fatalf("Upgrade() error = %v", err)
+	}
+	if upgraded.AuthUserID != anonymous.Actor.AuthUserID || upgraded.Kind != appauth.UserKindRegistered {
+		t.Fatalf("upgrade changed identity: before=%+v after=%+v", anonymous.Actor, upgraded)
+	}
+	resolved, err := service.ResolveSession(ctx, anonymous.Token)
+	if err != nil || resolved != upgraded {
+		t.Fatalf("upgrade did not preserve its session: actor=%+v error=%v", resolved, err)
+	}
+	assertNoParticipantForAuthUser(t, pool, upgraded.AuthUserID)
+
+	unknownErr := func() error {
+		_, loginErr := service.Login(ctx, uniqueAuthEmail(t), password, "127.0.0.1", "")
+		return loginErr
+	}()
+	wrongPasswordEmail := strings.ToLower(uniqueAuthEmail(t))
+	wrongPasswordAccount, err := service.Register(ctx, wrongPasswordEmail, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, wrongErr := service.Login(ctx, wrongPasswordEmail, "this password is wrong", "127.0.0.2", "")
+	if !errors.Is(unknownErr, appauth.ErrInvalidCredentials) || !errors.Is(wrongErr, appauth.ErrInvalidCredentials) {
+		t.Fatalf("unknown login error = %v, wrong-password error = %v", unknownErr, wrongErr)
+	}
+
+	// Logging in from anonymous browser A installs the existing registered
+	// identity without changing or deleting A's auth user.
+	anonymousBrowser, err := service.CreateAnonymous(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loggedIn, err := service.Login(ctx, wrongPasswordEmail, password, "127.0.0.3", anonymousBrowser.Token)
+	if err != nil || loggedIn.Actor.AuthUserID != wrongPasswordAccount.Actor.AuthUserID {
+		t.Fatalf("login from anonymous browser = %+v, %v", loggedIn.Actor, err)
+	}
+	if _, err := service.ResolveSession(ctx, anonymousBrowser.Token); !errors.Is(err, appauth.ErrUnauthenticated) {
+		t.Fatalf("old anonymous browser session error = %v, want unauthenticated", err)
+	}
+	var anonymousKind string
+	err = pool.WithConnection(ctx, func(db postgres.QueryDB) error {
+		return db.QueryRow(ctx, "SELECT kind FROM auth_user WHERE id = $1", mustUUID(t, anonymousBrowser.Actor.AuthUserID)).Scan(&anonymousKind)
+	})
+	if err != nil || anonymousKind != string(appauth.UserKindAnonymous) {
+		t.Fatalf("anonymous auth identity kind = %q, error = %v", anonymousKind, err)
+	}
+
+	phone, err := service.Login(ctx, wrongPasswordEmail, password, "127.0.0.4", "")
+	if err != nil {
+		t.Fatalf("second-device login error = %v", err)
+	}
+	if err := service.RevokeSession(ctx, loggedIn.Token); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ResolveSession(ctx, phone.Token); err != nil {
+		t.Fatalf("logging out another device revoked phone session: %v", err)
+	}
+	if err := service.RevokeAllSessions(ctx, phone.Actor); err != nil {
+		t.Fatalf("RevokeAllSessions() error = %v", err)
+	}
+	if _, err := service.ResolveSession(ctx, phone.Token); !errors.Is(err, appauth.ErrUnauthenticated) {
+		t.Fatalf("logout-all left phone session valid: %v", err)
+	}
+}
+
+func TestLoginRehashesWeakPasswordInSuccessfulSessionTransaction(t *testing.T) {
+	pool := openAuthTestPool(t)
+	store := NewStore(pool)
+	service := appauth.NewServiceWithCredentials(store, store, nil)
+	ctx := context.Background()
+	password := "correct horse battery staple"
+	email := uniqueAuthEmail(t)
+	registered, err := service.Register(ctx, email, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	salt := []byte("0123456789abcdef")
+	weakKey := argon2.IDKey([]byte(password), salt, 1, 8*1024, 1, appauth.Argon2KeyBytes)
+	weakHash := "$argon2id$v=19$m=8192,t=1,p=1$" + base64.RawStdEncoding.EncodeToString(salt) + "$" + base64.RawStdEncoding.EncodeToString(weakKey)
+	userUUID := mustUUID(t, registered.Actor.AuthUserID)
+	err = pool.WithConnection(ctx, func(db postgres.QueryDB) error {
+		_, queryErr := db.Exec(ctx, "UPDATE auth_credential SET password_hash = $2 WHERE auth_user_id = $1", userUUID, weakHash)
+		return queryErr
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	login, err := service.Login(ctx, email, password, "127.0.0.9", "")
+	if err != nil {
+		t.Fatalf("Login() after weak hash error = %v", err)
+	}
+	credential, err := store.FindCredential(ctx, mustNormalizeEmail(t, email))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if credential.PasswordHash == weakHash || !strings.HasPrefix(credential.PasswordHash, "$argon2id$v=19$m=65536,t=3,p=1$") {
+		t.Fatal("successful login did not upgrade the stored Argon2id parameters")
+	}
+	if _, err := service.ResolveSession(ctx, login.Token); err != nil {
+		t.Fatalf("rehash and session creation did not commit together: %v", err)
+	}
+}
+
+func TestAnonymousUpgradeEmailUniquenessRaceUsesDatabaseConstraint(t *testing.T) {
+	pool := openAuthTestPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	left, err := appauth.NewService(store).CreateAnonymous(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := appauth.NewService(store).CreateAnonymous(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	email := uniqueAuthEmail(t)
+	start := make(chan struct{})
+	type upgradeResult struct {
+		userID string
+		err    error
+	}
+	errorsFound := make(chan upgradeResult, 2)
+	var workers sync.WaitGroup
+	for _, userID := range []string{left.Actor.AuthUserID, right.Actor.AuthUserID} {
+		workers.Add(1)
+		go func(userID string) {
+			defer workers.Done()
+			<-start
+			errorsFound <- upgradeResult{userID: userID, err: store.Upgrade(ctx, userID, strings.ToLower(email), "test-only-encoded-password", time.Now().UTC())}
+		}(userID)
+	}
+	close(start)
+	workers.Wait()
+	close(errorsFound)
+	succeeded, conflicts := 0, 0
+	var losingUserID string
+	for result := range errorsFound {
+		switch {
+		case result.err == nil:
+			succeeded++
+		case errors.Is(result.err, appauth.ErrEmailInUse):
+			conflicts++
+			losingUserID = result.userID
+		default:
+			t.Fatalf("upgrade race returned unexpected error: %v", result.err)
+		}
+	}
+	if succeeded != 1 || conflicts != 1 {
+		t.Fatalf("upgrade race successes=%d email conflicts=%d, want one each", succeeded, conflicts)
+	}
+	var losingUserKind string
+	err = pool.WithConnection(ctx, func(db postgres.QueryDB) error {
+		return db.QueryRow(ctx, "SELECT kind FROM auth_user WHERE id = $1", mustUUID(t, losingUserID)).Scan(&losingUserKind)
+	})
+	if err != nil || losingUserKind != string(appauth.UserKindAnonymous) {
+		t.Fatalf("losing upgrade changed identity to %q, error=%v", losingUserKind, err)
+	}
+	losingToken := left.Token
+	if left.Actor.AuthUserID != losingUserID {
+		losingToken = right.Token
+	}
+	if actor, err := appauth.NewService(store).ResolveSession(ctx, losingToken); err != nil || actor.AuthUserID != losingUserID || actor.Kind != appauth.UserKindAnonymous {
+		t.Fatalf("losing upgrade changed its current session: actor=%+v error=%v", actor, err)
+	}
+}
+
+func TestConsumerRateLimitIsAtomicAcrossConcurrentRequestsAndScopes(t *testing.T) {
+	pool := openAuthTestPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	const attempts = 20
+	runID, err := appauth.NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sharedIPSubject := testSubject("ip", runID)
+	results := make(chan appauth.LoginRateResult, attempts)
+	errs := make(chan error, attempts)
+	var workers sync.WaitGroup
+	for i := 0; i < attempts; i++ {
+		workers.Add(1)
+		go func(i int) {
+			defer workers.Done()
+			result, err := store.CountConsumerLoginAttempt(ctx, sharedIPSubject, testSubject("email", fmt.Sprintf("%s-%d", runID, i)))
+			results <- result
+			errs <- err
+		}(i)
+	}
+	workers.Wait()
+	close(results)
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("CountConsumerLoginAttempt() error = %v", err)
+		}
+	}
+	limited := 0
+	for result := range results {
+		if result.Limited {
+			limited++
+		}
+	}
+	if limited != attempts-appauth.ConsumerLoginLimit {
+		t.Fatalf("concurrent same-IP throttles=%d, want %d", limited, attempts-appauth.ConsumerLoginLimit)
+	}
+
+	emailSubject := testSubject("email", runID+"-shared")
+	independentIP, err := store.CountConsumerLoginAttempt(ctx, testSubject("ip", runID+"-independent"), emailSubject)
+	if err != nil || independentIP.Limited {
+		t.Fatalf("different IP was not independent: %+v, %v", independentIP, err)
+	}
+	for attempt := 2; attempt <= appauth.ConsumerLoginLimit; attempt++ {
+		if _, err := store.CountConsumerLoginAttempt(ctx, testSubject("ip", fmt.Sprintf("%s-%d", runID, attempt)), emailSubject); err != nil {
+			t.Fatal(err)
+		}
+	}
+	limitedEmail, err := store.CountConsumerLoginAttempt(ctx, testSubject("ip", runID+"-fresh"), emailSubject)
+	if err != nil || !limitedEmail.Limited {
+		t.Fatalf("normalized-email limit result = %+v, %v; want limited", limitedEmail, err)
+	}
+}
+
+func TestConsumerRateLimitAcceptsTenThenResetsAtFixedWindowBoundary(t *testing.T) {
+	pool := openAuthTestPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	userID, err := appauth.NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ipSubject := testSubject("ip", userID)
+	emailSubject := testSubject("email", userID)
+	for attempt := 1; attempt <= appauth.ConsumerLoginLimit; attempt++ {
+		result, err := store.CountConsumerLoginAttempt(ctx, ipSubject, emailSubject)
+		if err != nil || result.Limited {
+			t.Fatalf("attempt %d result=%+v error=%v; expected accepted", attempt, result, err)
+		}
+	}
+	eleventh, err := store.CountConsumerLoginAttempt(ctx, ipSubject, emailSubject)
+	if err != nil || !eleventh.Limited || eleventh.RetryAfter <= 0 || eleventh.RetryAfter > appauth.ConsumerLoginWindow {
+		t.Fatalf("attempt 11 result=%+v error=%v; want a wait up to one minute", eleventh, err)
+	}
+	err = pool.WithConnection(ctx, func(db postgres.QueryDB) error {
+		_, queryErr := db.Exec(ctx, `UPDATE auth_rate_limit SET window_started_at = clock_timestamp() - interval '1 minute'
+			WHERE (scope = 'consumer_login_ip' AND subject = $1)
+			   OR (scope = 'consumer_login_email' AND subject = $2)`, ipSubject, emailSubject)
+		return queryErr
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterWindow, err := store.CountConsumerLoginAttempt(ctx, ipSubject, emailSubject)
+	if err != nil || afterWindow.Limited {
+		t.Fatalf("first request after window result=%+v error=%v; want accepted", afterWindow, err)
+	}
+}
+
+func testSubject(scope, value string) string {
+	hash := sha256.Sum256([]byte(scope + ":" + value))
+	return fmt.Sprintf("%x", hash[:])
+}
+
+func uniqueAuthEmail(t *testing.T) string {
+	t.Helper()
+	id, err := appauth.NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return "go03b-" + strings.ReplaceAll(id, "-", "") + "@example.test"
+}
+
+func uniqueEmailFromCredential(t *testing.T, store *Store, userID string) string {
+	t.Helper()
+	var email string
+	userUUID := mustUUID(t, userID)
+	err := store.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		return db.QueryRow(context.Background(), "SELECT email_normalized FROM auth_credential WHERE auth_user_id = $1", userUUID).Scan(&email)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return email
+}
+
+func mustNormalizeEmail(t *testing.T, email string) string {
+	t.Helper()
+	value, err := appauth.NormalizeEmail(email)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value
+}
+
+func assertNoParticipantForAuthUser(t *testing.T, pool *postgres.Pool, userID string) {
+	t.Helper()
+	var count int64
+	err := pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		return db.QueryRow(context.Background(), "SELECT count(*) FROM participant WHERE auth_user_id = $1", userID).Scan(&count)
+	})
+	if err != nil {
+		t.Fatalf("check Participant isolation: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("auth user %s unexpectedly has %d Participant rows", userID, count)
 	}
 }
 

@@ -62,8 +62,10 @@ type SessionStore interface {
 }
 
 type Service struct {
-	store SessionStore
-	now   func() time.Time
+	store       SessionStore
+	credentials CredentialStore
+	hasher      PasswordHasher
+	now         func() time.Time
 }
 
 func NewService(store SessionStore) *Service {
@@ -76,6 +78,20 @@ func NewServiceWithClock(store SessionStore, now func() time.Time) *Service {
 		now = time.Now
 	}
 	return &Service{store: store, now: now}
+}
+
+func NewServiceWithCredentials(store SessionStore, credentials CredentialStore, hasher PasswordHasher) *Service {
+	return NewServiceWithCredentialsAndClock(store, credentials, hasher, time.Now)
+}
+
+func NewServiceWithCredentialsAndClock(store SessionStore, credentials CredentialStore, hasher PasswordHasher, now func() time.Time) *Service {
+	service := NewServiceWithClock(store, now)
+	service.credentials = credentials
+	if hasher == nil {
+		hasher = Argon2idHasher{}
+	}
+	service.hasher = hasher
+	return service
 }
 
 func (s *Service) CreateAnonymous(ctx context.Context) (AnonymousSession, error) {

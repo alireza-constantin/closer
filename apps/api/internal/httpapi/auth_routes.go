@@ -2,9 +2,14 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
+	"math"
+	"net"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -61,6 +66,109 @@ func registerAuthRoutes(router chi.Router, service *auth.Service, security Secur
 			writeJSON(w, http.StatusCreated, meResponse{Actor: projectActor(created.Actor)})
 		})
 
+		api.Post("/auth/register", func(w http.ResponseWriter, r *http.Request) {
+			setPrivateNoStore(w)
+			origin := requestOrigin(r)
+			if !trustedOrigin(origin, security.TrustedOrigins) {
+				writeAPIError(w, r, http.StatusForbidden, "FORBIDDEN", "Request origin is not allowed.")
+				return
+			}
+			if token, present := cookieToken(r); present {
+				if _, err := service.ResolveSession(r.Context(), token); err == nil {
+					writeAPIError(w, r, http.StatusConflict, "CONFLICT", "An authentication session is already active.")
+					return
+				} else if !errors.Is(err, auth.ErrUnauthenticated) {
+					writeAuthInternalError(w, r)
+					return
+				}
+			}
+			var request credentialsRequest
+			if !decodeCredentialsRequest(w, r, &request) {
+				return
+			}
+			created, err := service.Register(r.Context(), request.Email, request.Password)
+			if err != nil {
+				writeCredentialError(w, r, err)
+				return
+			}
+			setSessionCookie(w, created.Token, created.ExpiresAt, isSecureOrigin(origin))
+			writeJSON(w, http.StatusCreated, meResponse{Actor: projectActor(created.Actor)})
+		})
+
+		api.Post("/auth/upgrade", func(w http.ResponseWriter, r *http.Request) {
+			setPrivateNoStore(w)
+			origin := requestOrigin(r)
+			if !trustedOrigin(origin, security.TrustedOrigins) {
+				writeAPIError(w, r, http.StatusForbidden, "FORBIDDEN", "Request origin is not allowed.")
+				return
+			}
+			var request credentialsRequest
+			if !decodeCredentialsRequest(w, r, &request) {
+				return
+			}
+			token, present := cookieToken(r)
+			if !present {
+				writeAPIError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Sign in is required.")
+				return
+			}
+			actor, err := service.Upgrade(r.Context(), token, request.Email, request.Password)
+			if err != nil {
+				writeCredentialError(w, r, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, meResponse{Actor: projectActor(actor)})
+		})
+
+		api.Post("/auth/login", func(w http.ResponseWriter, r *http.Request) {
+			setPrivateNoStore(w)
+			origin := requestOrigin(r)
+			if !trustedOrigin(origin, security.TrustedOrigins) {
+				writeAPIError(w, r, http.StatusForbidden, "FORBIDDEN", "Request origin is not allowed.")
+				return
+			}
+			var request credentialsRequest
+			if !decodeCredentialsRequest(w, r, &request) {
+				return
+			}
+			currentToken, _ := cookieToken(r)
+			created, err := service.Login(r.Context(), request.Email, request.Password, remoteClientIP(r.RemoteAddr), currentToken)
+			if err != nil {
+				writeCredentialError(w, r, err)
+				return
+			}
+			setSessionCookie(w, created.Token, created.ExpiresAt, isSecureOrigin(origin))
+			writeJSON(w, http.StatusOK, meResponse{Actor: projectActor(created.Actor)})
+		})
+
+		api.Post("/auth/logout-all", func(w http.ResponseWriter, r *http.Request) {
+			setPrivateNoStore(w)
+			origin := requestOrigin(r)
+			if !trustedOrigin(origin, security.TrustedOrigins) {
+				writeAPIError(w, r, http.StatusForbidden, "FORBIDDEN", "Request origin is not allowed.")
+				return
+			}
+			token, present := cookieToken(r)
+			if !present {
+				writeAPIError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Sign in is required.")
+				return
+			}
+			actor, err := service.ResolveSession(r.Context(), token)
+			if err != nil {
+				if errors.Is(err, auth.ErrUnauthenticated) {
+					writeAPIError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Sign in is required.")
+					return
+				}
+				writeAuthInternalError(w, r)
+				return
+			}
+			if err := service.RevokeAllSessions(r.Context(), actor); err != nil {
+				writeAuthInternalError(w, r)
+				return
+			}
+			clearSessionCookie(w, isSecureOrigin(origin))
+			writeJSON(w, http.StatusOK, meResponse{Actor: nil})
+		})
+
 		api.Post("/auth/logout", func(w http.ResponseWriter, r *http.Request) {
 			setPrivateNoStore(w)
 			origin := requestOrigin(r)
@@ -77,6 +185,73 @@ func registerAuthRoutes(router chi.Router, service *auth.Service, security Secur
 			writeJSON(w, http.StatusOK, meResponse{Actor: nil})
 		})
 	})
+}
+
+type credentialsRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+func decodeCredentialsRequest(w http.ResponseWriter, r *http.Request, value *credentialsRequest) bool {
+	if r.Body == nil {
+		writeAPIError(w, r, http.StatusBadRequest, "VALIDATION_ERROR", "A JSON request body is required.")
+		return false
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(value); err != nil {
+		writeAPIError(w, r, http.StatusBadRequest, "VALIDATION_ERROR", "The request body is invalid.")
+		return false
+	}
+	var extra json.RawMessage
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		writeAPIError(w, r, http.StatusBadRequest, "VALIDATION_ERROR", "The request body is invalid.")
+		return false
+	}
+	if value.Email == "" || value.Password == "" {
+		writeAPIError(w, r, http.StatusBadRequest, "VALIDATION_ERROR", "Email and password are required.")
+		return false
+	}
+	return true
+}
+
+func writeCredentialError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, auth.ErrInvalidInput):
+		writeAPIError(w, r, http.StatusBadRequest, "VALIDATION_ERROR", "Email or password does not meet the accepted format.")
+	case errors.Is(err, auth.ErrEmailInUse):
+		writeAPIError(w, r, http.StatusConflict, "EMAIL_IN_USE", "This email is already in use.")
+	case errors.Is(err, auth.ErrInvalidCredentials), errors.Is(err, auth.ErrCredentialNotFound):
+		writeAPIError(w, r, http.StatusUnauthorized, "INVALID_CREDENTIALS", "Email or password is incorrect.")
+	case errors.Is(err, auth.ErrCannotUpgrade):
+		writeAPIError(w, r, http.StatusConflict, "CONFLICT", "This identity cannot be upgraded.")
+	case errors.Is(err, auth.ErrUnauthenticated):
+		writeAPIError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Sign in is required.")
+	default:
+		var limited auth.RateLimitedError
+		if errors.As(err, &limited) {
+			seconds := int(math.Ceil(limited.RetryAfter.Seconds()))
+			if seconds < 1 {
+				seconds = 1
+			}
+			w.Header().Set("Retry-After", strconv.Itoa(seconds))
+			writeAPIError(w, r, http.StatusTooManyRequests, "RATE_LIMITED", "Too many sign-in attempts. Try again later.")
+			return
+		}
+		writeAuthInternalError(w, r)
+	}
+}
+
+func remoteClientIP(remoteAddress string) string {
+	host, _, err := net.SplitHostPort(remoteAddress)
+	if err != nil {
+		return "unknown"
+	}
+	parsed := net.ParseIP(host)
+	if parsed == nil {
+		return "unknown"
+	}
+	return parsed.String()
 }
 
 func authActorMiddleware(service *auth.Service) func(http.Handler) http.Handler {

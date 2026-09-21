@@ -11,19 +11,30 @@ import (
 )
 
 type Querier interface {
+	CreateAuthCredential(ctx context.Context, arg CreateAuthCredentialParams) error
 	CreateAuthSession(ctx context.Context, arg CreateAuthSessionParams) (AuthSession, error)
+	CreateAuthSessionForEnabledRegisteredUser(ctx context.Context, arg CreateAuthSessionForEnabledRegisteredUserParams) (int64, error)
 	CreateAuthUser(ctx context.Context, arg CreateAuthUserParams) (AuthUser, error)
+	CreateRegisteredAuthUser(ctx context.Context, arg CreateRegisteredAuthUserParams) (AuthUser, error)
 	// Infrastructure-only query used by the test-database guard and transaction
 	// smoke tests. Domain query files belong to their owning tickets.
 	CurrentDatabase(ctx context.Context) (string, error)
 	DeleteExpiredAuthSessions(ctx context.Context, arg DeleteExpiredAuthSessionsParams) (int64, error)
+	DeleteOldAuthRateLimits(ctx context.Context, dollar_1 interface{}) (int64, error)
 	GetAuthSessionActor(ctx context.Context, arg GetAuthSessionActorParams) (GetAuthSessionActorRow, error)
+	GetCredentialByEmail(ctx context.Context, emailNormalized string) (GetCredentialByEmailRow, error)
 	GetLocalTestValue(ctx context.Context) (string, error)
 	HasAuthSession(ctx context.Context, tokenHash []byte) (bool, error)
 	ListAuthSessionTokenHashes(ctx context.Context, authUserID pgtype.UUID) ([][]byte, error)
+	LockAuthUserForUpgrade(ctx context.Context, id pgtype.UUID) (AuthUser, error)
 	RenewAuthSession(ctx context.Context, arg RenewAuthSessionParams) (pgtype.Timestamptz, error)
 	RevokeAuthSession(ctx context.Context, arg RevokeAuthSessionParams) (int64, error)
+	RevokeAuthSessionByTokenHash(ctx context.Context, arg RevokeAuthSessionByTokenHashParams) (int64, error)
+	RevokeAuthSessionsForUser(ctx context.Context, arg RevokeAuthSessionsForUserParams) (int64, error)
 	SetLocalTestValue(ctx context.Context, value string) (string, error)
+	UpdateAuthCredentialPasswordHash(ctx context.Context, arg UpdateAuthCredentialPasswordHashParams) error
+	UpgradeAnonymousAuthUser(ctx context.Context, id pgtype.UUID) (int64, error)
+	UpsertAuthRateLimit(ctx context.Context, arg UpsertAuthRateLimitParams) (UpsertAuthRateLimitRow, error)
 }
 
 var _ Querier = (*Queries)(nil)

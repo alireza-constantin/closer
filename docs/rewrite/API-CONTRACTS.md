@@ -184,6 +184,27 @@ authenticated state-changing routes may renew after 24 hours, extending the
 seven-day idle expiry up to the 30-day absolute ceiling. A daily bounded cleanup
 removes expired or revoked session rows without deleting auth identities.
 
+GO-03B credential commands accept strict JSON bodies and return the actor
+projection without returning email, credential material, or a session token:
+
+| Method/path                    | Request                         | Success                                            | Failure behavior                                                            |
+| ------------------------------ | ------------------------------- | -------------------------------------------------- | --------------------------------------------------------------------------- |
+| `POST /api/v1/auth/register`   | `{email,password}`              | 201 actor; create registered auth user and session | 409 `CONFLICT` for an existing valid browser session; 409 `EMAIL_IN_USE`    |
+| `POST /api/v1/auth/upgrade`    | `{email,password}` + session    | 200 same auth user as `registered`; session intact | 401 `UNAUTHENTICATED`; 409 `EMAIL_IN_USE` with anonymous identity unchanged |
+| `POST /api/v1/auth/login`      | `{email,password}`              | 200 registered actor; fresh session cookie         | generic 401 `INVALID_CREDENTIALS`; 429 `RATE_LIMITED` with `Retry-After`    |
+| `POST /api/v1/auth/logout-all` | no body + authenticated session | 200 `{"actor":null}`; revoke all actor sessions    | 401 `UNAUTHENTICATED`                                                       |
+
+Registration is for a browser without a valid auth session. A signed-in
+anonymous browser uses `/upgrade` so it retains the same identity. Login
+revokes only the browser's current valid session and creates a fresh session
+for the registered account; it never merges a distinct anonymous identity or
+Participant. Email normalization trims surrounding whitespace and applies
+Unicode case-folding. Passwords are 8–128 UTF-8 bytes and use Argon2id v=19,
+64 MiB, 3 iterations, parallelism 1, a random 16-byte salt, and a 32-byte
+derived key. Consumer login counts every attempt against both 10/IP/minute and
+10/normalized-email/minute fixed windows; client IP comes from the direct
+connection address and arbitrary forwarded headers are ignored.
+
 Canonical public/participant reads are:
 
 ```text

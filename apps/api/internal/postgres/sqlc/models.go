@@ -8,6 +8,21 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AuthCredential struct {
+	AuthUserID        pgtype.UUID        `json:"auth_user_id"`
+	EmailNormalized   string             `json:"email_normalized"`
+	PasswordHash      string             `json:"password_hash"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	PasswordUpdatedAt pgtype.Timestamptz `json:"password_updated_at"`
+}
+
+type AuthRateLimit struct {
+	Scope           string             `json:"scope"`
+	Subject         string             `json:"subject"`
+	WindowStartedAt pgtype.Timestamptz `json:"window_started_at"`
+	Count           int32              `json:"count"`
+}
+
 type AuthSession struct {
 	ID         pgtype.UUID        `json:"id"`
 	AuthUserID pgtype.UUID        `json:"auth_user_id"`

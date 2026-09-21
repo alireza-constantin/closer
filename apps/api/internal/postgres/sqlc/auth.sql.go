@@ -11,6 +11,28 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const createAuthCredential = `-- name: CreateAuthCredential :exec
+INSERT INTO auth_credential (auth_user_id, email_normalized, password_hash, created_at, password_updated_at)
+VALUES ($1, $2, $3, $4, $4)
+`
+
+type CreateAuthCredentialParams struct {
+	AuthUserID      pgtype.UUID        `json:"auth_user_id"`
+	EmailNormalized string             `json:"email_normalized"`
+	PasswordHash    string             `json:"password_hash"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) CreateAuthCredential(ctx context.Context, arg CreateAuthCredentialParams) error {
+	_, err := q.db.Exec(ctx, createAuthCredential,
+		arg.AuthUserID,
+		arg.EmailNormalized,
+		arg.PasswordHash,
+		arg.CreatedAt,
+	)
+	return err
+}
+
 const createAuthSession = `-- name: CreateAuthSession :one
 INSERT INTO auth_session (
     id, auth_user_id, token_hash, created_at, expires_at, last_used_at
@@ -48,6 +70,35 @@ func (q *Queries) CreateAuthSession(ctx context.Context, arg CreateAuthSessionPa
 	return i, err
 }
 
+const createAuthSessionForEnabledRegisteredUser = `-- name: CreateAuthSessionForEnabledRegisteredUser :execrows
+INSERT INTO auth_session (id, auth_user_id, token_hash, created_at, expires_at, last_used_at)
+SELECT $1, auth_user.id, $3, $4, $5, $4
+FROM auth_user
+WHERE auth_user.id = $2 AND kind = 'registered' AND disabled_at IS NULL
+`
+
+type CreateAuthSessionForEnabledRegisteredUserParams struct {
+	ID        pgtype.UUID        `json:"id"`
+	ID_2      pgtype.UUID        `json:"id_2"`
+	TokenHash []byte             `json:"token_hash"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
+}
+
+func (q *Queries) CreateAuthSessionForEnabledRegisteredUser(ctx context.Context, arg CreateAuthSessionForEnabledRegisteredUserParams) (int64, error) {
+	result, err := q.db.Exec(ctx, createAuthSessionForEnabledRegisteredUser,
+		arg.ID,
+		arg.ID_2,
+		arg.TokenHash,
+		arg.CreatedAt,
+		arg.ExpiresAt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const createAuthUser = `-- name: CreateAuthUser :one
 INSERT INTO auth_user (id, kind, created_at)
 VALUES ($1, $2, $3)
@@ -62,6 +113,29 @@ type CreateAuthUserParams struct {
 
 func (q *Queries) CreateAuthUser(ctx context.Context, arg CreateAuthUserParams) (AuthUser, error) {
 	row := q.db.QueryRow(ctx, createAuthUser, arg.ID, arg.Kind, arg.CreatedAt)
+	var i AuthUser
+	err := row.Scan(
+		&i.ID,
+		&i.Kind,
+		&i.CreatedAt,
+		&i.DisabledAt,
+	)
+	return i, err
+}
+
+const createRegisteredAuthUser = `-- name: CreateRegisteredAuthUser :one
+INSERT INTO auth_user (id, kind, created_at)
+VALUES ($1, 'registered', $2)
+RETURNING id, kind, created_at, disabled_at
+`
+
+type CreateRegisteredAuthUserParams struct {
+	ID        pgtype.UUID        `json:"id"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) CreateRegisteredAuthUser(ctx context.Context, arg CreateRegisteredAuthUserParams) (AuthUser, error) {
+	row := q.db.QueryRow(ctx, createRegisteredAuthUser, arg.ID, arg.CreatedAt)
 	var i AuthUser
 	err := row.Scan(
 		&i.ID,
@@ -93,6 +167,28 @@ type DeleteExpiredAuthSessionsParams struct {
 
 func (q *Queries) DeleteExpiredAuthSessions(ctx context.Context, arg DeleteExpiredAuthSessionsParams) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteExpiredAuthSessions, arg.ExpiresAt, arg.Limit)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteOldAuthRateLimits = `-- name: DeleteOldAuthRateLimits :execrows
+WITH expired AS (
+    SELECT scope, subject
+    FROM auth_rate_limit
+    WHERE window_started_at <= $1 - interval '1 day'
+    ORDER BY window_started_at ASC
+    LIMIT 500
+    FOR UPDATE SKIP LOCKED
+)
+DELETE FROM auth_rate_limit AS limits
+USING expired
+WHERE limits.scope = expired.scope AND limits.subject = expired.subject
+`
+
+func (q *Queries) DeleteOldAuthRateLimits(ctx context.Context, dollar_1 interface{}) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteOldAuthRateLimits, dollar_1)
 	if err != nil {
 		return 0, err
 	}
@@ -146,6 +242,32 @@ func (q *Queries) GetAuthSessionActor(ctx context.Context, arg GetAuthSessionAct
 	return i, err
 }
 
+const getCredentialByEmail = `-- name: GetCredentialByEmail :one
+SELECT u.id AS auth_user_id, u.kind, u.disabled_at, c.password_hash
+FROM auth_credential AS c
+JOIN auth_user AS u ON u.id = c.auth_user_id
+WHERE c.email_normalized = $1
+`
+
+type GetCredentialByEmailRow struct {
+	AuthUserID   pgtype.UUID        `json:"auth_user_id"`
+	Kind         string             `json:"kind"`
+	DisabledAt   pgtype.Timestamptz `json:"disabled_at"`
+	PasswordHash string             `json:"password_hash"`
+}
+
+func (q *Queries) GetCredentialByEmail(ctx context.Context, emailNormalized string) (GetCredentialByEmailRow, error) {
+	row := q.db.QueryRow(ctx, getCredentialByEmail, emailNormalized)
+	var i GetCredentialByEmailRow
+	err := row.Scan(
+		&i.AuthUserID,
+		&i.Kind,
+		&i.DisabledAt,
+		&i.PasswordHash,
+	)
+	return i, err
+}
+
 const hasAuthSession = `-- name: HasAuthSession :one
 SELECT EXISTS (
     SELECT 1 FROM auth_session WHERE token_hash = $1
@@ -183,6 +305,25 @@ func (q *Queries) ListAuthSessionTokenHashes(ctx context.Context, authUserID pgt
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockAuthUserForUpgrade = `-- name: LockAuthUserForUpgrade :one
+SELECT id, kind, created_at, disabled_at
+FROM auth_user
+WHERE id = $1
+FOR UPDATE
+`
+
+func (q *Queries) LockAuthUserForUpgrade(ctx context.Context, id pgtype.UUID) (AuthUser, error) {
+	row := q.db.QueryRow(ctx, lockAuthUserForUpgrade, id)
+	var i AuthUser
+	err := row.Scan(
+		&i.ID,
+		&i.Kind,
+		&i.CreatedAt,
+		&i.DisabledAt,
+	)
+	return i, err
 }
 
 const renewAuthSession = `-- name: RenewAuthSession :one
@@ -225,4 +366,111 @@ func (q *Queries) RevokeAuthSession(ctx context.Context, arg RevokeAuthSessionPa
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const revokeAuthSessionByTokenHash = `-- name: RevokeAuthSessionByTokenHash :execrows
+UPDATE auth_session
+SET revoked_at = $2
+WHERE token_hash = $1 AND revoked_at IS NULL
+`
+
+type RevokeAuthSessionByTokenHashParams struct {
+	TokenHash []byte             `json:"token_hash"`
+	RevokedAt pgtype.Timestamptz `json:"revoked_at"`
+}
+
+func (q *Queries) RevokeAuthSessionByTokenHash(ctx context.Context, arg RevokeAuthSessionByTokenHashParams) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeAuthSessionByTokenHash, arg.TokenHash, arg.RevokedAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const revokeAuthSessionsForUser = `-- name: RevokeAuthSessionsForUser :execrows
+UPDATE auth_session
+SET revoked_at = $2
+WHERE auth_user_id = $1 AND revoked_at IS NULL AND expires_at > $2
+`
+
+type RevokeAuthSessionsForUserParams struct {
+	AuthUserID pgtype.UUID        `json:"auth_user_id"`
+	RevokedAt  pgtype.Timestamptz `json:"revoked_at"`
+}
+
+func (q *Queries) RevokeAuthSessionsForUser(ctx context.Context, arg RevokeAuthSessionsForUserParams) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeAuthSessionsForUser, arg.AuthUserID, arg.RevokedAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const updateAuthCredentialPasswordHash = `-- name: UpdateAuthCredentialPasswordHash :exec
+UPDATE auth_credential
+SET password_hash = $2, password_updated_at = $3
+WHERE auth_user_id = $1
+`
+
+type UpdateAuthCredentialPasswordHashParams struct {
+	AuthUserID        pgtype.UUID        `json:"auth_user_id"`
+	PasswordHash      string             `json:"password_hash"`
+	PasswordUpdatedAt pgtype.Timestamptz `json:"password_updated_at"`
+}
+
+func (q *Queries) UpdateAuthCredentialPasswordHash(ctx context.Context, arg UpdateAuthCredentialPasswordHashParams) error {
+	_, err := q.db.Exec(ctx, updateAuthCredentialPasswordHash, arg.AuthUserID, arg.PasswordHash, arg.PasswordUpdatedAt)
+	return err
+}
+
+const upgradeAnonymousAuthUser = `-- name: UpgradeAnonymousAuthUser :execrows
+UPDATE auth_user
+SET kind = 'registered'
+WHERE id = $1 AND kind = 'anonymous' AND disabled_at IS NULL
+`
+
+func (q *Queries) UpgradeAnonymousAuthUser(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, upgradeAnonymousAuthUser, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const upsertAuthRateLimit = `-- name: UpsertAuthRateLimit :one
+WITH db_clock AS MATERIALIZED (
+    SELECT clock_timestamp() AS now
+)
+INSERT INTO auth_rate_limit (scope, subject, window_started_at, count)
+SELECT $1, $2, db_clock.now, 1
+FROM db_clock
+ON CONFLICT (scope, subject) DO UPDATE
+SET count = CASE
+        WHEN auth_rate_limit.window_started_at <= (SELECT now FROM db_clock) - interval '1 minute' THEN 1
+        ELSE auth_rate_limit.count + 1
+    END,
+    window_started_at = CASE
+        WHEN auth_rate_limit.window_started_at <= (SELECT now FROM db_clock) - interval '1 minute' THEN (SELECT now FROM db_clock)
+        ELSE auth_rate_limit.window_started_at
+    END
+RETURNING count, window_started_at,
+    GREATEST(0, CEIL(EXTRACT(EPOCH FROM (window_started_at + interval '1 minute' - (SELECT now FROM db_clock)))))::integer AS retry_after_seconds
+`
+
+type UpsertAuthRateLimitParams struct {
+	Scope   string `json:"scope"`
+	Subject string `json:"subject"`
+}
+
+type UpsertAuthRateLimitRow struct {
+	Count             int32              `json:"count"`
+	WindowStartedAt   pgtype.Timestamptz `json:"window_started_at"`
+	RetryAfterSeconds int32              `json:"retry_after_seconds"`
+}
+
+func (q *Queries) UpsertAuthRateLimit(ctx context.Context, arg UpsertAuthRateLimitParams) (UpsertAuthRateLimitRow, error) {
+	row := q.db.QueryRow(ctx, upsertAuthRateLimit, arg.Scope, arg.Subject)
+	var i UpsertAuthRateLimitRow
+	err := row.Scan(&i.Count, &i.WindowStartedAt, &i.RetryAfterSeconds)
+	return i, err
 }

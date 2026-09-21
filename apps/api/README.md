@@ -55,7 +55,10 @@ an unsafe target.
 The purpose-built auth schema is additive while the rewrite runs beside
 Better Auth. It is defined in `packages/db/src/schema/auth.ts` and is applied
 to disposable databases through the existing Drizzle schema workflow. It uses
-UUID auth identities and stores only SHA-256 session-token hashes. The Go API
-creates anonymous identity only from explicit `POST /api/v1/auth/anonymous`;
-`GET /api/v1/me` and route prefetch remain read-only. A daily cleanup removes
-expired or revoked sessions in batches of at most 500.
+UUID auth identities, unique normalized-email credentials, and stores only
+SHA-256 session-token hashes. Consumer passwords use the frozen Argon2id policy
+in `internal/auth/credentials.go`. Anonymous identity creation is explicit at
+`POST /api/v1/auth/anonymous`; `GET /api/v1/me` and route prefetch remain
+read-only. Consumer login limits are durable in PostgreSQL. Daily cleanup
+removes expired or revoked sessions and old rate-limit windows in batches of
+at most 500 rows.

@@ -11,6 +11,7 @@ import {
   integer,
   bigint,
   uuid,
+  primaryKey,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
@@ -136,6 +137,35 @@ export const authSession = pgTable(
     index("auth_session_auth_user_id_expires_at_idx").on(table.authUserId, table.expiresAt),
     index("auth_session_expires_at_idx").on(table.expiresAt),
     check("auth_session_token_hash_length_check", sql`octet_length(${table.tokenHash}) = 32`),
+  ],
+);
+
+export const authCredential = pgTable(
+  "auth_credential",
+  {
+    authUserId: uuid("auth_user_id")
+      .primaryKey()
+      .references(() => authUser.id, { onDelete: "restrict" }),
+    emailNormalized: text("email_normalized").notNull(),
+    passwordHash: text("password_hash").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    passwordUpdatedAt: timestamp("password_updated_at", { withTimezone: true }).notNull(),
+  },
+  (table) => [uniqueIndex("auth_credential_email_normalized_uidx").on(table.emailNormalized)],
+);
+
+export const authRateLimit = pgTable(
+  "auth_rate_limit",
+  {
+    scope: text("scope").notNull(),
+    subject: text("subject").notNull(),
+    windowStartedAt: timestamp("window_started_at", { withTimezone: true }).notNull(),
+    count: integer("count").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.scope, table.subject], name: "auth_rate_limit_pkey" }),
+    check("auth_rate_limit_count_check", sql`${table.count} >= 0`),
+    index("auth_rate_limit_window_started_at_idx").on(table.windowStartedAt),
   ],
 );
 

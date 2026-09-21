@@ -38,7 +38,8 @@ func run(logger *slog.Logger) error {
 	}
 	defer database.Close()
 
-	authService := auth.NewService(postgresauth.NewStore(database))
+	authStore := postgresauth.NewStore(database)
+	authService := auth.NewServiceWithCredentials(authStore, authStore, nil)
 	router := httpapi.NewRouterWithAuth(logger, database, authService, httpapi.SecurityConfig{
 		TrustedOrigins: cfg.TrustedOrigins,
 	})
@@ -77,6 +78,14 @@ func startAuthSessionCleanup(ctx context.Context, logger *slog.Logger, service *
 					logger.Warn("expired auth session cleanup failed")
 				} else if deleted > 0 {
 					logger.Info("expired auth sessions cleaned", "count", deleted)
+				}
+				rateLimitCtx, cancelRateLimit := context.WithTimeout(ctx, postgres.CommandTimeout)
+				deletedLimits, rateLimitErr := service.CleanupRateLimits(rateLimitCtx)
+				cancelRateLimit()
+				if rateLimitErr != nil {
+					logger.Warn("old auth rate limit cleanup failed")
+				} else if deletedLimits > 0 {
+					logger.Info("old auth rate limits cleaned", "count", deletedLimits)
 				}
 			}
 		}
