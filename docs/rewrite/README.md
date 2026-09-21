@@ -14,7 +14,8 @@ deployment, or a database operation.
 Read the documents in this order:
 
 1. [GO-VITE-ARCHITECTURE.md](./GO-VITE-ARCHITECTURE.md) — the frozen technical
-   decisions, then the supporting repository audit.
+   decisions, including package/dependency direction and the supporting
+   repository audit.
 2. [API-CONTRACTS.md](./API-CONTRACTS.md) — the versioned HTTP contract and
    its error, projection, and client-validation rules.
 3. [PARITY-CHECKLIST.md](./PARITY-CHECKLIST.md) — non-negotiable behavioral,
@@ -30,6 +31,13 @@ not a serverless port. React + Vite preserves server-derived projections and
 route guards; it does not move authorization or candidate confidentiality into
 the browser. `chi` over `net/http`, `pgx`/`pgxpool`, `sqlc` for stable queries,
 and direct `pgx` only for genuinely dynamic reporting are frozen choices.
+
+The Go structure is feature-oriented rather than template-layered: HTTP is a
+transport-only adapter, feature modules own application operations and
+consumer-owned ports, and `internal/postgres/<feature>` contains the concrete
+adapters. sqlc source remains in `apps/api/db/queries`, while generated code is
+an `internal/postgres/sqlc` persistence detail. Domain modules do not import
+HTTP, pgx, or generated sqlc models.
 
 The highest-risk phase is Private, especially creator-only unresolved
 candidate projections, Ask/Skip races, logical-question consumption, answer

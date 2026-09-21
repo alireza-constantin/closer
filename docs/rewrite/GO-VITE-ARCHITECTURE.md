@@ -30,9 +30,9 @@ apps/api/
   internal/history/                  former/current authorized projections
   internal/admin/                    catalog, inventory, analytics
   internal/realtime/                 NOTIFY listener, registry, SSE handler
-  internal/postgres/                 pool setup, transaction/retry/lock helpers
+  internal/postgres/                 pool, transaction and adapter infrastructure
+    sqlc/                             generated code; never hand edited
   db/queries/                        sqlc SQL source
-  db/sqlc/                           generated code; never hand edited
   db/migrations/                     reviewed baseline and later SQL migrations
   sqlc.yaml
 ```
@@ -41,14 +41,192 @@ apps/api/
 typed result/error, and serializes a DTO. It owns no Pair, Private, auth, or
 authorization transition. Domain services own authorization that depends on
 domain state, transaction scope, row locking, validation, idempotency, and
-the returned application projection. Services may depend only on their own
-types, narrow query interfaces, `postgres`, and lower-level shared helpers;
-they do not import `httpapi` or another feature's implementation. `realtime`
-accepts already-committed invalidation metadata and has no domain authority.
+the returned application projection. They depend only on normal Go types and
+small, consumer-owned ports; they never import `httpapi`, `postgres`, `pgx`,
+or generated sqlc packages. `realtime` accepts already-committed invalidation
+metadata and has no domain authority.
 
-Generated sqlc row types stay inside persistence/service code. HTTP DTOs are
-hand-authored JSON types in `internal/httpapi` (with generated TypeScript
-types at the frontend boundary); database rows are never HTTP responses.
+Generated sqlc rows stay inside `internal/postgres` adapters. HTTP DTOs are
+hand-authored JSON types in `internal/httpapi`, domain/application models are
+feature-owned normal Go types, and database rows are persistence-only types.
+No type crosses all three layers merely for convenience.
+
+### 0.1a Final package structure and dependency direction
+
+This is the target tree, not authorization to create placeholders. `GO-01`
+creates only the process/config/HTTP foundation it needs; the feature and
+feature-specific Postgres directories appear only in their owning ticket.
+`SOURCE`, `GENERATED`, `TRANSPORT`, `DOMAIN/APPLICATION`, and
+`INFRASTRUCTURE` describe responsibility, not a generic layer framework.
+
+```text
+apps/api/
+  go.mod                                      # SOURCE: module definition
+  sqlc.yaml                                   # SOURCE: generator configuration
+  cmd/
+    server/
+      main.go                                 # SOURCE: process wiring only
+  db/
+    queries/                                  # SOURCE: sqlc SQL by feature
+      auth.sql
+      participant.sql
+      pair.sql
+      invite.sql
+      question.sql
+      together.sql
+      private.sql
+      history.sql
+      admin.sql
+    migrations/                               # SOURCE: reviewed SQL at CUTOVER-01
+  internal/
+    config/                                   # INFRASTRUCTURE: typed env configuration
+    httpapi/                                  # TRANSPORT: never domain behavior
+      router.go
+      middleware/
+      auth/                                   # feature route/handler/DTO files as needed
+      participant/
+      pair/
+      invite/
+      question/
+      together/
+      private/
+      history/
+      admin/
+    auth/                                     # DOMAIN/APPLICATION: identity, sessions, Admin actor
+    participant/                              # DOMAIN/APPLICATION: onboarding/profile resolution
+    pair/                                     # DOMAIN/APPLICATION: Pair, membership, era, termination
+    invite/                                   # DOMAIN/APPLICATION: initial/rejoin credentials and claim
+    question/                                 # DOMAIN/APPLICATION: revisions, lifecycle, eligibility
+    together/                                 # DOMAIN/APPLICATION: Session and occurrence transitions
+    private/                                  # DOMAIN/APPLICATION: confidential Conversation/Round transitions
+    history/                                  # DOMAIN/APPLICATION: authorized read projections only
+    admin/                                    # DOMAIN/APPLICATION: editorial/read coordination only
+    realtime/                                 # INFRASTRUCTURE: Publisher contract and fanout implementation
+    postgres/                                 # INFRASTRUCTURE: never a domain repository dump
+      pool.go
+      tx.go
+      errors.go
+      listen.go                               # only if listener setup belongs here
+      sqlc/                                   # GENERATED: package-private persistence detail
+      auth/                                   # adapters, created only when a feature needs one
+      participant/
+      pair/
+      invite/
+      question/
+      together/
+      private/
+      history/
+      admin/
+```
+
+`cmd/server/main.go` loads validated config; constructs logger, pool, concrete
+Postgres adapters, feature modules, realtime publisher/fanout, and HTTP router;
+then runs graceful shutdown. It contains no SQL, handler, auth, or domain rule.
+If this becomes unwieldy after real wiring exists, a bootstrap module may be
+introduced then—not before.
+
+`internal/httpapi` is transport-organized: `router.go`, narrowly scoped
+middleware, then feature folders containing only routes, handlers, and DTOs.
+Handlers resolve an actor, parse/validate path/query/body, call an application
+operation, map a typed error, and serialize. HTTP-only security checks may be
+middleware; no handler obtains a row lock, writes SQL, starts a transaction,
+selects a Question, or decides a domain authorization/lifecycle rule.
+
+Feature packages are the application modules. They use only files justified by
+their operation—typically `service.go`, feature models/commands/results, a
+small `port.go` when a seam is real, and `errors.go` only when errors are not
+already naturally local. They do not receive boilerplate `repository`,
+`service`, `manager`, `provider`, or `model` layers by default.
+
+`internal/postgres` root owns pool lifecycle, transaction primitive, low-level
+database error classification, and optionally direct listener setup. It does
+not own a generic repository framework or become the home for all domain SQL.
+Feature-specific concrete adapters live below it, for example
+`internal/postgres/private`, and translate between feature ports/models and
+sqlc/pgx. The adapters may import their feature package to implement a
+consumer-owned port; the feature package never imports back.
+
+The allowed graph is:
+
+```text
+cmd/server
+  -> config, postgres infrastructure/adapters, realtime implementation, feature modules, httpapi
+httpapi
+  -> feature modules, auth actor middleware, realtime SSE transport adapter
+feature module
+  -> its own models/errors/consumer-owned ports, realtime Publisher/Event contract, context, standard library
+postgres/<feature> adapter
+  -> postgres root, postgres/sqlc generated code, feature port/model package
+realtime implementation
+  -> postgres listener/publisher infrastructure, realtime Publisher/Event contract
+```
+
+The following directions are forbidden:
+
+```text
+auth|participant|pair|invite|question|together|private|history -> httpapi, chi, net/http, JSON, cookies, SSE wire code
+auth|participant|pair|invite|question|together|private|history -> postgres, pgx, postgres/sqlc generated types
+postgres or postgres/<feature> -> httpapi
+private|together|pair|question|invite|history -> admin
+feature package -> another feature's concrete service implementation
+HTTP DTO <-> domain/application model <-> sqlc row as a shared universal type
+```
+
+`admin` is deliberately one-way: it may coordinate approved Question editorial
+operations and cross-domain read/query dependencies for catalog, coverage,
+inventory, and analytics; no core domain depends on Admin. `history` is a
+read/projection module, not a second lifecycle service: its port reads the
+membership/era, former-name, Reveal, Private, and Together facts needed to
+produce an already-authorized viewer-relative projection. `history` owns no
+state mutation. `realtime` offers a small framework-free `Publisher`/`Event`
+seam—the one deliberate cross-domain infrastructure contract. Domain
+operations know only a Pair identifier and event type, not NOTIFY payloads,
+subscriber maps, heartbeats, EventSource, flushing, or SSE formatting. The SSE
+handler belongs under `httpapi` and adapts the realtime fanout to HTTP.
+
+### 0.1b Ports, transactions, errors, context, and logging
+
+Interfaces are exceptional, small, and defined by their consumer feature. A
+feature uses one only when it needs a real seam: a persistence adapter, the
+post-commit `realtime.Publisher`, a deterministic clock/random source where
+the operation actually varies, or a focused cross-domain fact provider. One
+concrete dependency is not enough reason to create an interface. There is no
+global `Repository`, `Service`, `Manager`, `Provider`, `common`, `shared`,
+`core`, `utils`, or `helpers` package. Cohesive helpers stay with their owner,
+such as email/token handling in auth or invite.
+
+For a high-risk operation, the feature service owns visible orchestration. Its
+consumer-owned transaction port is shaped for that operation, for example a
+Private store can expose `WithinTx(ctx, func(PrivateStore) error) error`; the
+callback captures the result while the service locks, validates, applies
+idempotency, and orders mutations. Its Postgres adapter begins/commits/rolls
+back the single `pgx.Tx` and provides transaction-bound sqlc queries internally.
+No repository begins an unrelated hidden transaction, and no pgx/sqlc value
+escapes to the service. The same pattern applies to Invite claim, Pair
+termination, Together transitions, and Question revision/withdrawal. An Invite
+claim service owns credential redemption orchestration; its focused port
+performs Pair membership/era work atomically without making Invite duplicate
+Pair policy or importing a concrete Pair service. Pair termination similarly
+uses its own focused store to end dependent activity without importing Private
+or Together.
+
+The default mutation ordering is explicit: begin -> lock -> validate -> mutate
+-> commit -> publish metadata invalidation -> return. Publication is after a
+successful application commit. PostgreSQL `NOTIFY` may be issued within that
+same transaction only when its delivery is guaranteed to occur after commit;
+the service still treats failure to publish after a committed state as
+non-rollbackable and clients reconcile by refetching.
+
+Feature packages define meaningful errors such as `private.ErrCandidateResolved`,
+`pair.ErrTerminated`, or `question.ErrStaleRevision`. `postgres` maps driver
+failures into lower-level categories; `httpapi` alone maps typed feature errors
+to HTTP status and stable API code. `context.Context` carries request lifetime,
+cancellation, and deadline only. Middleware may place a type-safe resolved
+actor in request context, but services receive actor identity explicitly in a
+command whenever authorization depends on it. Configuration is typed in
+`internal/config`; no business package calls `os.Getenv`. Logging uses
+structured infrastructure logging, excludes raw credentials/tokens/invites and
+Private answer content, and is injected only where an operational need is real.
 
 Use `pgxpool` for normal queries, an explicit `pgx.Tx` for every multi-step
 command, and one dedicated long-lived `pgx.Conn` per API process for `LISTEN`.
@@ -77,8 +255,9 @@ Direct parameterized `pgx` is acceptable only in a named repository helper for
 dynamic Admin analytics/reporting with optional filters, large conditional
 aggregates, or a query whose generated API would obscure its semantics. It is
 not permission to use an ORM, concatenate SQL, or hide a transaction. A
-service receives `Queries.WithTx(tx)` (or a transaction-bound repository) so
-every query in a command uses exactly its command transaction.
+Postgres adapter receives `Queries.WithTx(tx)` internally; a feature service
+sees only its own transaction-bound consumer port, so every query still uses
+exactly the command transaction without leaking sqlc or pgx outward.
 
 ### 0.3 Auth model and lifecycle
 
@@ -702,7 +881,7 @@ small postgres/queries interfaces; HTTP must not own SQL. Keep transaction
 boundaries in domain command functions so a reviewer can see the Pair lock and
 all mutations together.
 
-## 13. SQLC and PGX design
+## 13. Historical REWRITE-00 SQLC/PGX design (superseded by sections 0.1–0.2)
 
 Turn straightforward projections and existence checks into sqlc queries. Keep
 high-risk commands as handwritten transaction orchestration calling small
@@ -732,7 +911,7 @@ Recommended sqlc groups:
 Do not generate a generic ORM repository per table. Small helpers are justified
 for token hashing, deterministic ranking, error mapping, and lock acquisition.
 
-## 14. Error model
+## 14. Historical REWRITE-00 error model (superseded by sections 0.1b and 0.4)
 
 Preserve stable domain codes, even if Go names are typed constants:
 
@@ -766,7 +945,7 @@ Map authorization failures to 401/403 or resource-specific 404 according to
 the current adapter, state conflicts to 409, malformed input to 400, and never
 return raw PostgreSQL errors.
 
-## 15. Suitability verdict
+## 15. Historical REWRITE-00 suitability verdict
 
 Go + Vite remains a good fit because the repo's hard requirements are explicit
 transactions, row locks, PostgreSQL constraints, small JSON projections, and a
