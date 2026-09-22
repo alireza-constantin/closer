@@ -31,7 +31,7 @@ describe("Private realtime reconciliation", () => {
     FakeEventSource.instances = [];
   });
 
-  test("invalidates only the Pair's Private query prefix and closes on termination", async () => {
+  test("invalidates conversation and round queries and closes on termination", async () => {
     globalThis.EventSource = FakeEventSource as unknown as typeof EventSource;
     const client = new QueryClient();
     let invalidated = 0;
@@ -45,10 +45,10 @@ describe("Private realtime reconciliation", () => {
     expect(source.url).toBe("/api/v1/pairs/pair-1/events");
     source.emit("private.changed");
     await Promise.resolve();
-    expect(invalidated).toBe(1);
+    expect(invalidated).toBe(2);
     source.emit("pair.terminated");
     await Promise.resolve();
-    expect(invalidated).toBe(2);
+    expect(invalidated).toBe(4);
     expect(source.closed).toBe(true);
     dispose();
     expect(source.closed).toBe(true);
