@@ -13,9 +13,9 @@ import (
 )
 
 type inviteLandingResponse struct {
-	InviterDisplayName string  `json:"inviterDisplayName"`
-	RelationshipType   string  `json:"relationshipType"`
-	IntendedPersonName *string `json:"intendedPersonName"`
+	InviterDisplayName  string  `json:"inviterDisplayName"`
+	RelationshipType    string  `json:"relationshipType"`
+	IntendedPersonName  *string `json:"intendedPersonName"`
 	ClaimantDisplayName *string `json:"claimantDisplayName,omitempty"`
 }
 type inviteStateResponse struct {
@@ -26,6 +26,22 @@ type inviteStateResponse struct {
 type inviteClaimResponse struct {
 	PairID          string `json:"pairId"`
 	MembershipEraID string `json:"membershipEraId"`
+}
+
+type rejoinLandingResponse struct {
+	TargetSlot string `json:"targetSlot"`
+}
+
+type rejoinIssueResponse struct {
+	Token                        string    `json:"token"`
+	ExpiresAt                    time.Time `json:"expiresAt"`
+	TargetParticipantDisplayName string    `json:"targetParticipantDisplayName"`
+}
+
+type rejoinResponse struct {
+	PairID          string `json:"pairId"`
+	MembershipEraID string `json:"membershipEraId"`
+	ParticipantID   string `json:"participantId"`
 }
 
 func registerInviteRoutes(router chi.Router, authService *auth.Service, participantService *participant.Service, service *invite.Service, security SecurityConfig) {
@@ -43,8 +59,13 @@ func registerInviteRoutes(router chi.Router, authService *auth.Service, particip
 		var claimantName *string
 		if actor, authenticated := actorFromContext(r.Context()); authenticated && actor.Kind != auth.UserKindAdmin {
 			claimant, resolveErr := participantService.Resolve(r.Context(), actor)
-			if resolveErr != nil { writeParticipantError(w,r,resolveErr); return }
-			if claimant != nil { claimantName = &claimant.DisplayName }
+			if resolveErr != nil {
+				writeParticipantError(w, r, resolveErr)
+				return
+			}
+			if claimant != nil {
+				claimantName = &claimant.DisplayName
+			}
 		}
 		writeJSON(w, http.StatusOK, inviteLandingResponse{InviterDisplayName: landing.InviterDisplayName, RelationshipType: landing.RelationshipType, IntendedPersonName: landing.IntendedPersonName, ClaimantDisplayName: claimantName})
 	})
@@ -84,6 +105,48 @@ func registerInviteRoutes(router chi.Router, authService *auth.Service, particip
 			return
 		}
 		writeJSON(w, http.StatusOK, inviteClaimResponse{PairID: claimed.PairID, MembershipEraID: claimed.MembershipEraID})
+	})
+	router.With(authActorMiddleware(authService)).Get("/rejoin/{token}", func(w http.ResponseWriter, r *http.Request) {
+		setPrivateNoStore(w)
+		landing, err := service.RejoinPreview(r.Context(), chi.URLParam(r, "token"))
+		if err != nil {
+			writeInviteError(w, r, err)
+			return
+		}
+		if landing == nil {
+			writeAPIError(w, r, http.StatusNotFound, "REJOIN_INVALID", "This rejoin link is unavailable.")
+			return
+		}
+		writeJSON(w, http.StatusOK, rejoinLandingResponse{TargetSlot: landing.TargetSlot})
+	})
+	router.With(authActorMiddleware(authService)).Post("/rejoin/{token}/redeem", func(w http.ResponseWriter, r *http.Request) {
+		setPrivateNoStore(w)
+		if !requireTrustedMutationOrigin(w, r, security) {
+			return
+		}
+		actor, ok := requiredConsumerActor(w, r)
+		if !ok {
+			return
+		}
+		claimant, err := participantService.Resolve(r.Context(), actor)
+		if err != nil {
+			writeParticipantError(w, r, err)
+			return
+		}
+		if claimant != nil {
+			writeInviteError(w, r, invite.ErrRejoinUnavailable)
+			return
+		}
+		var request onboardingRequest
+		if !decodeDomainJSON(w, r, &request) {
+			return
+		}
+		rejoined, err := service.Rejoin(r.Context(), chi.URLParam(r, "token"), actor.AuthUserID, request.DisplayName)
+		if err != nil {
+			writeInviteError(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, rejoinResponse{PairID: rejoined.PairID, MembershipEraID: rejoined.MembershipEraID, ParticipantID: rejoined.ParticipantID})
 	})
 	router.With(authActorMiddleware(authService)).Get("/pairs/{pairID}/invite", func(w http.ResponseWriter, r *http.Request) {
 		setPrivateNoStore(w)
@@ -167,6 +230,37 @@ func registerInviteRoutes(router chi.Router, authService *auth.Service, particip
 		clearInitialInviteCookie(w, r, pairID, security)
 		w.WriteHeader(http.StatusNoContent)
 	})
+	router.With(authActorMiddleware(authService)).Post("/pairs/{pairID}/rejoin", func(w http.ResponseWriter, r *http.Request) {
+		setPrivateNoStore(w)
+		if !requireTrustedMutationOrigin(w, r, security) {
+			return
+		}
+		actor, ok := requiredActorParticipant(w, r, participantService)
+		if !ok {
+			return
+		}
+		issued, err := service.IssueRejoin(r.Context(), actor.ID, chi.URLParam(r, "pairID"))
+		if err != nil {
+			writeInviteError(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, rejoinIssueResponse{Token: issued.Token, ExpiresAt: issued.ExpiresAt, TargetParticipantDisplayName: issued.TargetParticipantDisplayName})
+	})
+	router.With(authActorMiddleware(authService)).Delete("/pairs/{pairID}/rejoin", func(w http.ResponseWriter, r *http.Request) {
+		setPrivateNoStore(w)
+		if !requireTrustedMutationOrigin(w, r, security) {
+			return
+		}
+		actor, ok := requiredActorParticipant(w, r, participantService)
+		if !ok {
+			return
+		}
+		if err := service.RevokeRejoin(r.Context(), actor.ID, chi.URLParam(r, "pairID")); err != nil {
+			writeInviteError(w, r, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 }
 
 func initialInviteCookieName(pairID string) string { return "closer-initial-invite-" + pairID }
@@ -177,7 +271,9 @@ func clearInitialInviteCookie(w http.ResponseWriter, r *http.Request, pairID str
 	http.SetCookie(w, &http.Cookie{Name: initialInviteCookieName(pairID), Value: "", Path: "/", HttpOnly: true, Secure: requestIsSecure(r, security), SameSite: http.SameSiteLaxMode, MaxAge: -1})
 }
 func requestIsSecure(r *http.Request, security SecurityConfig) bool {
-	if r.TLS != nil { return true }
+	if r.TLS != nil {
+		return true
+	}
 	peer := remoteAddressIP(r.RemoteAddr)
 	return peer != nil && isTrustedProxy(peer, security.TrustedProxyCIDRs) && strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 }
@@ -194,6 +290,10 @@ func writeInviteError(w http.ResponseWriter, r *http.Request, err error) {
 		writeAPIError(w, r, http.StatusConflict, "INVITE_INVALID", "This invitation is unavailable.")
 	case errors.Is(err, invite.ErrDuplicatePair):
 		writeAPIError(w, r, http.StatusConflict, "DUPLICATE_ACTIVE_PAIR", "These Participants already share an active Pair.")
+	case errors.Is(err, invite.ErrDisplayNameInvalid):
+		writeAPIError(w, r, http.StatusBadRequest, "VALIDATION_ERROR", "Display name must be 1 to 40 characters.")
+	case errors.Is(err, invite.ErrRejoinUnavailable):
+		writeAPIError(w, r, http.StatusConflict, "REJOIN_INVALID", "This rejoin link is unavailable.")
 	default:
 		writeAuthInternalError(w, r)
 	}

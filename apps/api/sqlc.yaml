@@ -5,6 +5,7 @@ sql:
       - "db/schema/001_auth.sql"
       - "db/schema/002_participant_pair.sql"
       - "db/schema/003_initial_invite.sql"
+      - "db/schema/004_rejoin_invite.sql"
     queries:
       - "db/queries/auth.sql"
       - "db/queries/participant.sql"

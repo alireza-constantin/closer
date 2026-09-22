@@ -105,3 +105,136 @@ RETURNING id;
 
 -- name: ClearIntendedPersonName :exec
 UPDATE pair SET intended_person_name = NULL WHERE id = sqlc.arg(pair_id);
+
+-- name: GetRejoinInviteLanding :one
+SELECT target_slot
+FROM rejoin_invite AS i
+JOIN pair AS p ON p.id = i.pair_id
+WHERE i.token_hash = sqlc.arg(token_hash)
+  AND p.terminated_at IS NULL
+  AND i.revoked_at IS NULL
+  AND i.redeemed_at IS NULL
+  AND i.expires_at > clock_timestamp();
+
+-- name: LockActivePairForRejoin :one
+SELECT id, terminated_at
+FROM pair
+WHERE id = sqlc.arg(pair_id)
+FOR UPDATE;
+
+-- name: GetActiveMembershipForRejoinActor :one
+SELECT m.id, m.pair_id, m.participant_id, m.slot, p.display_name,
+       u.id AS auth_user_id, u.kind AS auth_user_kind
+FROM pair_membership AS m
+JOIN participant AS p ON p.id = m.participant_id
+JOIN auth_user AS u ON u.id = p.auth_user_id
+WHERE m.pair_id = sqlc.arg(pair_id)
+  AND m.participant_id = sqlc.arg(participant_id)
+  AND m.ended_at IS NULL;
+
+-- name: GetEligibleRejoinTarget :one
+SELECT m.id, m.pair_id, m.participant_id, m.slot, p.display_name,
+       u.id AS auth_user_id, u.kind AS auth_user_kind
+FROM pair_membership AS m
+JOIN participant AS p ON p.id = m.participant_id
+JOIN auth_user AS u ON u.id = p.auth_user_id
+WHERE m.pair_id = sqlc.arg(pair_id)
+  AND m.slot = sqlc.arg(target_slot)
+  AND m.ended_at IS NULL;
+
+-- name: GetCurrentMembershipEraForRejoin :one
+SELECT id, pair_id, first_membership_id, second_membership_id
+FROM pair_membership_era
+WHERE pair_id = sqlc.arg(pair_id) AND ended_at IS NULL
+FOR UPDATE;
+
+-- name: FindRejoinInviteForIssue :one
+SELECT id, expires_at
+FROM rejoin_invite
+WHERE pair_id = sqlc.arg(pair_id)
+  AND target_slot = sqlc.arg(target_slot)
+  AND target_participant_id = sqlc.arg(target_participant_id)
+  AND revoked_at IS NULL AND redeemed_at IS NULL
+  AND expires_at > clock_timestamp()
+ORDER BY created_at DESC
+LIMIT 1;
+
+-- name: RevokeActiveRejoinInvitesForTarget :exec
+UPDATE rejoin_invite SET revoked_at = clock_timestamp()
+WHERE pair_id = sqlc.arg(pair_id)
+  AND target_slot = sqlc.arg(target_slot)
+  AND target_participant_id = sqlc.arg(target_participant_id)
+  AND revoked_at IS NULL AND redeemed_at IS NULL;
+
+-- name: RevokeAllActiveRejoinInvitesForPair :exec
+UPDATE rejoin_invite SET revoked_at = clock_timestamp()
+WHERE pair_id = sqlc.arg(pair_id) AND revoked_at IS NULL AND redeemed_at IS NULL;
+
+-- name: CreateRejoinInvite :one
+INSERT INTO rejoin_invite (pair_id, target_slot, target_participant_id, token_hash, expires_at)
+VALUES (sqlc.arg(pair_id), sqlc.arg(target_slot), sqlc.arg(target_participant_id), sqlc.arg(token_hash), sqlc.arg(expires_at))
+RETURNING id, expires_at;
+
+-- name: GetRejoinInviteByHash :one
+SELECT id, pair_id, target_slot, target_participant_id, expires_at, revoked_at, redeemed_at
+FROM rejoin_invite
+WHERE token_hash = sqlc.arg(token_hash);
+
+-- name: GetRejoinInviteForUpdate :one
+SELECT id, pair_id, target_slot, target_participant_id, expires_at, revoked_at, redeemed_at
+FROM rejoin_invite
+WHERE id = sqlc.arg(id)
+FOR UPDATE;
+
+-- name: HasActiveAuthSessionForRejoinTarget :one
+SELECT EXISTS (
+    SELECT 1 FROM auth_session
+    WHERE auth_user_id = sqlc.arg(auth_user_id)
+      AND revoked_at IS NULL AND expires_at > clock_timestamp()
+)::boolean;
+
+-- name: CreateRejoinParticipant :one
+INSERT INTO participant (auth_user_id, display_name)
+VALUES (sqlc.arg(auth_user_id), sqlc.arg(display_name))
+ON CONFLICT (auth_user_id) DO NOTHING
+RETURNING id, auth_user_id, display_name;
+
+-- name: RedeemRejoinInvite :execrows
+UPDATE rejoin_invite
+SET redeemed_at = clock_timestamp(), redeemed_by_participant_id = sqlc.arg(participant_id)
+WHERE id = sqlc.arg(id)
+  AND revoked_at IS NULL AND redeemed_at IS NULL
+  AND expires_at > clock_timestamp();
+
+-- name: EndMembershipForRejoin :execrows
+UPDATE pair_membership
+SET ended_at = sqlc.arg(ended_at), ended_display_name = sqlc.arg(ended_display_name)
+WHERE id = sqlc.arg(id) AND ended_at IS NULL;
+
+-- name: EndMembershipEraForRejoin :execrows
+UPDATE pair_membership_era
+SET ended_at = sqlc.arg(ended_at)
+WHERE id = sqlc.arg(id) AND ended_at IS NULL;
+
+-- name: CreateReplacementMembership :one
+INSERT INTO pair_membership (pair_id, participant_id, slot)
+VALUES (sqlc.arg(pair_id), sqlc.arg(participant_id), sqlc.arg(slot))
+RETURNING id;
+
+-- name: CreateReplacementMembershipEra :one
+INSERT INTO pair_membership_era (pair_id, first_membership_id, second_membership_id)
+VALUES (sqlc.arg(pair_id), sqlc.arg(first_membership_id), sqlc.arg(second_membership_id))
+RETURNING id;
+
+-- name: HasDuplicateActiveParticipantPairForRejoin :one
+SELECT EXISTS (
+  SELECT 1
+  FROM pair_membership first_member
+  JOIN pair_membership second_member ON second_member.pair_id = first_member.pair_id
+  JOIN pair_membership_era era ON era.pair_id = first_member.pair_id AND era.ended_at IS NULL
+  JOIN pair other_pair ON other_pair.id = first_member.pair_id AND other_pair.terminated_at IS NULL
+  WHERE first_member.pair_id <> sqlc.arg(excluded_pair_id)
+    AND first_member.ended_at IS NULL AND second_member.ended_at IS NULL
+    AND ((first_member.participant_id = sqlc.arg(participant_a) AND second_member.participant_id = sqlc.arg(participant_b))
+      OR (first_member.participant_id = sqlc.arg(participant_b) AND second_member.participant_id = sqlc.arg(participant_a)))
+)::boolean;

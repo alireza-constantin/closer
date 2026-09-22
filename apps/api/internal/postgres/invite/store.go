@@ -170,6 +170,241 @@ func (s *Store) Revoke(ctx context.Context, participantID, pairID string) error 
 	})
 }
 
+func (s *Store) GetRejoinLanding(ctx context.Context, tokenHash [32]byte) (*domain.RejoinLanding, error) {
+	var result domain.RejoinLanding
+	err := s.pool.WithConnection(ctx, func(db postgres.QueryDB) error {
+		slot, err := sqlc.New(db).GetRejoinInviteLanding(ctx, tokenHash[:])
+		if err != nil {
+			return err
+		}
+		result = domain.RejoinLanding{TargetSlot: string(slot)}
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (s *Store) IssueRejoin(ctx context.Context, participantID, pairID string) (domain.RejoinIssued, error) {
+	var result domain.RejoinIssued
+	token, err := domain.NewToken()
+	if err != nil {
+		return result, err
+	}
+	tokenHash := sha256.Sum256([]byte(token))
+	pairUUID, err := parseUUID(pairID)
+	if err != nil {
+		return result, domain.ErrForbidden
+	}
+	participantUUID, err := parseUUID(participantID)
+	if err != nil {
+		return result, domain.ErrForbidden
+	}
+	err = s.pool.WithinTx(ctx, func(db postgres.QueryDB) error {
+		queries := sqlc.New(db)
+		pair, err := queries.LockActivePairForRejoin(ctx, pairUUID)
+		if errors.Is(err, pgx.ErrNoRows) || pair.TerminatedAt.Valid {
+			return domain.ErrForbidden
+		}
+		if err != nil {
+			return err
+		}
+		actor, err := queries.GetActiveMembershipForRejoinActor(ctx, sqlc.GetActiveMembershipForRejoinActorParams{PairID: pairUUID, ParticipantID: participantUUID})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ErrForbidden
+		}
+		if err != nil {
+			return err
+		}
+		targetSlot := sqlc.PairSlotSecond
+		if actor.Slot == sqlc.PairSlotSecond {
+			targetSlot = sqlc.PairSlotFirst
+		}
+		target, err := queries.GetEligibleRejoinTarget(ctx, sqlc.GetEligibleRejoinTargetParams{PairID: pairUUID, TargetSlot: targetSlot})
+		if errors.Is(err, pgx.ErrNoRows) || target.AuthUserKind != "anonymous" {
+			return domain.ErrRejoinUnavailable
+		}
+		if err != nil {
+			return err
+		}
+		active, err := queries.HasActiveAuthSessionForRejoinTarget(ctx, target.AuthUserID)
+		if err != nil {
+			return err
+		}
+		if active {
+			return domain.ErrRejoinUnavailable
+		}
+		if err := queries.RevokeActiveRejoinInvitesForTarget(ctx, sqlc.RevokeActiveRejoinInvitesForTargetParams{PairID: pairUUID, TargetSlot: targetSlot, TargetParticipantID: target.ParticipantID}); err != nil {
+			return err
+		}
+		expiresAt := time.Now().UTC().Add(domain.RejoinLifetime)
+		if _, err := queries.CreateRejoinInvite(ctx, sqlc.CreateRejoinInviteParams{
+			PairID: pairUUID, TargetSlot: targetSlot, TargetParticipantID: target.ParticipantID,
+			TokenHash: tokenHash[:], ExpiresAt: timestamptz(expiresAt),
+		}); err != nil {
+			return err
+		}
+		result = domain.RejoinIssued{Token: token, ExpiresAt: expiresAt, TargetParticipantDisplayName: target.DisplayName}
+		return nil
+	})
+	return result, err
+}
+
+func (s *Store) RevokeRejoin(ctx context.Context, participantID, pairID string) error {
+	pairUUID, err := parseUUID(pairID)
+	if err != nil {
+		return domain.ErrForbidden
+	}
+	participantUUID, err := parseUUID(participantID)
+	if err != nil {
+		return domain.ErrForbidden
+	}
+	return s.pool.WithinTx(ctx, func(db postgres.QueryDB) error {
+		queries := sqlc.New(db)
+		pair, err := queries.LockActivePairForRejoin(ctx, pairUUID)
+		if errors.Is(err, pgx.ErrNoRows) || pair.TerminatedAt.Valid {
+			return domain.ErrForbidden
+		}
+		if err != nil {
+			return err
+		}
+		actor, err := queries.GetActiveMembershipForRejoinActor(ctx, sqlc.GetActiveMembershipForRejoinActorParams{PairID: pairUUID, ParticipantID: participantUUID})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ErrForbidden
+		}
+		if err != nil {
+			return err
+		}
+		targetSlot := sqlc.PairSlotSecond
+		if actor.Slot == sqlc.PairSlotSecond {
+			targetSlot = sqlc.PairSlotFirst
+		}
+		target, err := queries.GetEligibleRejoinTarget(ctx, sqlc.GetEligibleRejoinTargetParams{PairID: pairUUID, TargetSlot: targetSlot})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ErrRejoinUnavailable
+		}
+		if err != nil {
+			return err
+		}
+		return queries.RevokeActiveRejoinInvitesForTarget(ctx, sqlc.RevokeActiveRejoinInvitesForTargetParams{PairID: pairUUID, TargetSlot: targetSlot, TargetParticipantID: target.ParticipantID})
+	})
+}
+
+func (s *Store) Rejoin(ctx context.Context, tokenHash [32]byte, authUserID, displayName string) (domain.Rejoined, error) {
+	var result domain.Rejoined
+	authUUID, err := parseUUID(authUserID)
+	if err != nil {
+		return result, domain.ErrRejoinUnavailable
+	}
+	err = s.pool.WithinTx(ctx, func(db postgres.QueryDB) error {
+		queries := sqlc.New(db)
+		resolved, err := queries.GetRejoinInviteByHash(ctx, tokenHash[:])
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ErrRejoinUnavailable
+		}
+		if err != nil {
+			return err
+		}
+		pair, err := queries.LockActivePairForRejoin(ctx, resolved.PairID)
+		if errors.Is(err, pgx.ErrNoRows) || pair.TerminatedAt.Valid {
+			return domain.ErrRejoinUnavailable
+		}
+		if err != nil {
+			return err
+		}
+		invite, err := queries.GetRejoinInviteForUpdate(ctx, resolved.ID)
+		if errors.Is(err, pgx.ErrNoRows) || invite.RevokedAt.Valid || invite.RedeemedAt.Valid || !invite.ExpiresAt.Time.After(time.Now()) {
+			return domain.ErrRejoinUnavailable
+		}
+		if err != nil {
+			return err
+		}
+		target, err := queries.GetEligibleRejoinTarget(ctx, sqlc.GetEligibleRejoinTargetParams{PairID: invite.PairID, TargetSlot: invite.TargetSlot})
+		if errors.Is(err, pgx.ErrNoRows) || target.ParticipantID != invite.TargetParticipantID || target.AuthUserKind != "anonymous" {
+			return domain.ErrRejoinUnavailable
+		}
+		if err != nil {
+			return err
+		}
+		era, err := queries.GetCurrentMembershipEraForRejoin(ctx, invite.PairID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ErrRejoinUnavailable
+		}
+		if err != nil {
+			return err
+		}
+		if target.ID != era.FirstMembershipID && target.ID != era.SecondMembershipID {
+			return domain.ErrRejoinUnavailable
+		}
+		continuingMembershipID := era.FirstMembershipID
+		if continuingMembershipID == target.ID {
+			continuingMembershipID = era.SecondMembershipID
+		}
+		replacement, err := queries.CreateRejoinParticipant(ctx, sqlc.CreateRejoinParticipantParams{AuthUserID: authUUID, DisplayName: displayName})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ErrRejoinUnavailable
+		}
+		if err != nil {
+			return err
+		}
+		firstID, secondID := continuingMembershipID, replacement.ID
+		if firstID.String() > secondID.String() {
+			firstID, secondID = secondID, firstID
+		}
+		if err := queries.LockClaimParticipantPair(ctx, firstID.String()+":"+secondID.String()); err != nil {
+			return err
+		}
+		duplicate, err := queries.HasDuplicateActiveParticipantPairForRejoin(ctx, sqlc.HasDuplicateActiveParticipantPairForRejoinParams{ExcludedPairID: invite.PairID, ParticipantA: firstID, ParticipantB: secondID})
+		if err != nil {
+			return err
+		}
+		if duplicate {
+			return domain.ErrDuplicatePair
+		}
+		endedAt := time.Now().UTC()
+		if count, err := queries.EndMembershipForRejoin(ctx, sqlc.EndMembershipForRejoinParams{ID: target.ID, EndedAt: timestamptz(endedAt), EndedDisplayName: pgtype.Text{String: target.DisplayName, Valid: true}}); err != nil {
+			return err
+		} else if count != 1 {
+			return domain.ErrRejoinUnavailable
+		}
+		if count, err := queries.EndMembershipEraForRejoin(ctx, sqlc.EndMembershipEraForRejoinParams{ID: era.ID, EndedAt: timestamptz(endedAt)}); err != nil {
+			return err
+		} else if count != 1 {
+			return domain.ErrRejoinUnavailable
+		}
+		if count, err := queries.RedeemRejoinInvite(ctx, sqlc.RedeemRejoinInviteParams{ID: invite.ID, ParticipantID: replacement.ID}); err != nil {
+			return err
+		} else if count != 1 {
+			return domain.ErrRejoinUnavailable
+		}
+		replacementMembershipID, err := queries.CreateReplacementMembership(ctx, sqlc.CreateReplacementMembershipParams{PairID: invite.PairID, ParticipantID: replacement.ID, Slot: invite.TargetSlot})
+		if err != nil {
+			return err
+		}
+		firstMembershipID, secondMembershipID := continuingMembershipID, replacementMembershipID
+		if invite.TargetSlot == sqlc.PairSlotFirst {
+			firstMembershipID, secondMembershipID = replacementMembershipID, continuingMembershipID
+		}
+		nextEraID, err := queries.CreateReplacementMembershipEra(ctx, sqlc.CreateReplacementMembershipEraParams{PairID: invite.PairID, FirstMembershipID: firstMembershipID, SecondMembershipID: secondMembershipID})
+		if err != nil {
+			return err
+		}
+		if err := queries.RevokeActiveRejoinInvitesForTarget(ctx, sqlc.RevokeActiveRejoinInvitesForTargetParams{PairID: invite.PairID, TargetSlot: invite.TargetSlot, TargetParticipantID: invite.TargetParticipantID}); err != nil {
+			return err
+		}
+		result = domain.Rejoined{PairID: invite.PairID.String(), MembershipEraID: nextEraID.String(), ParticipantID: replacement.ID.String()}
+		return nil
+	})
+	if err != nil {
+		return domain.Rejoined{}, fmt.Errorf("redeem rejoin credential: %w", err)
+	}
+	return result, nil
+}
+
 func (s *Store) Claim(ctx context.Context, tokenHash [32]byte, participantID string) (domain.Claimed, error) {
 	participantUUID, err := parseUUID(participantID)
 	if err != nil {

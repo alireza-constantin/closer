@@ -181,3 +181,16 @@ type Participant struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
+
+type RejoinInvite struct {
+	ID                      pgtype.UUID        `json:"id"`
+	PairID                  pgtype.UUID        `json:"pair_id"`
+	TargetSlot              PairSlot           `json:"target_slot"`
+	TargetParticipantID     pgtype.UUID        `json:"target_participant_id"`
+	TokenHash               []byte             `json:"token_hash"`
+	ExpiresAt               pgtype.Timestamptz `json:"expires_at"`
+	RevokedAt               pgtype.Timestamptz `json:"revoked_at"`
+	RedeemedAt              pgtype.Timestamptz `json:"redeemed_at"`
+	RedeemedByParticipantID pgtype.UUID        `json:"redeemed_by_participant_id"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+}
