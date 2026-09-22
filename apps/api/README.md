@@ -61,6 +61,14 @@ The guard accepts only a loopback/local host and the exact database name
 `closer_test`; there is no fallback to application DB URLs. Tests skip when the
 variable is absent and fail if it points elsewhere.
 
+Legacy TypeScript/Next integration tests use a separate explicit
+`CLOSER_LEGACY_TEST_DATABASE_URL` targeting the loopback database
+`closer_legacy_test`. The two runtimes intentionally have incompatible identity
+schemas and must never alternate schemas in one physical database. The legacy
+test command supplies test-only `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, and an
+absent `ADMIN_USER_ID`; it never falls back to `DATABASE_URL`,
+`CLOSER_TEST_DATABASE_URL`, or `closer_dev`.
+
 The purpose-built Go auth schema is defined in `db/schema/001_auth.sql` and is
 independent of the legacy Better Auth schema. The new Go runtime owns UUID
 `auth_user.id`; the legacy Next runtime retains its Better Auth text IDs only

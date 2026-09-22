@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 
-import { resolveTestDatabaseUrl, validateTestDatabaseUrl } from "./test-database";
+import {
+  resolveLegacyTestDatabaseUrl,
+  resolveTestDatabaseUrl,
+  validateLegacyTestDatabaseUrl,
+  validateTestDatabaseUrl,
+} from "./test-database";
 
 describe("destructive integration database boundary", () => {
   test("requires an explicit test-only environment variable", () => {
@@ -19,5 +24,27 @@ describe("destructive integration database boundary", () => {
     expect(
       resolveTestDatabaseUrl(() => "postgres://tester:secret@127.0.0.1:5432/closer_test"),
     ).toContain("closer_test");
+  });
+
+  test("requires the explicit legacy integration environment variable", () => {
+    expect(() => resolveLegacyTestDatabaseUrl(() => undefined)).toThrow(
+      "CLOSER_LEGACY_TEST_DATABASE_URL",
+    );
+  });
+
+  test.each([
+    "postgres://tester:secret@localhost:5432/closer_test",
+    "postgres://tester:secret@db.example.test:5432/closer_legacy_test",
+    "postgres://tester:secret@ep.example.neon.tech:5432/closer_legacy_test",
+  ])("rejects unsafe legacy target %s", (databaseUrl) => {
+    expect(validateLegacyTestDatabaseUrl(databaseUrl)).toBeTruthy();
+  });
+
+  test("accepts a loopback closer_legacy_test target", () => {
+    expect(
+      resolveLegacyTestDatabaseUrl(
+        () => "postgres://tester:secret@127.0.0.1:5432/closer_legacy_test",
+      ),
+    ).toContain("closer_legacy_test");
   });
 });

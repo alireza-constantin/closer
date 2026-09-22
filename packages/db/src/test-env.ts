@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 
 import dotenv from "dotenv";
 
-import { resolveTestDatabaseUrl } from "./test-database";
+import { resolveLegacyTestDatabaseUrl } from "./test-database";
 
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const environmentFiles = [
@@ -26,8 +26,9 @@ if (process.env.CLOSER_ALLOW_DESTRUCTIVE_DB_TESTS !== "1") {
   );
 }
 
-const testDatabaseUrl = resolveTestDatabaseUrl((name) => process.env[name]);
+const testDatabaseUrl = resolveLegacyTestDatabaseUrl((name) => process.env[name]);
 
-// Integration tests use only the explicit, local closer_test connection.
+// Legacy TypeScript integration tests use only the explicit, local
+// closer_legacy_test connection. The Go rewrite owns closer_test.
 process.env.DATABASE_URL = testDatabaseUrl;
 process.env.REALTIME_DATABASE_URL = testDatabaseUrl;
