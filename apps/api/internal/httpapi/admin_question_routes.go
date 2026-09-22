@@ -36,6 +36,22 @@ func registerAdminQuestionRoutes(router chi.Router, authService *auth.Service, s
 			}
 			writeJSON(w, http.StatusOK, map[string]any{"items": items, "page": page, "pageSize": limit})
 		})
+		admin.Get("/duplicates", func(w http.ResponseWriter, r *http.Request) {
+			if _, ok := requireAdminActor(w, r, authService); !ok {
+				return
+			}
+			text := r.URL.Query().Get("text")
+			if text == "" {
+				writeAPIError(w, r, http.StatusBadRequest, "VALIDATION_ERROR", "Question wording is required.")
+				return
+			}
+			matches, err := service.FindDuplicates(r.Context(), text, r.URL.Query().Get("excludeQuestionId"))
+			if err != nil {
+				writeQuestionError(w, r, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"matches": matches})
+		})
 		admin.Post("/", func(w http.ResponseWriter, r *http.Request) {
 			actor, ok := requireAdminMutation(w, r, authService, security)
 			if !ok {

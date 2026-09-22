@@ -36,6 +36,7 @@ type Querier interface {
 	DeleteOldAuthRateLimits(ctx context.Context, dollar_1 interface{}) (int64, error)
 	FindFormerTerminatedPair(ctx context.Context, arg FindFormerTerminatedPairParams) (pgtype.UUID, error)
 	FindInitialInviteForIssue(ctx context.Context, pairID pgtype.UUID) (FindInitialInviteForIssueRow, error)
+	FindQuestionDuplicates(ctx context.Context, arg FindQuestionDuplicatesParams) ([]FindQuestionDuplicatesRow, error)
 	FindRejoinInviteForIssue(ctx context.Context, arg FindRejoinInviteForIssueParams) (FindRejoinInviteForIssueRow, error)
 	GetActiveFirstMembershipForClaim(ctx context.Context, pairID pgtype.UUID) (GetActiveFirstMembershipForClaimRow, error)
 	GetActiveMembershipForRejoinActor(ctx context.Context, arg GetActiveMembershipForRejoinActorParams) (GetActiveMembershipForRejoinActorRow, error)

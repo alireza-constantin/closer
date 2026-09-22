@@ -27,6 +27,14 @@ SELECT id, question_id, text, category, relationship_fit, mode_fit, intensity,
        withdrawn_by_admin_user_id, created_at
 FROM question_revision WHERE question_id = $1 ORDER BY revision_number DESC;
 
+-- name: FindQuestionDuplicates :many
+SELECT q.id, r.text, r.revision_number, q.is_active
+FROM question q JOIN question_revision r ON r.id = q.current_revision_id
+WHERE lower(btrim(regexp_replace(r.text, '[[:space:]]+', ' ', 'g')))
+    = lower(btrim(regexp_replace(sqlc.arg(text), '[[:space:]]+', ' ', 'g')))
+  AND (sqlc.arg(exclude_question_id)::text = '' OR q.id::text <> sqlc.arg(exclude_question_id)::text)
+ORDER BY q.created_at, q.id;
+
 -- name: CreateQuestion :one
 INSERT INTO question (is_active) VALUES (false) RETURNING id, current_revision_id, is_active, created_at;
 

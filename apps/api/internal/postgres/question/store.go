@@ -11,9 +11,25 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-type Store struct{ pool *postgres.Pool }
+type Store struct {
+	pool        *postgres.Pool
+	invalidator question.CandidateInvalidator
+}
 
-func NewStore(pool *postgres.Pool) *Store { return &Store{pool: pool} }
+func NewStore(pool *postgres.Pool, invalidators ...question.CandidateInvalidator) *Store {
+	var invalidator question.CandidateInvalidator = question.DeferredCandidateInvalidator{}
+	if len(invalidators) > 0 && invalidators[0] != nil {
+		invalidator = invalidators[0]
+	}
+	return &Store{pool: pool, invalidator: invalidator}
+}
+
+type withdrawalExecutor struct{ db postgres.QueryDB }
+
+func (e withdrawalExecutor) Exec(ctx context.Context, query string, args ...any) error {
+	_, err := e.db.Exec(ctx, query, args...)
+	return err
+}
 
 func (s *Store) Create(ctx context.Context, fields question.RevisionFields, adminID string) (question.Question, error) {
 	var result question.Question
@@ -196,7 +212,8 @@ func (s *Store) Withdraw(ctx context.Context, id, revisionID, reason, adminID st
 		if err != nil {
 			return question.ErrInvalidInput
 		}
-		if _, err := q.LockQuestion(ctx, qid); errors.Is(err, pgx.ErrNoRows) {
+		locked, err := q.LockQuestion(ctx, qid)
+		if errors.Is(err, pgx.ErrNoRows) {
 			return question.ErrNotFound
 		} else if err != nil {
 			return err
@@ -211,6 +228,17 @@ func (s *Store) Withdraw(ctx context.Context, id, revisionID, reason, adminID st
 		if !revision.WithdrawnAt.Valid {
 			if err := q.WithdrawQuestionRevision(ctx, sqlc.WithdrawQuestionRevisionParams{ID: rid, QuestionID: qid, WithdrawnReason: pgtype.Text{String: reason, Valid: true}, WithdrawnByAdminUserID: admin}); err != nil {
 				return err
+			}
+			if err := s.invalidator.InvalidateUnresolvedCandidates(ctx, withdrawalExecutor{db: db}, rid.String()); err != nil {
+				return err
+			}
+			if locked.CurrentRevisionID == rid && locked.IsActive {
+				if err := q.SetQuestionActivity(ctx, sqlc.SetQuestionActivityParams{ID: qid, IsActive: false}); err != nil {
+					return err
+				}
+				if err := q.AddQuestionLifecycleEvent(ctx, sqlc.AddQuestionLifecycleEventParams{QuestionID: qid, RevisionID: rid, Action: "deactivated", AdminUserID: admin, Reason: pgtype.Text{String: "current revision withdrawn", Valid: true}}); err != nil {
+					return err
+				}
 			}
 			if err := q.AddQuestionLifecycleEvent(ctx, sqlc.AddQuestionLifecycleEventParams{QuestionID: qid, RevisionID: rid, Action: "revision_withdrawn", AdminUserID: admin, Reason: pgtype.Text{String: reason, Valid: true}}); err != nil {
 				return err
@@ -269,6 +297,26 @@ func (s *Store) ListRevisions(ctx context.Context, id string) ([]question.Revisi
 		}
 		for _, row := range rows {
 			result = append(result, toRevision(row))
+		}
+		return nil
+	})
+	return result, err
+}
+
+func (s *Store) FindDuplicates(ctx context.Context, text, excludeQuestionID string) ([]question.DuplicateMatch, error) {
+	var result []question.DuplicateMatch
+	if excludeQuestionID != "" {
+		if _, err := uuid(excludeQuestionID); err != nil {
+			return nil, question.ErrNotFound
+		}
+	}
+	err := s.pool.WithConnection(ctx, func(db postgres.QueryDB) error {
+		rows, err := sqlc.New(db).FindQuestionDuplicates(ctx, sqlc.FindQuestionDuplicatesParams{Text: text, ExcludeQuestionID: excludeQuestionID})
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			result = append(result, question.DuplicateMatch{QuestionID: row.ID.String(), Text: row.Text, RevisionNumber: row.RevisionNumber, IsActive: row.IsActive})
 		}
 		return nil
 	})

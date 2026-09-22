@@ -97,6 +97,52 @@ func (q *Queries) CreateQuestionRevision(ctx context.Context, arg CreateQuestion
 	return i, err
 }
 
+const findQuestionDuplicates = `-- name: FindQuestionDuplicates :many
+SELECT q.id, r.text, r.revision_number, q.is_active
+FROM question q JOIN question_revision r ON r.id = q.current_revision_id
+WHERE lower(btrim(regexp_replace(r.text, '[[:space:]]+', ' ', 'g')))
+    = lower(btrim(regexp_replace($1, '[[:space:]]+', ' ', 'g')))
+  AND ($2::text = '' OR q.id::text <> $2::text)
+ORDER BY q.created_at, q.id
+`
+
+type FindQuestionDuplicatesParams struct {
+	Text              string `json:"text"`
+	ExcludeQuestionID string `json:"exclude_question_id"`
+}
+
+type FindQuestionDuplicatesRow struct {
+	ID             pgtype.UUID `json:"id"`
+	Text           string      `json:"text"`
+	RevisionNumber int32       `json:"revision_number"`
+	IsActive       bool        `json:"is_active"`
+}
+
+func (q *Queries) FindQuestionDuplicates(ctx context.Context, arg FindQuestionDuplicatesParams) ([]FindQuestionDuplicatesRow, error) {
+	rows, err := q.db.Query(ctx, findQuestionDuplicates, arg.Text, arg.ExcludeQuestionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []FindQuestionDuplicatesRow
+	for rows.Next() {
+		var i FindQuestionDuplicatesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Text,
+			&i.RevisionNumber,
+			&i.IsActive,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getQuestion = `-- name: GetQuestion :one
 SELECT q.id, q.current_revision_id, q.is_active, q.created_at,
        r.id AS revision_id, r.text, r.category, r.relationship_fit, r.mode_fit,
