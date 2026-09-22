@@ -663,3 +663,136 @@ func TestConcurrentLikeAndWithdrawalDoesNotLikeAfterInvalidation(t *testing.T) {
 		t.Fatalf("Like/withdrawal race state = %s", state)
 	}
 }
+
+func TestAnswerProjectionIsViewerRelativeAndRevealIsIndependent(t *testing.T) {
+	f := openFixture(t)
+	started, err := f.service.StartOrResume(context.Background(), domain.StartInput{ParticipantID: f.firstID, PairID: f.pairID, Category: "fun"})
+	if err != nil || started.Candidate == nil {
+		t.Fatalf("start = %+v, err=%v", started, err)
+	}
+	round, err := f.service.Ask(context.Background(), domain.AskInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: started.ConversationID, CandidateID: started.Candidate.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstInput := domain.RoundInput{ParticipantID: f.firstID, PairID: f.pairID, RoundID: round.ID}
+	secondInput := domain.RoundInput{ParticipantID: f.secondID, PairID: f.pairID, RoundID: round.ID}
+	if _, err := f.service.Answer(context.Background(), domain.AnswerInput{RoundInput: firstInput, Body: "FIRST-SENTINEL"}); err != nil {
+		t.Fatal(err)
+	}
+	first, err := f.service.GetRound(context.Background(), firstInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := f.service.GetRound(context.Background(), secondInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstJSON, _ := json.Marshal(first)
+	secondJSON, _ := json.Marshal(second)
+	if first.YourAnswer == nil || *first.YourAnswer != "FIRST-SENTINEL" || strings.Contains(string(firstJSON), "SECOND-SENTINEL") {
+		t.Fatalf("first pre-reveal projection = %s", firstJSON)
+	}
+	if second.YourAnswer != nil || strings.Contains(string(secondJSON), "FIRST-SENTINEL") || second.State != "YOUR_TURN" {
+		t.Fatalf("second pre-answer projection = %s", secondJSON)
+	}
+	if _, err := f.service.Answer(context.Background(), domain.AnswerInput{RoundInput: secondInput, Body: "SECOND-SENTINEL"}); err != nil {
+		t.Fatal(err)
+	}
+	ready, err := f.service.GetRound(context.Background(), firstInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readyJSON, _ := json.Marshal(ready)
+	if ready.State != "REVEAL_READY" || len(ready.Answers) != 0 || strings.Contains(string(readyJSON), "SECOND-SENTINEL") {
+		t.Fatalf("ready projection leaked answer = %s", readyJSON)
+	}
+	if _, err := f.service.Reveal(context.Background(), firstInput); err != nil {
+		t.Fatal(err)
+	}
+	revealed, err := f.service.GetRound(context.Background(), firstInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revealed.State != "REVEAL_VIEWED" || len(revealed.Answers) != 2 {
+		t.Fatalf("first reveal projection = %+v", revealed)
+	}
+	secondBeforeReveal, err := f.service.GetRound(context.Background(), secondInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondBeforeJSON, _ := json.Marshal(secondBeforeReveal)
+	if len(secondBeforeReveal.Answers) != 0 || strings.Contains(string(secondBeforeJSON), "FIRST-SENTINEL") {
+		t.Fatalf("second received answer before own Reveal = %s", secondBeforeJSON)
+	}
+	if _, err := f.service.Reveal(context.Background(), secondInput); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.service.Reveal(context.Background(), secondInput); err != nil {
+		t.Fatal(err)
+	}
+	var revealViews int
+	if err := f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		return db.QueryRow(context.Background(), "SELECT count(*) FROM private_reveal_view WHERE round_id = $1", round.ID).Scan(&revealViews)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if revealViews != 2 {
+		t.Fatalf("reveal views = %d, want 2", revealViews)
+	}
+	final, err := f.service.GetRound(context.Background(), firstInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !final.CanContinue {
+		t.Fatalf("both Reveal Views did not unlock progression: %+v", final)
+	}
+}
+
+func TestAnswerIsImmutableAndDeclineAnswerRaceHasOneTerminalOutcome(t *testing.T) {
+	f := openFixture(t)
+	started, err := f.service.StartOrResume(context.Background(), domain.StartInput{ParticipantID: f.firstID, PairID: f.pairID, Category: "fun"})
+	if err != nil || started.Candidate == nil {
+		t.Fatalf("start = %+v, err=%v", started, err)
+	}
+	round, err := f.service.Ask(context.Background(), domain.AskInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: started.ConversationID, CandidateID: started.Candidate.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := domain.RoundInput{ParticipantID: f.firstID, PairID: f.pairID, RoundID: round.ID}
+	if _, err := f.service.Answer(context.Background(), domain.AnswerInput{RoundInput: input, Body: "IMMUTABLE"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.service.Answer(context.Background(), domain.AnswerInput{RoundInput: input, Body: "different"}); !errors.Is(err, domain.ErrAnswerImmutable) {
+		t.Fatalf("changed answer err = %v, want ErrAnswerImmutable", err)
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	go func() {
+		<-start
+		_, err := f.service.Answer(context.Background(), domain.AnswerInput{RoundInput: domain.RoundInput{ParticipantID: f.secondID, PairID: f.pairID, RoundID: round.ID}, Body: "RACING"})
+		results <- err
+	}()
+	go func() {
+		<-start
+		_, err := f.service.Decline(context.Background(), domain.RoundInput{ParticipantID: f.secondID, PairID: f.pairID, RoundID: round.ID})
+		results <- err
+	}()
+	close(start)
+	firstErr, secondErr := <-results, <-results
+	if (firstErr == nil) == (secondErr == nil) {
+		t.Fatalf("answer/decline race errors = %v / %v, want one winner", firstErr, secondErr)
+	}
+	var status string
+	var answerCount int
+	if err := f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		if err := db.QueryRow(context.Background(), "SELECT status::text FROM private_round WHERE id = $1", round.ID).Scan(&status); err != nil {
+			return err
+		}
+		return db.QueryRow(context.Background(), "SELECT count(*) FROM private_answer WHERE round_id = $1", round.ID).Scan(&answerCount)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if status == "retired" && answerCount != 1 || status == "open" && answerCount != 2 {
+		t.Fatalf("race persisted status=%s answers=%d", status, answerCount)
+	}
+}

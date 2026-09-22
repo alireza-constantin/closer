@@ -1,5 +1,4 @@
-// Package private owns the Private Conversation and P-02 candidate command
-// contracts. Answer behavior remains outside this package until P-03.
+// Package private owns the Private Conversation and Round command contracts.
 package private
 
 import (
@@ -9,12 +8,16 @@ import (
 )
 
 var (
-	ErrNotFound     = errors.New("private conversation not found")
-	ErrPairNotReady = errors.New("pair is not ready for Private")
-	ErrCategory     = errors.New("private category is invalid")
-	ErrCandidate    = errors.New("private candidate is unavailable")
-	ErrRoundOpen    = errors.New("a Private round is already open")
-	ErrInvalidInput = errors.New("private command input is invalid")
+	ErrNotFound            = errors.New("private conversation not found")
+	ErrPairNotReady        = errors.New("pair is not ready for Private")
+	ErrCategory            = errors.New("private category is invalid")
+	ErrCandidate           = errors.New("private candidate is unavailable")
+	ErrRoundOpen           = errors.New("a Private round is already open")
+	ErrInvalidInput        = errors.New("private command input is invalid")
+	ErrAnswerInvalid       = errors.New("private answer is invalid")
+	ErrAnswerImmutable     = errors.New("private answer is immutable")
+	ErrQuestionUnavailable = errors.New("private question is unavailable")
+	ErrRevealNotReady      = errors.New("private reveal is not ready")
 )
 
 type CandidateQuestion struct {
@@ -32,7 +35,15 @@ type Round struct {
 	CandidateID, QuestionID, QuestionRevisionID string
 	RoundNumber                                 int32
 	State, AskedAt, Text, Category, Intensity   string
+	YourAnswer                                  *string
+	HasOtherAnswer                              bool
+	RevealViewedAt, OtherRevealViewedAt         string
+	OtherRevealViewed                           bool
+	CanContinue                                 bool
+	Answers                                     []Answer
 }
+
+type Answer struct{ ParticipantID, MembershipID, Body, CreatedAt string }
 
 type View struct {
 	PairID, ConversationID, Category         string
@@ -63,6 +74,12 @@ type LikeInput struct {
 	Liked                                              bool
 }
 
+type RoundInput struct{ ParticipantID, PairID, RoundID string }
+type AnswerInput struct {
+	RoundInput
+	Body string
+}
+
 type Question struct {
 	ID, RevisionID, Text, Category, Intensity string
 }
@@ -81,6 +98,10 @@ type Repository interface {
 	Ask(context.Context, AskInput) (Round, error)
 	Skip(context.Context, SkipInput) (View, error)
 	Like(context.Context, LikeInput) (bool, error)
+	GetRound(context.Context, RoundInput) (Round, error)
+	Answer(context.Context, AnswerInput) (Round, error)
+	Decline(context.Context, RoundInput) (Round, error)
+	Reveal(context.Context, RoundInput) (Round, error)
 }
 
 type Service struct{ repository Repository }
@@ -123,6 +144,31 @@ func (s *Service) Like(ctx context.Context, input LikeInput) (bool, error) {
 		return false, ErrNotFound
 	}
 	return s.repository.Like(ctx, input)
+}
+
+func (s *Service) GetRound(ctx context.Context, input RoundInput) (Round, error) {
+	if input.ParticipantID == "" || input.PairID == "" || input.RoundID == "" {
+		return Round{}, ErrNotFound
+	}
+	return s.repository.GetRound(ctx, input)
+}
+func (s *Service) Answer(ctx context.Context, input AnswerInput) (Round, error) {
+	if input.ParticipantID == "" || input.PairID == "" || input.RoundID == "" {
+		return Round{}, ErrNotFound
+	}
+	return s.repository.Answer(ctx, input)
+}
+func (s *Service) Decline(ctx context.Context, input RoundInput) (Round, error) {
+	if input.ParticipantID == "" || input.PairID == "" || input.RoundID == "" {
+		return Round{}, ErrNotFound
+	}
+	return s.repository.Decline(ctx, input)
+}
+func (s *Service) Reveal(ctx context.Context, input RoundInput) (Round, error) {
+	if input.ParticipantID == "" || input.PairID == "" || input.RoundID == "" {
+		return Round{}, ErrNotFound
+	}
+	return s.repository.Reveal(ctx, input)
 }
 
 func validCategory(category string) bool {
