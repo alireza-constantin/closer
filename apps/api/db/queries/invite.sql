@@ -30,6 +30,24 @@ JOIN participant first_participant ON first_participant.id = first_membership.pa
 WHERE i.token_hash = sqlc.arg(token_hash) AND i.revoked_at IS NULL AND i.redeemed_at IS NULL
   AND i.expires_at > clock_timestamp() AND p.terminated_at IS NULL;
 
+-- name: GetInitialInviteStatus :one
+SELECT i.expires_at
+FROM pair p
+JOIN pair_membership m ON m.pair_id = p.id
+ AND m.slot = 'first' AND m.ended_at IS NULL
+JOIN initial_invite i ON i.pair_id = p.id
+ AND i.revoked_at IS NULL AND i.redeemed_at IS NULL
+ AND i.expires_at > clock_timestamp()
+WHERE p.id = sqlc.arg(pair_id)
+  AND p.terminated_at IS NULL
+  AND m.participant_id = sqlc.arg(participant_id)
+  AND NOT EXISTS (
+    SELECT 1 FROM pair_membership s
+    WHERE s.pair_id = p.id AND s.slot = 'second' AND s.ended_at IS NULL
+  )
+ORDER BY i.created_at DESC
+LIMIT 1;
+
 -- Resolve the Pair without taking the invite lock. Claim acquires Pair then
 -- invite, matching issue/revoke/termination lock ordering.
 -- name: GetInitialInvitePairByHash :one
@@ -62,8 +80,13 @@ SELECT EXISTS (
   JOIN pair other_pair ON other_pair.id = first_member.pair_id AND other_pair.terminated_at IS NULL
   WHERE first_member.pair_id <> sqlc.arg(excluded_pair_id)
     AND first_member.ended_at IS NULL AND second_member.ended_at IS NULL
-    AND first_member.participant_id = sqlc.arg(participant_a)
-    AND second_member.participant_id = sqlc.arg(participant_b)
+    AND (
+      (first_member.participant_id = sqlc.arg(participant_a)
+       AND second_member.participant_id = sqlc.arg(participant_b))
+      OR
+      (first_member.participant_id = sqlc.arg(participant_b)
+       AND second_member.participant_id = sqlc.arg(participant_a))
+    )
 )::boolean;
 
 -- name: RedeemInitialInvite :execrows

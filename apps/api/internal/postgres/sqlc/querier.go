@@ -11,13 +11,17 @@ import (
 )
 
 type Querier interface {
+	ClearIntendedPersonName(ctx context.Context, pairID pgtype.UUID) error
 	CreateAdminUser(ctx context.Context, arg CreateAdminUserParams) error
 	CreateAuthCredential(ctx context.Context, arg CreateAuthCredentialParams) error
 	CreateAuthSession(ctx context.Context, arg CreateAuthSessionParams) (AuthSession, error)
 	CreateAuthSessionForEnabledAdminUser(ctx context.Context, arg CreateAuthSessionForEnabledAdminUserParams) (int64, error)
 	CreateAuthSessionForEnabledRegisteredUser(ctx context.Context, arg CreateAuthSessionForEnabledRegisteredUserParams) (int64, error)
 	CreateAuthUser(ctx context.Context, arg CreateAuthUserParams) (AuthUser, error)
+	CreateClaimMembership(ctx context.Context, arg CreateClaimMembershipParams) (pgtype.UUID, error)
 	CreateCreatorMembership(ctx context.Context, arg CreateCreatorMembershipParams) (PairMembership, error)
+	CreateInitialInvite(ctx context.Context, arg CreateInitialInviteParams) (CreateInitialInviteRow, error)
+	CreateInitialMembershipEra(ctx context.Context, arg CreateInitialMembershipEraParams) (pgtype.UUID, error)
 	CreatePair(ctx context.Context, arg CreatePairParams) (Pair, error)
 	CreateParticipant(ctx context.Context, arg CreateParticipantParams) (Participant, error)
 	CreateRegisteredAuthUser(ctx context.Context, arg CreateRegisteredAuthUserParams) (AuthUser, error)
@@ -27,17 +31,27 @@ type Querier interface {
 	DeleteExpiredAuthSessions(ctx context.Context, arg DeleteExpiredAuthSessionsParams) (int64, error)
 	DeleteOldAuthRateLimits(ctx context.Context, dollar_1 interface{}) (int64, error)
 	FindFormerTerminatedPair(ctx context.Context, arg FindFormerTerminatedPairParams) (pgtype.UUID, error)
+	FindInitialInviteForIssue(ctx context.Context, pairID pgtype.UUID) (FindInitialInviteForIssueRow, error)
+	GetActiveFirstMembershipForClaim(ctx context.Context, pairID pgtype.UUID) (GetActiveFirstMembershipForClaimRow, error)
 	GetActivePairAccess(ctx context.Context, arg GetActivePairAccessParams) (GetActivePairAccessRow, error)
+	GetActiveSecondMembershipForClaim(ctx context.Context, pairID pgtype.UUID) (pgtype.UUID, error)
 	GetAdminCredentialByEmail(ctx context.Context, emailNormalized string) (GetAdminCredentialByEmailRow, error)
 	GetAuthSessionActor(ctx context.Context, arg GetAuthSessionActorParams) (GetAuthSessionActorRow, error)
 	GetCreatedPairByRequestAndParticipant(ctx context.Context, arg GetCreatedPairByRequestAndParticipantParams) (Pair, error)
 	GetCredentialByEmail(ctx context.Context, emailNormalized string) (GetCredentialByEmailRow, error)
+	GetInitialInviteForUpdate(ctx context.Context, id pgtype.UUID) (GetInitialInviteForUpdateRow, error)
+	GetInitialInviteLanding(ctx context.Context, tokenHash []byte) (GetInitialInviteLandingRow, error)
+	// Resolve the Pair without taking the invite lock. Claim acquires Pair then
+	// invite, matching issue/revoke/termination lock ordering.
+	GetInitialInvitePairByHash(ctx context.Context, tokenHash []byte) (GetInitialInvitePairByHashRow, error)
+	GetInitialInviteStatus(ctx context.Context, arg GetInitialInviteStatusParams) (pgtype.Timestamptz, error)
 	GetLocalTestValue(ctx context.Context) (string, error)
 	GetParticipantByAuthUserID(ctx context.Context, authUserID pgtype.UUID) (Participant, error)
 	GetParticipantByID(ctx context.Context, id pgtype.UUID) (Participant, error)
 	HasActiveSecondSlot(ctx context.Context, pairID pgtype.UUID) (bool, error)
 	HasAdminUser(ctx context.Context, authUserID pgtype.UUID) (bool, error)
 	HasAuthSession(ctx context.Context, tokenHash []byte) (bool, error)
+	HasDuplicateActiveParticipantPair(ctx context.Context, arg HasDuplicateActiveParticipantPairParams) (bool, error)
 	IsAdminAuthUser(ctx context.Context, id pgtype.UUID) (bool, error)
 	ListActivePairMembers(ctx context.Context, pairID pgtype.UUID) ([]ListActivePairMembersRow, error)
 	ListAuthSessionTokenHashes(ctx context.Context, authUserID pgtype.UUID) ([][]byte, error)
@@ -46,12 +60,17 @@ type Querier interface {
 	LockAdminBootstrapEmail(ctx context.Context, hashtextextended string) error
 	LockAdminByEmailForRecovery(ctx context.Context, emailNormalized string) (pgtype.UUID, error)
 	LockAuthUserForUpgrade(ctx context.Context, id pgtype.UUID) (AuthUser, error)
+	LockClaimParticipantPair(ctx context.Context, lockKey string) error
+	LockPairForInitialClaim(ctx context.Context, pairID pgtype.UUID) (LockPairForInitialClaimRow, error)
 	ParticipantExists(ctx context.Context, participantID pgtype.UUID) (bool, error)
 	ParticipantHasActiveMembership(ctx context.Context, arg ParticipantHasActiveMembershipParams) (bool, error)
+	RedeemInitialInvite(ctx context.Context, arg RedeemInitialInviteParams) (int64, error)
 	RenewAuthSession(ctx context.Context, arg RenewAuthSessionParams) (pgtype.Timestamptz, error)
 	RevokeAuthSession(ctx context.Context, arg RevokeAuthSessionParams) (int64, error)
 	RevokeAuthSessionByTokenHash(ctx context.Context, arg RevokeAuthSessionByTokenHashParams) (int64, error)
 	RevokeAuthSessionsForUser(ctx context.Context, arg RevokeAuthSessionsForUserParams) (int64, error)
+	RevokeNonterminalInitialInvites(ctx context.Context, pairID pgtype.UUID) error
+	RevokeUsableInitialInvite(ctx context.Context, pairID pgtype.UUID) (int64, error)
 	SetLocalTestValue(ctx context.Context, value string) (string, error)
 	UpdateAuthCredentialPasswordHash(ctx context.Context, arg UpdateAuthCredentialPasswordHashParams) error
 	UpdateIntendedPersonName(ctx context.Context, arg UpdateIntendedPersonNameParams) (Pair, error)

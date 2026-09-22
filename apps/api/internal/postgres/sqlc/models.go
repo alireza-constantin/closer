@@ -132,6 +132,18 @@ type AuthUser struct {
 	DisabledAt pgtype.Timestamptz `json:"disabled_at"`
 }
 
+type InitialInvite struct {
+	ID                      pgtype.UUID        `json:"id"`
+	PairID                  pgtype.UUID        `json:"pair_id"`
+	TokenHash               []byte             `json:"token_hash"`
+	IssuedByParticipantID   pgtype.UUID        `json:"issued_by_participant_id"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	ExpiresAt               pgtype.Timestamptz `json:"expires_at"`
+	RevokedAt               pgtype.Timestamptz `json:"revoked_at"`
+	RedeemedAt              pgtype.Timestamptz `json:"redeemed_at"`
+	RedeemedByParticipantID pgtype.UUID        `json:"redeemed_by_participant_id"`
+}
+
 type Pair struct {
 	ID                 pgtype.UUID          `json:"id"`
 	RelationshipType   PairRelationshipType `json:"relationship_type"`
@@ -158,6 +170,8 @@ type PairMembershipEra struct {
 	SecondMembershipID pgtype.UUID        `json:"second_membership_id"`
 	StartedAt          pgtype.Timestamptz `json:"started_at"`
 	EndedAt            pgtype.Timestamptz `json:"ended_at"`
+	FirstSlot          PairSlot           `json:"first_slot"`
+	SecondSlot         PairSlot           `json:"second_slot"`
 }
 
 type Participant struct {
