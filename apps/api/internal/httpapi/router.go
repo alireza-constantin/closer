@@ -16,6 +16,7 @@ import (
 	"github.com/alireza-constantin/closer/apps/api/internal/invite"
 	"github.com/alireza-constantin/closer/apps/api/internal/pair"
 	"github.com/alireza-constantin/closer/apps/api/internal/participant"
+	"github.com/alireza-constantin/closer/apps/api/internal/realtime"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -64,13 +65,14 @@ func NewRouterWithAuth(
 	return NewRouterWithServices(logger, readiness, authService, nil, nil, nil, security)
 }
 
-func NewRouterWithServices(
+func NewRouterWithServicesAndRealtime(
 	logger *slog.Logger,
 	readiness ReadinessChecker,
 	authService *auth.Service,
 	participantService *participant.Service,
 	pairService *pair.Service,
 	inviteService *invite.Service,
+	realtimeRegistry *realtime.Registry,
 	security SecurityConfig,
 ) http.Handler {
 	if logger == nil {
@@ -115,10 +117,24 @@ func NewRouterWithServices(
 			if participantService != nil && inviteService != nil {
 				registerInviteRoutes(api, authService, participantService, inviteService, security)
 			}
+			if realtimeRegistry != nil && participantService != nil && pairService != nil {
+				registerRealtimeRoutes(api, authService, participantService, pairService, realtimeRegistry)
+			}
 		})
 	}
-
 	return router
+}
+
+func NewRouterWithServices(
+	logger *slog.Logger,
+	readiness ReadinessChecker,
+	authService *auth.Service,
+	participantService *participant.Service,
+	pairService *pair.Service,
+	inviteService *invite.Service,
+	security SecurityConfig,
+) http.Handler {
+	return NewRouterWithServicesAndRealtime(logger, readiness, authService, participantService, pairService, inviteService, nil, security)
 }
 
 func requestID(logger *slog.Logger) func(http.Handler) http.Handler {

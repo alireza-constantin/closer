@@ -21,6 +21,7 @@ import (
 	postgresinvite "github.com/alireza-constantin/closer/apps/api/internal/postgres/invite"
 	postgrespair "github.com/alireza-constantin/closer/apps/api/internal/postgres/pair"
 	postgresparticipant "github.com/alireza-constantin/closer/apps/api/internal/postgres/participant"
+	"github.com/alireza-constantin/closer/apps/api/internal/realtime"
 )
 
 func main() {
@@ -49,13 +50,20 @@ func run(logger *slog.Logger) error {
 	participantService := participant.NewService(postgresparticipant.NewStore(database))
 	pairService := pair.NewService(postgrespair.NewStore(database))
 	inviteService := invite.NewService(postgresinvite.NewStore(database))
-	router := httpapi.NewRouterWithServices(logger, database, authService, participantService, pairService, inviteService, httpapi.SecurityConfig{
+	realtimeRegistry := realtime.NewRegistry(32)
+	router := httpapi.NewRouterWithServicesAndRealtime(logger, database, authService, participantService, pairService, inviteService, realtimeRegistry, httpapi.SecurityConfig{
 		TrustedOrigins:    cfg.TrustedOrigins,
 		TrustedProxyCIDRs: cfg.TrustedProxyCIDRs,
 	})
 	server := httpapi.NewServer(cfg.ListenAddress, router)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	realtimeListener := postgres.NewRealtimeListener(cfg.DatabaseURL, realtimeRegistry, logger)
+	go func() {
+		if err := realtimeListener.Run(ctx); err != nil && ctx.Err() == nil {
+			logger.Warn("realtime listener stopped", "error", err)
+		}
+	}()
 	startAuthSessionCleanup(ctx, logger, authService)
 
 	listener, err := net.Listen("tcp", cfg.ListenAddress)
