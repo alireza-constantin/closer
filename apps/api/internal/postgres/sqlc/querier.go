@@ -50,6 +50,7 @@ type Querier interface {
 	GetAdminCredentialByEmail(ctx context.Context, emailNormalized string) (GetAdminCredentialByEmailRow, error)
 	GetAuthSessionActor(ctx context.Context, arg GetAuthSessionActorParams) (GetAuthSessionActorRow, error)
 	GetCreatedPairByRequestAndParticipant(ctx context.Context, arg GetCreatedPairByRequestAndParticipantParams) (Pair, error)
+	GetCreatorUnresolvedPrivateCandidate(ctx context.Context, arg GetCreatorUnresolvedPrivateCandidateParams) (GetCreatorUnresolvedPrivateCandidateRow, error)
 	GetCredentialByEmail(ctx context.Context, emailNormalized string) (GetCredentialByEmailRow, error)
 	GetCurrentMembershipEraForRejoin(ctx context.Context, pairID pgtype.UUID) (GetCurrentMembershipEraForRejoinRow, error)
 	GetEligibleRejoinTarget(ctx context.Context, arg GetEligibleRejoinTargetParams) (GetEligibleRejoinTargetRow, error)

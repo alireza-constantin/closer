@@ -48,6 +48,14 @@ func (s *Store) StartOrResume(ctx context.Context, input domain.StartInput) (dom
 		if !domain.CategoryAllowed(string(access.RelationshipType), input.Category) {
 			return domain.ErrCategory
 		}
+		if conversation, err := q.GetCreatorUnresolvedPrivateCandidate(ctx, sqlc.GetCreatorUnresolvedPrivateCandidateParams{
+			PairID: pairID, MembershipEraID: access.MembershipEraID, ParticipantID: participantID,
+		}); err == nil {
+			conversationID = conversation.ConversationID
+			return nil
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
 		conversation, err := q.GetPrivateConversationByKey(ctx, sqlc.GetPrivateConversationByKeyParams{
 			PairID: pairID, MembershipEraID: access.MembershipEraID, Category: input.Category,
 		})

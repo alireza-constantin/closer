@@ -31,6 +31,16 @@ WHERE pair_id = sqlc.arg(pair_id)
   AND membership_era_id = sqlc.arg(membership_era_id)
   AND category = sqlc.arg(category);
 
+-- name: GetCreatorUnresolvedPrivateCandidate :one
+SELECT c.id, candidate.conversation_id, c.category
+FROM private_question_candidate AS candidate
+JOIN private_conversation AS c ON c.id = candidate.conversation_id
+WHERE c.pair_id = sqlc.arg(pair_id)
+  AND c.membership_era_id = sqlc.arg(membership_era_id)
+  AND c.created_by_participant_id = sqlc.arg(participant_id)
+  AND candidate.state = 'unresolved'
+LIMIT 1;
+
 -- name: CreatePrivateConversation :one
 INSERT INTO private_conversation (pair_id, category, created_by_participant_id, membership_era_id)
 VALUES (sqlc.arg(pair_id), sqlc.arg(category), sqlc.arg(created_by_participant_id), sqlc.arg(membership_era_id))

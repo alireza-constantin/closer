@@ -174,3 +174,63 @@ func TestWithdrawalInvalidatesUnresolvedCandidateInSameDatabaseBoundary(t *testi
 		t.Fatalf("after invalidation = %+v", read)
 	}
 }
+
+func TestConcurrentDifferentCategoryStartsKeepOneCreatorProvisional(t *testing.T) {
+	f := openFixture(t)
+	memoriesQuestion, err := f.questions.Create(context.Background(), question.RevisionFields{
+		Text: "P-01 memories candidate text", Category: "memories", RelationshipFit: "both", ModeFit: "private", Intensity: "light",
+	}, f.adminID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.questions.SetActivity(context.Background(), memoriesQuestion.ID, "activate", f.adminID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+			_, _ = db.Exec(context.Background(), "UPDATE question SET current_revision_id = NULL WHERE id = $1", memoriesQuestion.ID)
+			_, _ = db.Exec(context.Background(), "DELETE FROM question_revision WHERE question_id = $1", memoriesQuestion.ID)
+			_, _ = db.Exec(context.Background(), "DELETE FROM question WHERE id = $1", memoriesQuestion.ID)
+			return nil
+		})
+	})
+	start := make(chan struct{})
+	results := make(chan domain.View, 2)
+	errorsSeen := make(chan error, 2)
+	var wait sync.WaitGroup
+	for _, category := range []string{"fun", "memories"} {
+		wait.Add(1)
+		go func(category string) {
+			defer wait.Done()
+			<-start
+			view, err := f.service.StartOrResume(context.Background(), domain.StartInput{ParticipantID: f.firstID, PairID: f.pairID, Category: category})
+			results <- view
+			errorsSeen <- err
+		}(category)
+	}
+	close(start)
+	wait.Wait()
+	close(results)
+	close(errorsSeen)
+	for err := range errorsSeen {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	views := make([]domain.View, 0, 2)
+	for view := range results {
+		views = append(views, view)
+	}
+	if len(views) != 2 || views[0].ConversationID != views[1].ConversationID {
+		t.Fatalf("different category starts stacked provisional candidates: %+v", views)
+	}
+	var unresolved int
+	if err := f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		return db.QueryRow(context.Background(), `SELECT count(*) FROM private_question_candidate AS candidate JOIN private_conversation AS conversation ON conversation.id = candidate.conversation_id WHERE conversation.created_by_participant_id = $1 AND candidate.state = 'unresolved'`, f.firstID).Scan(&unresolved)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if unresolved != 1 {
+		t.Fatalf("unresolved creator candidates = %d, want 1", unresolved)
+	}
+}

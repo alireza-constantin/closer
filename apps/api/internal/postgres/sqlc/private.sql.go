@@ -73,6 +73,36 @@ func (q *Queries) CreatePrivateQuestionCandidate(ctx context.Context, arg Create
 	return i, err
 }
 
+const getCreatorUnresolvedPrivateCandidate = `-- name: GetCreatorUnresolvedPrivateCandidate :one
+SELECT c.id, candidate.conversation_id, c.category
+FROM private_question_candidate AS candidate
+JOIN private_conversation AS c ON c.id = candidate.conversation_id
+WHERE c.pair_id = $1
+  AND c.membership_era_id = $2
+  AND c.created_by_participant_id = $3
+  AND candidate.state = 'unresolved'
+LIMIT 1
+`
+
+type GetCreatorUnresolvedPrivateCandidateParams struct {
+	PairID          pgtype.UUID `json:"pair_id"`
+	MembershipEraID pgtype.UUID `json:"membership_era_id"`
+	ParticipantID   pgtype.UUID `json:"participant_id"`
+}
+
+type GetCreatorUnresolvedPrivateCandidateRow struct {
+	ID             pgtype.UUID `json:"id"`
+	ConversationID pgtype.UUID `json:"conversation_id"`
+	Category       string      `json:"category"`
+}
+
+func (q *Queries) GetCreatorUnresolvedPrivateCandidate(ctx context.Context, arg GetCreatorUnresolvedPrivateCandidateParams) (GetCreatorUnresolvedPrivateCandidateRow, error) {
+	row := q.db.QueryRow(ctx, getCreatorUnresolvedPrivateCandidate, arg.PairID, arg.MembershipEraID, arg.ParticipantID)
+	var i GetCreatorUnresolvedPrivateCandidateRow
+	err := row.Scan(&i.ID, &i.ConversationID, &i.Category)
+	return i, err
+}
+
 const getPrivateConversation = `-- name: GetPrivateConversation :one
 SELECT c.id, c.pair_id, c.category, c.created_by_participant_id, c.membership_era_id,
        c.created_at, c.selection_seed, creator.display_name AS creator_display_name
