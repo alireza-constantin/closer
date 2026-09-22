@@ -30,6 +30,24 @@ func (p *RealtimePublisher) Publish(ctx context.Context, event realtime.Event) e
 	})
 }
 
+// TransactionalRealtimePublisher binds publication to a caller-owned
+// PostgreSQL transaction. NOTIFY is delivered only when that transaction
+// commits, and is rolled back with the business mutation otherwise.
+type TransactionalRealtimePublisher struct{ db QueryDB }
+
+func NewTransactionalRealtimePublisher(db QueryDB) *TransactionalRealtimePublisher {
+	return &TransactionalRealtimePublisher{db: db}
+}
+
+func (p *TransactionalRealtimePublisher) Publish(ctx context.Context, event realtime.Event) error {
+	payload, err := realtime.Encode(event)
+	if err != nil {
+		return err
+	}
+	_, err = p.db.Exec(ctx, "SELECT pg_notify($1, $2)", RealtimeChannel, string(payload))
+	return err
+}
+
 type RealtimeListener struct {
 	databaseURL string
 	registry    *realtime.Registry

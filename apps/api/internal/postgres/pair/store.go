@@ -8,6 +8,7 @@ import (
 	"github.com/alireza-constantin/closer/apps/api/internal/pair"
 	"github.com/alireza-constantin/closer/apps/api/internal/postgres"
 	"github.com/alireza-constantin/closer/apps/api/internal/postgres/sqlc"
+	"github.com/alireza-constantin/closer/apps/api/internal/realtime"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -22,7 +23,7 @@ func NewStore(pool *postgres.Pool) *Store {
 
 func (s *Store) WithinTx(ctx context.Context, callback func(pair.Tx) error) error {
 	return s.pool.WithinTx(ctx, func(db postgres.QueryDB) error {
-		return callback(txStore{db: db})
+		return callback(txStore{db: db, publisher: postgres.NewTransactionalRealtimePublisher(db)})
 	})
 }
 
@@ -133,7 +134,12 @@ func (s *Store) FindFormerTerminatedPair(ctx context.Context, pairID, participan
 }
 
 type txStore struct {
-	db postgres.QueryDB
+	db        postgres.QueryDB
+	publisher realtime.Publisher
+}
+
+func (s txStore) Publish(ctx context.Context, event realtime.Event) error {
+	return s.publisher.Publish(ctx, event)
 }
 
 func (s txStore) ParticipantExists(ctx context.Context, participantID string) (bool, error) {
