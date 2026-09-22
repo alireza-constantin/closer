@@ -93,7 +93,7 @@ describe("Connect and invitation-join streaming boundaries", () => {
     expect(joinPage).toContain("<Suspense fallback={<JoinInvitationDetailsSkeleton />}>");
     expect(form).toContain('initialInvite?.intendedPersonName ?? ""');
     expect(form).toContain("claimantDisplayName ??");
-    expect(form).toContain('readOnly={kind === "initial" && isExistingParticipant}');
+    expect(form).toContain("readOnly={isExistingParticipant}");
     expect(form).not.toContain("Choose your name before joining");
     expect(form).not.toContain("<strong>For:</strong>");
     expect(redeemRoute).toContain("export async function POST");

@@ -33,8 +33,9 @@ export default function JoinPairForm({
   const form = useForm<JoinPairValues>({
     defaultValues: {
       displayName:
-        claimantDisplayName ??
-        (kind === "initial" ? (initialInvite?.intendedPersonName ?? "") : ""),
+        kind === "rejoin"
+          ? "Returning member"
+          : (claimantDisplayName ?? initialInvite?.intendedPersonName ?? ""),
     },
     mode: "onChange",
     resolver: zodResolver(joinPairSchema),
@@ -53,7 +54,7 @@ export default function JoinPairForm({
         {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify(values),
+          body: JSON.stringify(kind === "rejoin" ? {} : values),
         },
       );
       const body: unknown = await response.json();
@@ -98,14 +99,21 @@ export default function JoinPairForm({
         </div>
       ) : null}
       {unavailable ? <FormServerError>{unavailableMessage}</FormServerError> : null}
-      <FieldGroup className={kind === "initial" && initialInvite ? "mt-6" : undefined}>
-        <DisplayNameField
-          error={nameError}
-          errorId="join-display-name-error"
-          readOnly={kind === "initial" && isExistingParticipant}
-          registration={form.register("displayName")}
-        />
-      </FieldGroup>
+      {kind === "rejoin" ? (
+        <div className="text-closer-navy mt-6 rounded-[1.35rem] bg-white/65 p-4 text-sm leading-relaxed shadow-[0_8px_24px_rgba(27,33,78,0.08)]">
+          Your existing person identity will be restored. No new member profile or history will be
+          created.
+        </div>
+      ) : (
+        <FieldGroup className={initialInvite ? "mt-6" : undefined}>
+          <DisplayNameField
+            error={nameError}
+            errorId="join-display-name-error"
+            readOnly={isExistingParticipant}
+            registration={form.register("displayName")}
+          />
+        </FieldGroup>
+      )}
       {kind === "initial" && isExistingParticipant ? (
         <p className="text-closer-muted mt-2 text-sm leading-relaxed">
           Your existing Closer name will be used for this space.

@@ -1,10 +1,13 @@
 import { notFound } from "next/navigation";
+import type { ReactNode } from "react";
 
 import { PairRealtimeProvider } from "@/features/pair/components/pair-realtime-provider";
 import { getCurrentParticipant } from "@/server/auth/current-participant";
 import { getPairEntry } from "@/server/modules/pairs/pair.service";
 
-export default async function PairLayout({ children, params }: LayoutProps<"/pair/[pairId]">) {
+type PairLayoutProps = { children: ReactNode; params: Promise<{ pairId: string }> };
+
+export default async function PairLayout({ children, params }: PairLayoutProps) {
   const { pairId } = await params;
   const participant = await getCurrentParticipant();
   if (!participant) notFound();

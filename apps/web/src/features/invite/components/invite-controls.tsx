@@ -214,11 +214,13 @@ export default function InviteControls({
   }
 
   async function revokeInvite() {
+    const confirmed = window.confirm(
+      isRejoin
+        ? "Revoke this rejoin link? It will stop working immediately."
+        : "Replace this invitation? The previous link will stop working.",
+    );
+    if (!confirmed) return;
     if (!isRejoin) {
-      const confirmed = window.confirm(
-        "Replace this invitation? The previous link will stop working.",
-      );
-      if (!confirmed) return;
       setIsWorking(true);
       setMessage(null);
       try {
