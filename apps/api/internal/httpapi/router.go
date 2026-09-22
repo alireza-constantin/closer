@@ -17,6 +17,7 @@ import (
 	"github.com/alireza-constantin/closer/apps/api/internal/pair"
 	"github.com/alireza-constantin/closer/apps/api/internal/participant"
 	"github.com/alireza-constantin/closer/apps/api/internal/question"
+	"github.com/alireza-constantin/closer/apps/api/internal/realtime"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -65,19 +66,20 @@ func NewRouterWithAuth(
 	return NewRouterWithServices(logger, readiness, authService, nil, nil, nil, security)
 }
 
-func NewRouterWithServices(
+func NewRouterWithServicesAndRealtime(
 	logger *slog.Logger,
 	readiness ReadinessChecker,
 	authService *auth.Service,
 	participantService *participant.Service,
 	pairService *pair.Service,
 	inviteService *invite.Service,
+	realtimeRegistry *realtime.Registry,
 	security SecurityConfig,
 ) http.Handler {
-	return NewRouterWithQuestionServices(logger, readiness, authService, participantService, pairService, inviteService, nil, security)
+	return NewRouterWithQuestionRealtime(logger, readiness, authService, participantService, pairService, inviteService, nil, realtimeRegistry, security)
 }
 
-func NewRouterWithQuestionServices(
+func NewRouterWithQuestionRealtime(
 	logger *slog.Logger,
 	readiness ReadinessChecker,
 	authService *auth.Service,
@@ -85,6 +87,7 @@ func NewRouterWithQuestionServices(
 	pairService *pair.Service,
 	inviteService *invite.Service,
 	questionService *question.Service,
+	realtimeRegistry *realtime.Registry,
 	security SecurityConfig,
 ) http.Handler {
 	if logger == nil {
@@ -132,10 +135,28 @@ func NewRouterWithQuestionServices(
 			if questionService != nil {
 				registerAdminQuestionRoutes(api, authService, questionService, security)
 			}
+			if realtimeRegistry != nil && participantService != nil && pairService != nil {
+				registerRealtimeRoutes(api, authService, participantService, pairService, realtimeRegistry)
+			}
 		})
 	}
-
 	return router
+}
+
+func NewRouterWithQuestionServices(logger *slog.Logger, readiness ReadinessChecker, authService *auth.Service, participantService *participant.Service, pairService *pair.Service, inviteService *invite.Service, questionService *question.Service, security SecurityConfig) http.Handler {
+	return NewRouterWithQuestionRealtime(logger, readiness, authService, participantService, pairService, inviteService, questionService, nil, security)
+}
+
+func NewRouterWithServices(
+	logger *slog.Logger,
+	readiness ReadinessChecker,
+	authService *auth.Service,
+	participantService *participant.Service,
+	pairService *pair.Service,
+	inviteService *invite.Service,
+	security SecurityConfig,
+) http.Handler {
+	return NewRouterWithServicesAndRealtime(logger, readiness, authService, participantService, pairService, inviteService, nil, security)
 }
 
 func requestID(logger *slog.Logger) func(http.Handler) http.Handler {
