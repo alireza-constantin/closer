@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 
 import { createCloserAuthMock } from "@/test/closer-auth-mock";
+import { createNextNavigationMock } from "@/test/next-navigation-mock";
 
 let relationshipType: "partner" | "friend" = "partner";
 const getPairForParticipant = mock(async () => ({ pair: { relationshipType } }));
@@ -14,14 +15,16 @@ mock.module("@Closer/auth/closer", () =>
 mock.module("@/server/auth/current-participant", () => ({
   getCurrentParticipant: async () => ({ id: "participant-1" }),
 }));
-mock.module("next/navigation", () => ({
-  notFound: () => {
-    throw new Error("notFound");
-  },
-  redirect: (destination: string) => {
-    throw new Error(`redirect:${destination}`);
-  },
-}));
+mock.module("next/navigation", () =>
+  createNextNavigationMock({
+    notFound: () => {
+      throw new Error("notFound");
+    },
+    redirect: (destination: string) => {
+      throw new Error(`redirect:${destination}`);
+    },
+  }),
+);
 
 const { default: LegacyTogetherPickerPage } = await import("./page");
 

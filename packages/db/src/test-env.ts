@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 
 import dotenv from "dotenv";
 
+import { resolveTestDatabaseUrl } from "./test-database";
+
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const environmentFiles = [
   `${repositoryRoot}/.env`,
@@ -20,17 +22,12 @@ if (process.env.NODE_ENV === "production" || process.env.VERCEL_ENV === "product
 
 if (process.env.CLOSER_ALLOW_DESTRUCTIVE_DB_TESTS !== "1") {
   throw new Error(
-    "Integration tests use and clean up Development data. Confirm apps/web/.env.local targets Neon DEVELOPMENT, then set CLOSER_ALLOW_DESTRUCTIVE_DB_TESTS=1 to opt in.",
+    "Destructive integration tests require CLOSER_ALLOW_DESTRUCTIVE_DB_TESTS=1; no database connection was opened.",
   );
 }
 
-const developmentDatabaseUrl = process.env.DATABASE_URL_UNPOOLED ?? process.env.DATABASE_URL;
-if (!developmentDatabaseUrl) {
-  throw new Error(
-    "Integration tests require the Neon DEVELOPMENT DATABASE_URL_UNPOOLED or DATABASE_URL.",
-  );
-}
+const testDatabaseUrl = resolveTestDatabaseUrl((name) => process.env[name]);
 
-// Integration tests use the direct Development connection for all DB access.
-process.env.DATABASE_URL = developmentDatabaseUrl;
-process.env.REALTIME_DATABASE_URL = developmentDatabaseUrl;
+// Integration tests use only the explicit, local closer_test connection.
+process.env.DATABASE_URL = testDatabaseUrl;
+process.env.REALTIME_DATABASE_URL = testDatabaseUrl;
