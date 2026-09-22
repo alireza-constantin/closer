@@ -16,6 +16,7 @@ import (
 	"github.com/alireza-constantin/closer/apps/api/internal/invite"
 	"github.com/alireza-constantin/closer/apps/api/internal/pair"
 	"github.com/alireza-constantin/closer/apps/api/internal/participant"
+	"github.com/alireza-constantin/closer/apps/api/internal/question"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -73,6 +74,19 @@ func NewRouterWithServices(
 	inviteService *invite.Service,
 	security SecurityConfig,
 ) http.Handler {
+	return NewRouterWithQuestionServices(logger, readiness, authService, participantService, pairService, inviteService, nil, security)
+}
+
+func NewRouterWithQuestionServices(
+	logger *slog.Logger,
+	readiness ReadinessChecker,
+	authService *auth.Service,
+	participantService *participant.Service,
+	pairService *pair.Service,
+	inviteService *invite.Service,
+	questionService *question.Service,
+	security SecurityConfig,
+) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -114,6 +128,9 @@ func NewRouterWithServices(
 			}
 			if participantService != nil && inviteService != nil {
 				registerInviteRoutes(api, authService, participantService, inviteService, security)
+			}
+			if questionService != nil {
+				registerAdminQuestionRoutes(api, authService, questionService, security)
 			}
 		})
 	}

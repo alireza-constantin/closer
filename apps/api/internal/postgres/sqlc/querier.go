@@ -11,6 +11,7 @@ import (
 )
 
 type Querier interface {
+	AddQuestionLifecycleEvent(ctx context.Context, arg AddQuestionLifecycleEventParams) error
 	ClearIntendedPersonName(ctx context.Context, pairID pgtype.UUID) error
 	CreateAdminUser(ctx context.Context, arg CreateAdminUserParams) error
 	CreateAuthCredential(ctx context.Context, arg CreateAuthCredentialParams) error
@@ -24,6 +25,8 @@ type Querier interface {
 	CreateInitialMembershipEra(ctx context.Context, arg CreateInitialMembershipEraParams) (pgtype.UUID, error)
 	CreatePair(ctx context.Context, arg CreatePairParams) (Pair, error)
 	CreateParticipant(ctx context.Context, arg CreateParticipantParams) (Participant, error)
+	CreateQuestion(ctx context.Context) (Question, error)
+	CreateQuestionRevision(ctx context.Context, arg CreateQuestionRevisionParams) (QuestionRevision, error)
 	CreateRegisteredAuthUser(ctx context.Context, arg CreateRegisteredAuthUserParams) (AuthUser, error)
 	CreateRejoinInvite(ctx context.Context, arg CreateRejoinInviteParams) (CreateRejoinInviteRow, error)
 	// Infrastructure-only query used by the test-database guard and transaction
@@ -53,6 +56,8 @@ type Querier interface {
 	GetLocalTestValue(ctx context.Context) (string, error)
 	GetParticipantByAuthUserID(ctx context.Context, authUserID pgtype.UUID) (Participant, error)
 	GetParticipantByID(ctx context.Context, id pgtype.UUID) (Participant, error)
+	GetQuestion(ctx context.Context, id pgtype.UUID) (GetQuestionRow, error)
+	GetQuestionRevision(ctx context.Context, arg GetQuestionRevisionParams) (QuestionRevision, error)
 	GetRejoinInviteByHash(ctx context.Context, tokenHash []byte) (GetRejoinInviteByHashRow, error)
 	GetRejoinInviteForUpdate(ctx context.Context, id pgtype.UUID) (GetRejoinInviteForUpdateRow, error)
 	GetRejoinInviteLanding(ctx context.Context, tokenHash []byte) (PairSlot, error)
@@ -65,6 +70,8 @@ type Querier interface {
 	ListActivePairMembers(ctx context.Context, pairID pgtype.UUID) ([]ListActivePairMembersRow, error)
 	ListAuthSessionTokenHashes(ctx context.Context, authUserID pgtype.UUID) ([][]byte, error)
 	ListParticipantSpaces(ctx context.Context, participantID pgtype.UUID) ([]ListParticipantSpacesRow, error)
+	ListQuestionRevisions(ctx context.Context, questionID pgtype.UUID) ([]QuestionRevision, error)
+	ListQuestions(ctx context.Context, arg ListQuestionsParams) ([]ListQuestionsRow, error)
 	LockActivePair(ctx context.Context, pairID pgtype.UUID) (pgtype.UUID, error)
 	LockActivePairForRejoin(ctx context.Context, pairID pgtype.UUID) (LockActivePairForRejoinRow, error)
 	LockAdminBootstrapEmail(ctx context.Context, hashtextextended string) error
@@ -73,7 +80,9 @@ type Querier interface {
 	LockAuthUserForUpgrade(ctx context.Context, id pgtype.UUID) (AuthUser, error)
 	LockClaimParticipantPair(ctx context.Context, lockKey string) error
 	LockPairForInitialClaim(ctx context.Context, pairID pgtype.UUID) (LockPairForInitialClaimRow, error)
+	LockQuestion(ctx context.Context, id pgtype.UUID) (Question, error)
 	LockTargetMembershipForRejoin(ctx context.Context, arg LockTargetMembershipForRejoinParams) (LockTargetMembershipForRejoinRow, error)
+	NextQuestionRevisionNumber(ctx context.Context, questionID pgtype.UUID) (int32, error)
 	ParticipantExists(ctx context.Context, participantID pgtype.UUID) (bool, error)
 	ParticipantHasActiveMembership(ctx context.Context, arg ParticipantHasActiveMembershipParams) (bool, error)
 	RebindParticipantAuthUserForRejoin(ctx context.Context, arg RebindParticipantAuthUserForRejoinParams) (int64, error)
@@ -87,12 +96,15 @@ type Querier interface {
 	RevokeAuthSessionsForUser(ctx context.Context, arg RevokeAuthSessionsForUserParams) (int64, error)
 	RevokeNonterminalInitialInvites(ctx context.Context, pairID pgtype.UUID) error
 	RevokeUsableInitialInvite(ctx context.Context, pairID pgtype.UUID) (int64, error)
+	SetCurrentQuestionRevision(ctx context.Context, arg SetCurrentQuestionRevisionParams) error
 	SetLocalTestValue(ctx context.Context, value string) (string, error)
+	SetQuestionActivity(ctx context.Context, arg SetQuestionActivityParams) error
 	UpdateAuthCredentialPasswordHash(ctx context.Context, arg UpdateAuthCredentialPasswordHashParams) error
 	UpdateIntendedPersonName(ctx context.Context, arg UpdateIntendedPersonNameParams) (Pair, error)
 	UpgradeAnonymousAuthUser(ctx context.Context, id pgtype.UUID) (int64, error)
 	UpsertAdminLoginRateLimit(ctx context.Context, subject string) (UpsertAdminLoginRateLimitRow, error)
 	UpsertAuthRateLimit(ctx context.Context, arg UpsertAuthRateLimitParams) (UpsertAuthRateLimitRow, error)
+	WithdrawQuestionRevision(ctx context.Context, arg WithdrawQuestionRevisionParams) error
 }
 
 var _ Querier = (*Queries)(nil)

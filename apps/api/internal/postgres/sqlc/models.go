@@ -182,6 +182,39 @@ type Participant struct {
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
+type Question struct {
+	ID                pgtype.UUID        `json:"id"`
+	CurrentRevisionID pgtype.UUID        `json:"current_revision_id"`
+	IsActive          bool               `json:"is_active"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+}
+
+type QuestionLifecycleEvent struct {
+	ID          pgtype.UUID        `json:"id"`
+	QuestionID  pgtype.UUID        `json:"question_id"`
+	RevisionID  pgtype.UUID        `json:"revision_id"`
+	Action      string             `json:"action"`
+	AdminUserID pgtype.UUID        `json:"admin_user_id"`
+	OccurredAt  pgtype.Timestamptz `json:"occurred_at"`
+	Reason      pgtype.Text        `json:"reason"`
+}
+
+type QuestionRevision struct {
+	ID                     pgtype.UUID        `json:"id"`
+	QuestionID             pgtype.UUID        `json:"question_id"`
+	Text                   string             `json:"text"`
+	Category               string             `json:"category"`
+	RelationshipFit        string             `json:"relationship_fit"`
+	ModeFit                string             `json:"mode_fit"`
+	Intensity              string             `json:"intensity"`
+	RevisionNumber         int32              `json:"revision_number"`
+	CreatedByAdminUserID   pgtype.UUID        `json:"created_by_admin_user_id"`
+	WithdrawnAt            pgtype.Timestamptz `json:"withdrawn_at"`
+	WithdrawnReason        pgtype.Text        `json:"withdrawn_reason"`
+	WithdrawnByAdminUserID pgtype.UUID        `json:"withdrawn_by_admin_user_id"`
+	CreatedAt              pgtype.Timestamptz `json:"created_at"`
+}
+
 type RejoinInvite struct {
 	ID                      pgtype.UUID        `json:"id"`
 	PairID                  pgtype.UUID        `json:"pair_id"`

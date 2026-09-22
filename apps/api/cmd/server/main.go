@@ -21,6 +21,8 @@ import (
 	postgresinvite "github.com/alireza-constantin/closer/apps/api/internal/postgres/invite"
 	postgrespair "github.com/alireza-constantin/closer/apps/api/internal/postgres/pair"
 	postgresparticipant "github.com/alireza-constantin/closer/apps/api/internal/postgres/participant"
+	postgresquestion "github.com/alireza-constantin/closer/apps/api/internal/postgres/question"
+	"github.com/alireza-constantin/closer/apps/api/internal/question"
 )
 
 func main() {
@@ -49,7 +51,8 @@ func run(logger *slog.Logger) error {
 	participantService := participant.NewService(postgresparticipant.NewStore(database))
 	pairService := pair.NewService(postgrespair.NewStore(database))
 	inviteService := invite.NewService(postgresinvite.NewStore(database))
-	router := httpapi.NewRouterWithServices(logger, database, authService, participantService, pairService, inviteService, httpapi.SecurityConfig{
+	questionService := question.NewService(postgresquestion.NewStore(database))
+	router := httpapi.NewRouterWithQuestionServices(logger, database, authService, participantService, pairService, inviteService, questionService, httpapi.SecurityConfig{
 		TrustedOrigins:    cfg.TrustedOrigins,
 		TrustedProxyCIDRs: cfg.TrustedProxyCIDRs,
 	})
