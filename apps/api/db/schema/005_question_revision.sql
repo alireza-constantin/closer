@@ -51,3 +51,35 @@ CREATE TABLE question_lifecycle_event (
     CONSTRAINT question_lifecycle_withdrawal_reason_required CHECK (action <> 'revision_withdrawn' OR (revision_id IS NOT NULL AND char_length(btrim(reason)) > 0))
 );
 CREATE INDEX question_lifecycle_event_question_occurred_idx ON question_lifecycle_event (question_id, occurred_at);
+
+CREATE TYPE private_question_candidate_state AS ENUM ('unresolved', 'asked', 'skipped', 'invalidated');
+
+CREATE TABLE private_conversation (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    pair_id uuid NOT NULL REFERENCES pair(id) ON DELETE CASCADE,
+    category text NOT NULL CHECK (category IN ('fun', 'deep', 'memories', 'relationship', 'friendship')),
+    created_by_participant_id uuid NOT NULL REFERENCES participant(id) ON DELETE RESTRICT,
+    membership_era_id uuid NOT NULL REFERENCES pair_membership_era(id) ON DELETE RESTRICT,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    selection_seed text NOT NULL DEFAULT gen_random_uuid()::text,
+    CONSTRAINT private_conversation_pair_id_id_key UNIQUE (pair_id, id),
+    CONSTRAINT private_conversation_one_era_category_key UNIQUE (pair_id, membership_era_id, category)
+);
+CREATE INDEX private_conversation_pair_created_idx ON private_conversation (pair_id, created_at);
+
+CREATE TABLE private_question_candidate (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    conversation_id uuid NOT NULL REFERENCES private_conversation(id) ON DELETE CASCADE,
+    question_id uuid NOT NULL REFERENCES question(id) ON DELETE RESTRICT,
+    question_revision_id uuid NOT NULL REFERENCES question_revision(id) ON DELETE RESTRICT,
+    state private_question_candidate_state NOT NULL DEFAULT 'unresolved',
+    created_at timestamptz NOT NULL DEFAULT now(),
+    resolved_at timestamptz,
+    CONSTRAINT private_candidate_question_revision_belongs_to_question_fk
+        FOREIGN KEY (question_id, question_revision_id)
+        REFERENCES question_revision(question_id, id) ON DELETE RESTRICT
+);
+CREATE UNIQUE INDEX private_candidate_one_unresolved_uidx
+    ON private_question_candidate (conversation_id) WHERE state = 'unresolved';
+CREATE INDEX private_candidate_conversation_created_idx
+    ON private_question_candidate (conversation_id, created_at);

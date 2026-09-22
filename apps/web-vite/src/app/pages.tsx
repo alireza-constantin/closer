@@ -313,6 +313,17 @@ export function PairPage() {
                   A shared-device experience for your next little moment.
                 </span>
               </Link>
+              <div className="bg-closer-lavender/60 rounded-3xl p-5">
+                <Link
+                  className="text-closer-navy block font-extrabold"
+                  to={`/pair/${pairId}/private`}
+                >
+                  Private
+                </Link>
+                <span className="text-closer-muted mt-1 block text-sm">
+                  Take turns answering questions on your own devices.
+                </span>
+              </div>
             </div>
           </>
         )}

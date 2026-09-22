@@ -13,6 +13,10 @@ import {
   SpacesPage,
 } from "@/app/pages";
 import { TogetherPickerPage, TogetherSessionPage } from "@/features/together/together-pages";
+import {
+  PrivateCategoryPage,
+  PrivateConversationPage,
+} from "@/features/private-conversation/components";
 import { queryClient } from "@/lib/query-client";
 import { QueryClientProvider } from "@tanstack/react-query";
 
@@ -39,6 +43,8 @@ export const appRoutes: RouteObject[] = [
   { path: "/onboarding", Component: OnboardingPage },
   { path: "/spaces", Component: SpacesPage },
   { path: "/pair/:pairId", Component: PairPage },
+  { path: "/pair/:pairId/private", Component: PrivateCategoryPage },
+  { path: "/pair/:pairId/private/:category", Component: PrivateConversationPage },
   { path: "/pair/:pairId/invite", Component: PairInvitePage },
   { path: "/pair/:pairId/together", Component: TogetherPickerPage },
   { path: "/pair/:pairId/together/sessions/:sessionId", Component: TogetherSessionPage },

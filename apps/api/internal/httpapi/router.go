@@ -16,6 +16,7 @@ import (
 	"github.com/alireza-constantin/closer/apps/api/internal/invite"
 	"github.com/alireza-constantin/closer/apps/api/internal/pair"
 	"github.com/alireza-constantin/closer/apps/api/internal/participant"
+	privatedomain "github.com/alireza-constantin/closer/apps/api/internal/private"
 	"github.com/alireza-constantin/closer/apps/api/internal/question"
 	"github.com/alireza-constantin/closer/apps/api/internal/realtime"
 	"github.com/alireza-constantin/closer/apps/api/internal/together"
@@ -91,7 +92,7 @@ func NewRouterWithQuestionRealtime(
 	realtimeRegistry *realtime.Registry,
 	security SecurityConfig,
 ) http.Handler {
-	return NewRouterWithQuestionAndTogetherRealtime(logger, readiness, authService, participantService, pairService, inviteService, questionService, nil, realtimeRegistry, nil, security)
+	return NewRouterWithPrivateAndTogetherRealtime(logger, readiness, authService, participantService, pairService, inviteService, questionService, nil, nil, realtimeRegistry, nil, security)
 }
 
 func NewRouterWithQuestionAndTogetherRealtime(
@@ -102,6 +103,38 @@ func NewRouterWithQuestionAndTogetherRealtime(
 	pairService *pair.Service,
 	inviteService *invite.Service,
 	questionService *question.Service,
+	togetherService *together.Service,
+	realtimeRegistry *realtime.Registry,
+	realtimePublisher realtime.Publisher,
+	security SecurityConfig,
+) http.Handler {
+	return NewRouterWithPrivateAndTogetherRealtime(logger, readiness, authService, participantService, pairService, inviteService, questionService, nil, togetherService, realtimeRegistry, realtimePublisher, security)
+}
+
+func NewRouterWithQuestionPrivateRealtime(
+	logger *slog.Logger,
+	readiness ReadinessChecker,
+	authService *auth.Service,
+	participantService *participant.Service,
+	pairService *pair.Service,
+	inviteService *invite.Service,
+	questionService *question.Service,
+	privateService *privatedomain.Service,
+	realtimeRegistry *realtime.Registry,
+	security SecurityConfig,
+) http.Handler {
+	return NewRouterWithPrivateAndTogetherRealtime(logger, readiness, authService, participantService, pairService, inviteService, questionService, privateService, nil, realtimeRegistry, nil, security)
+}
+
+func NewRouterWithPrivateAndTogetherRealtime(
+	logger *slog.Logger,
+	readiness ReadinessChecker,
+	authService *auth.Service,
+	participantService *participant.Service,
+	pairService *pair.Service,
+	inviteService *invite.Service,
+	questionService *question.Service,
+	privateService *privatedomain.Service,
 	togetherService *together.Service,
 	realtimeRegistry *realtime.Registry,
 	realtimePublisher realtime.Publisher,
@@ -154,6 +187,9 @@ func NewRouterWithQuestionAndTogetherRealtime(
 			}
 			if togetherService != nil && participantService != nil {
 				registerTogetherRoutes(api, authService, participantService, togetherService, realtimePublisher, security)
+			}
+			if privateService != nil && participantService != nil {
+				registerPrivateRoutes(api, authService, participantService, privateService, security)
 			}
 			if realtimeRegistry != nil && participantService != nil && pairService != nil {
 				registerRealtimeRoutes(api, authService, participantService, pairService, realtimeRegistry)

@@ -21,8 +21,10 @@ import (
 	postgresinvite "github.com/alireza-constantin/closer/apps/api/internal/postgres/invite"
 	postgrespair "github.com/alireza-constantin/closer/apps/api/internal/postgres/pair"
 	postgresparticipant "github.com/alireza-constantin/closer/apps/api/internal/postgres/participant"
+	postgresprivate "github.com/alireza-constantin/closer/apps/api/internal/postgres/private"
 	postgresquestion "github.com/alireza-constantin/closer/apps/api/internal/postgres/question"
 	postgrestogether "github.com/alireza-constantin/closer/apps/api/internal/postgres/together"
+	"github.com/alireza-constantin/closer/apps/api/internal/private"
 	"github.com/alireza-constantin/closer/apps/api/internal/question"
 	"github.com/alireza-constantin/closer/apps/api/internal/realtime"
 	"github.com/alireza-constantin/closer/apps/api/internal/together"
@@ -53,12 +55,14 @@ func run(logger *slog.Logger) error {
 	authService := auth.NewServiceWithCredentials(authStore, authStore, nil)
 	participantService := participant.NewService(postgresparticipant.NewStore(database))
 	pairService := pair.NewService(postgrespair.NewStore(database))
+	privateStore := postgresprivate.NewStore(database)
+	privateService := private.NewService(privateStore)
 	realtimePublisher := postgres.NewRealtimePublisher(database)
 	inviteService := invite.NewServiceWithPublisher(postgresinvite.NewStore(database), realtimePublisher)
-	questionService := question.NewService(postgresquestion.NewStore(database))
+	questionService := question.NewService(postgresquestion.NewStore(database, privateStore))
 	togetherService := together.NewService(postgrestogether.NewStore(database))
 	realtimeRegistry := realtime.NewRegistry(32)
-	router := httpapi.NewRouterWithQuestionAndTogetherRealtime(logger, database, authService, participantService, pairService, inviteService, questionService, togetherService, realtimeRegistry, realtimePublisher, httpapi.SecurityConfig{
+	router := httpapi.NewRouterWithPrivateAndTogetherRealtime(logger, database, authService, participantService, pairService, inviteService, questionService, privateService, togetherService, realtimeRegistry, realtimePublisher, httpapi.SecurityConfig{
 		TrustedOrigins:    cfg.TrustedOrigins,
 		TrustedProxyCIDRs: cfg.TrustedProxyCIDRs,
 	})

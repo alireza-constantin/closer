@@ -16,6 +16,7 @@ sql:
       - "db/queries/test_helpers.sql"
       - "db/queries/question.sql"
       - "db/queries/together.sql"
+      - "db/queries/private.sql"
     gen:
       go:
         package: "sqlc"
