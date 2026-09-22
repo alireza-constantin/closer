@@ -330,8 +330,10 @@ export function InvitePage() {
   const me = useQuery({ queryKey: meKey, queryFn: getMe });
   const form = useForm<DisplayNameForm>({ resolver: zodResolver(displayNameSchema) });
   const claim = useMutation({
-    mutationFn: (value: DisplayNameForm) =>
-      redeemInvite(token, me.data?.actor?.participant ? undefined : value.displayName),
+    mutationFn: async (value: DisplayNameForm) => {
+      if (!me.data?.actor) await startAnonymous();
+      return redeemInvite(token, me.data?.actor?.participant ? undefined : value.displayName);
+    },
     onSuccess: async (value: any) => {
       await queryClient.invalidateQueries({ queryKey: meKey });
       navigate(`/pair/${value.pairId}`);
@@ -444,9 +446,13 @@ export function RejoinPage() {
     queryFn: () => previewRejoin(token),
     enabled: Boolean(token),
   });
+  const me = useQuery({ queryKey: meKey, queryFn: getMe });
   const form = useForm<DisplayNameForm>({ resolver: zodResolver(displayNameSchema) });
   const mutation = useMutation({
-    mutationFn: (value: DisplayNameForm) => redeemRejoin(token, value.displayName),
+    mutationFn: async (value: DisplayNameForm) => {
+      if (!me.data?.actor) await startAnonymous();
+      return redeemRejoin(token, value.displayName);
+    },
     onSuccess: async (value: any) => {
       await queryClient.invalidateQueries({ queryKey: meKey });
       navigate(`/pair/${value.pairId}`);

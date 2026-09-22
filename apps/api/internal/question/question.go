@@ -33,6 +33,19 @@ type ListFilter struct {
 	Limit, Offset                                         int32
 }
 
+// CandidateInvalidator is the future Private-domain port for withdrawal. Q-01
+// deliberately does not implement candidate persistence; the Private lane must
+// provide this port and invoke it in the same transaction as withdrawal.
+type CandidateInvalidator interface {
+	InvalidateUnresolvedCandidates(context.Context, string) error
+}
+
+type DeferredCandidateInvalidator struct{}
+
+func (DeferredCandidateInvalidator) InvalidateUnresolvedCandidates(context.Context, string) error {
+	return nil
+}
+
 type Repository interface {
 	Create(context.Context, RevisionFields, string) (Question, error)
 	Edit(context.Context, string, RevisionFields, string, string) (Question, error)
