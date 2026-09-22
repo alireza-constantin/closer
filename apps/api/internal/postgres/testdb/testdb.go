@@ -9,8 +9,11 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 
+	"github.com/alireza-constantin/closer/apps/api/internal/env"
 	"github.com/alireza-constantin/closer/apps/api/internal/postgres"
 	"github.com/alireza-constantin/closer/apps/api/internal/postgres/sqlc"
 	"github.com/jackc/pgx/v5"
@@ -38,6 +41,21 @@ func URLFromEnv(lookup func(string) (string, bool)) (string, error) {
 // LoadURL reads and validates the integration-test target from the process
 // environment without printing its value.
 func LoadURL() (string, error) {
+	if err := env.LoadLocal(); err != nil {
+		return "", err
+	}
+	if _, ok := os.LookupEnv(DatabaseURLEnv); !ok {
+		// Go runs each package's tests from that package directory. The source
+		// relative path keeps those tests able to use apps/api/.env.local without
+		// searching arbitrary parent directories; normal commands use LoadLocal's
+		// cwd-based paths above.
+		if _, sourceFile, _, ok := runtime.Caller(0); ok {
+			apiEnv := filepath.Join(filepath.Dir(sourceFile), "..", "..", "..", ".env.local")
+			if err := env.LoadLocalFile(apiEnv); err != nil {
+				return "", err
+			}
+		}
+	}
 	return URLFromEnv(os.LookupEnv)
 }
 

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alireza-constantin/closer/apps/api/internal/env"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -36,6 +37,9 @@ type Config struct {
 
 // Load reads process environment once and validates the resulting settings.
 func Load() (Config, error) {
+	if err := env.LoadLocal(); err != nil {
+		return Config{}, err
+	}
 	return Parse(os.LookupEnv)
 }
 

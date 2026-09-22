@@ -12,8 +12,11 @@ import (
 )
 
 func TestReadinessEndpointWithGuardedPostgresDatabase(t *testing.T) {
-	if _, ok := os.LookupEnv(testdb.DatabaseURLEnv); !ok {
-		t.Skip("set CLOSER_TEST_DATABASE_URL to an approved local test database to run PostgreSQL integration checks")
+	if _, err := testdb.LoadURL(); err != nil {
+		if _, ok := os.LookupEnv(testdb.DatabaseURLEnv); !ok {
+			t.Skip("set CLOSER_TEST_DATABASE_URL to an approved local test database to run PostgreSQL integration checks")
+		}
+		t.Fatalf("load guarded PostgreSQL test URL: %v", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

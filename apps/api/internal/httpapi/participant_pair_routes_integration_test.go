@@ -32,8 +32,11 @@ const domainTestOrigin = "https://closer.example"
 
 func openParticipantPairTestPool(t *testing.T) *postgres.Pool {
 	t.Helper()
-	if _, ok := os.LookupEnv(testdb.DatabaseURLEnv); !ok {
-		t.Skip("set CLOSER_TEST_DATABASE_URL to local closer_test with the Go schema")
+	if _, err := testdb.LoadURL(); err != nil {
+		if _, ok := os.LookupEnv(testdb.DatabaseURLEnv); !ok {
+			t.Skip("set CLOSER_TEST_DATABASE_URL to local closer_test with the Go schema")
+		}
+		t.Fatalf("load guarded closer_test URL: %v", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

@@ -14,17 +14,20 @@ import (
 
 func openTestPool(t *testing.T) *postgres.Pool {
 	t.Helper()
-	if _, ok := os.LookupEnv(testdb.DatabaseURLEnv); !ok {
-		t.Skip("set CLOSER_TEST_DATABASE_URL to an approved local test database to run PostgreSQL integration checks")
+	if _, err := testdb.LoadURL(); err != nil {
+		if _, ok := os.LookupEnv(testdb.DatabaseURLEnv); !ok {
+			t.Skip("set CLOSER_TEST_DATABASE_URL to an approved local test database to run PostgreSQL integration checks")
+		}
+		t.Fatalf("load guarded PostgreSQL test URL: %v", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	pool, err := testdb.OpenPool(ctx)
+	p, err := testdb.OpenPool(ctx)
 	if err != nil {
 		t.Fatalf("open guarded PostgreSQL test pool: %v", err)
 	}
-	t.Cleanup(pool.Close)
-	return pool
+	t.Cleanup(p.Close)
+	return p
 }
 
 func TestPoolPingAndClose(t *testing.T) {
@@ -125,7 +128,7 @@ func TestTransactionRollsBackWhenContextIsCanceled(t *testing.T) {
 }
 
 func TestDedicatedListenerConnectionLifecycle(t *testing.T) {
-	if _, ok := os.LookupEnv(testdb.DatabaseURLEnv); !ok {
+	if _, err := testdb.LoadURL(); err != nil {
 		t.Skip("set CLOSER_TEST_DATABASE_URL to an approved local test database to run PostgreSQL integration checks")
 	}
 	url, err := testdb.LoadURL()
