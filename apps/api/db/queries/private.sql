@@ -58,16 +58,72 @@ WHERE c.id = sqlc.arg(conversation_id)
 
 -- name: GetUnresolvedPrivateCandidate :one
 SELECT c.id, c.conversation_id, c.question_id, c.question_revision_id, c.state,
-       c.created_at, c.resolved_at, r.text, r.category, r.intensity
+       c.created_at, c.resolved_at, c.liked_at, r.text, r.category, r.intensity,
+       r.withdrawn_at
 FROM private_question_candidate AS c
 JOIN question_revision AS r ON r.id = c.question_revision_id
 WHERE c.conversation_id = sqlc.arg(conversation_id)
   AND c.state = 'unresolved'
 LIMIT 1;
 
+-- name: GetPrivateCandidateForUpdate :one
+SELECT c.id, c.conversation_id, c.question_id, c.question_revision_id, c.state,
+       c.created_at, c.resolved_at, c.liked_at, c.skip_request_id,
+       c.skip_result_candidate_id, r.text, r.category, r.intensity, r.withdrawn_at
+FROM private_question_candidate AS c
+JOIN question_revision AS r ON r.id = c.question_revision_id
+WHERE c.id = sqlc.arg(candidate_id)
+  AND c.conversation_id = sqlc.arg(conversation_id)
+FOR UPDATE;
+
 -- name: ListConsumedPrivateQuestionIDs :many
 SELECT question_id FROM private_question_candidate
 WHERE conversation_id = sqlc.arg(conversation_id) AND state IN ('asked', 'skipped');
+
+-- name: GetActivePrivateRoundForPair :one
+SELECT id, pair_id, conversation_id, membership_era_id, candidate_id, question_id,
+       question_revision_id, round_number, status, asked_at, client_request_id
+FROM private_round
+WHERE pair_id = sqlc.arg(pair_id)
+  AND membership_era_id = sqlc.arg(membership_era_id)
+  AND status = 'open'
+ORDER BY asked_at DESC
+LIMIT 1;
+
+-- name: GetOpenPrivateRoundForConversation :one
+SELECT round.id, round.pair_id, round.conversation_id, round.membership_era_id, round.candidate_id, round.question_id,
+       round.question_revision_id, round.round_number, round.status, round.asked_at, round.client_request_id,
+       r.text, r.category, r.intensity
+FROM private_round AS round
+JOIN question_revision AS r ON r.id = round.question_revision_id
+WHERE round.pair_id = sqlc.arg(pair_id)
+  AND round.conversation_id = sqlc.arg(conversation_id)
+  AND round.membership_era_id = sqlc.arg(membership_era_id)
+  AND round.status = 'open'
+ORDER BY round.round_number DESC
+LIMIT 1;
+
+-- name: GetPrivateRoundByCandidate :one
+SELECT round.id, round.pair_id, round.conversation_id, round.membership_era_id, round.candidate_id, round.question_id,
+       round.question_revision_id, round.round_number, round.status, round.asked_at, round.client_request_id,
+       r.text, r.category, r.intensity
+FROM private_round AS round
+JOIN question_revision AS r ON r.id = round.question_revision_id
+WHERE round.candidate_id = sqlc.arg(candidate_id)
+  AND round.conversation_id = sqlc.arg(conversation_id)
+LIMIT 1;
+
+-- name: NextPrivateRoundNumber :one
+SELECT (COALESCE(MAX(round_number), 0) + 1)::integer AS round_number
+FROM private_round
+WHERE conversation_id = sqlc.arg(conversation_id);
+
+-- name: GetSkippedPrivateCandidateByRequest :one
+SELECT id, conversation_id, skip_result_candidate_id
+FROM private_question_candidate
+WHERE conversation_id = sqlc.arg(conversation_id)
+  AND skip_request_id = sqlc.arg(skip_request_id)
+LIMIT 1;
 
 -- name: ListEligiblePrivateQuestions :many
 SELECT q.id, r.id AS question_revision_id, r.text, r.category, r.intensity
@@ -85,6 +141,53 @@ INSERT INTO private_question_candidate (conversation_id, question_id, question_r
 VALUES (sqlc.arg(conversation_id), sqlc.arg(question_id), sqlc.arg(question_revision_id))
 ON CONFLICT (conversation_id) WHERE state = 'unresolved' DO NOTHING
 RETURNING id, conversation_id, question_id, question_revision_id, state, created_at, resolved_at;
+
+-- name: MarkPrivateCandidateAsked :one
+UPDATE private_question_candidate
+SET state = 'asked', resolved_at = now()
+WHERE id = sqlc.arg(candidate_id)
+  AND conversation_id = sqlc.arg(conversation_id)
+  AND state = 'unresolved'
+RETURNING id;
+
+-- name: MarkPrivateCandidateSkipped :one
+UPDATE private_question_candidate
+SET state = 'skipped', resolved_at = now(), skip_request_id = sqlc.arg(skip_request_id)
+WHERE id = sqlc.arg(candidate_id)
+  AND conversation_id = sqlc.arg(conversation_id)
+  AND state = 'unresolved'
+RETURNING id;
+
+-- name: SetPrivateCandidateSkipResult :exec
+UPDATE private_question_candidate
+SET skip_result_candidate_id = sqlc.arg(skip_result_candidate_id)
+WHERE id = sqlc.arg(candidate_id)
+  AND state = 'skipped';
+
+-- name: SetPrivateCandidateLike :one
+UPDATE private_question_candidate
+SET liked_at = CASE WHEN sqlc.arg(liked)::boolean THEN now() ELSE NULL END
+WHERE id = sqlc.arg(candidate_id)
+  AND conversation_id = sqlc.arg(conversation_id)
+  AND state = 'unresolved'
+RETURNING liked_at;
+
+-- name: InvalidatePrivateCandidate :exec
+UPDATE private_question_candidate
+SET state = 'invalidated', resolved_at = COALESCE(resolved_at, now())
+WHERE id = sqlc.arg(candidate_id) AND state = 'unresolved';
+
+-- name: CreatePrivateRound :one
+INSERT INTO private_round (
+    pair_id, conversation_id, membership_era_id, candidate_id,
+    question_id, question_revision_id, round_number, client_request_id
+)
+VALUES (
+    sqlc.arg(pair_id), sqlc.arg(conversation_id), sqlc.arg(membership_era_id), sqlc.arg(candidate_id),
+    sqlc.arg(question_id), sqlc.arg(question_revision_id), sqlc.arg(round_number), sqlc.arg(client_request_id)
+)
+RETURNING id, pair_id, conversation_id, membership_era_id, candidate_id, question_id,
+          question_revision_id, round_number, status, asked_at, client_request_id;
 
 -- name: InvalidatePrivateCandidatesForRevision :exec
 UPDATE private_question_candidate

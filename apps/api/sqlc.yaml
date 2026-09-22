@@ -8,6 +8,7 @@ sql:
       - "db/schema/004_rejoin_invite.sql"
       - "db/schema/005_question_revision.sql"
       - "db/schema/006_together.sql"
+      - "db/schema/007_private_round.sql"
     queries:
       - "db/queries/auth.sql"
       - "db/queries/participant.sql"

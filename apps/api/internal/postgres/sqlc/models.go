@@ -139,6 +139,48 @@ func (ns NullPrivateQuestionCandidateState) Value() (driver.Value, error) {
 	return string(ns.PrivateQuestionCandidateState), nil
 }
 
+type PrivateRoundStatus string
+
+const (
+	PrivateRoundStatusOpen   PrivateRoundStatus = "open"
+	PrivateRoundStatusClosed PrivateRoundStatus = "closed"
+)
+
+func (e *PrivateRoundStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = PrivateRoundStatus(s)
+	case string:
+		*e = PrivateRoundStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for PrivateRoundStatus: %T", src)
+	}
+	return nil
+}
+
+type NullPrivateRoundStatus struct {
+	PrivateRoundStatus PrivateRoundStatus `json:"private_round_status"`
+	Valid              bool               `json:"valid"` // Valid is true if PrivateRoundStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullPrivateRoundStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.PrivateRoundStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.PrivateRoundStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullPrivateRoundStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.PrivateRoundStatus), nil
+}
+
 type AdminUser struct {
 	AuthUserID pgtype.UUID        `json:"auth_user_id"`
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
@@ -237,13 +279,30 @@ type PrivateConversation struct {
 }
 
 type PrivateQuestionCandidate struct {
-	ID                 pgtype.UUID                   `json:"id"`
-	ConversationID     pgtype.UUID                   `json:"conversation_id"`
-	QuestionID         pgtype.UUID                   `json:"question_id"`
-	QuestionRevisionID pgtype.UUID                   `json:"question_revision_id"`
-	State              PrivateQuestionCandidateState `json:"state"`
-	CreatedAt          pgtype.Timestamptz            `json:"created_at"`
-	ResolvedAt         pgtype.Timestamptz            `json:"resolved_at"`
+	ID                    pgtype.UUID                   `json:"id"`
+	ConversationID        pgtype.UUID                   `json:"conversation_id"`
+	QuestionID            pgtype.UUID                   `json:"question_id"`
+	QuestionRevisionID    pgtype.UUID                   `json:"question_revision_id"`
+	State                 PrivateQuestionCandidateState `json:"state"`
+	CreatedAt             pgtype.Timestamptz            `json:"created_at"`
+	ResolvedAt            pgtype.Timestamptz            `json:"resolved_at"`
+	LikedAt               pgtype.Timestamptz            `json:"liked_at"`
+	SkipRequestID         pgtype.UUID                   `json:"skip_request_id"`
+	SkipResultCandidateID pgtype.UUID                   `json:"skip_result_candidate_id"`
+}
+
+type PrivateRound struct {
+	ID                 pgtype.UUID        `json:"id"`
+	PairID             pgtype.UUID        `json:"pair_id"`
+	ConversationID     pgtype.UUID        `json:"conversation_id"`
+	MembershipEraID    pgtype.UUID        `json:"membership_era_id"`
+	CandidateID        pgtype.UUID        `json:"candidate_id"`
+	QuestionID         pgtype.UUID        `json:"question_id"`
+	QuestionRevisionID pgtype.UUID        `json:"question_revision_id"`
+	RoundNumber        int32              `json:"round_number"`
+	Status             PrivateRoundStatus `json:"status"`
+	AskedAt            pgtype.Timestamptz `json:"asked_at"`
+	ClientRequestID    pgtype.UUID        `json:"client_request_id"`
 }
 
 type Question struct {

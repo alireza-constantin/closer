@@ -5,8 +5,11 @@ import { Link, useNavigate, useParams } from "react-router";
 import { PageShell } from "@/app/page-shell";
 import { ApiError } from "@/lib/api-client";
 import {
+  askPrivateCandidate,
   getPrivateConversation,
+  likePrivateCandidate,
   privateCategories,
+  skipPrivateCandidate,
   startPrivateConversation,
 } from "@/features/private-conversation/api";
 import {
@@ -79,6 +82,51 @@ export function PrivateConversationPage() {
   }, [pairId, queryClient]);
 
   const view = conversation.data ?? start.data;
+  const ask = useMutation({
+    mutationFn: ({
+      candidateId,
+      clientRequestId,
+    }: {
+      candidateId: string;
+      clientRequestId: string;
+    }) => askPrivateCandidate(pairId, view?.conversationId ?? "", candidateId, clientRequestId),
+    retry: 1,
+    onSuccess: (round) => {
+      queryClient.setQueryData(privateConversationKey(pairId, category), (current: typeof view) =>
+        current
+          ? { ...current, state: "CURRENT_ROUND" as const, candidate: undefined, round }
+          : current,
+      );
+      void queryClient.invalidateQueries({ queryKey: privateConversationKey(pairId, category) });
+    },
+  });
+  const skip = useMutation({
+    mutationFn: ({
+      candidateId,
+      clientRequestId,
+    }: {
+      candidateId: string;
+      clientRequestId: string;
+    }) => skipPrivateCandidate(pairId, view?.conversationId ?? "", candidateId, clientRequestId),
+    retry: 1,
+    onSuccess: (next) => {
+      queryClient.setQueryData(privateConversationKey(pairId, category), next);
+      void queryClient.invalidateQueries({ queryKey: privateConversationKey(pairId, category) });
+    },
+  });
+  const like = useMutation({
+    mutationFn: ({ candidateId, liked }: { candidateId: string; liked: boolean }) =>
+      likePrivateCandidate(pairId, view?.conversationId ?? "", candidateId, liked),
+    onSuccess: (result) => {
+      queryClient.setQueryData(privateConversationKey(pairId, category), (current: typeof view) =>
+        current?.candidate
+          ? { ...current, candidate: { ...current.candidate, liked: result.liked } }
+          : current,
+      );
+      void queryClient.invalidateQueries({ queryKey: privateConversationKey(pairId, category) });
+    },
+  });
+  const mutationError = ask.error ?? skip.error ?? like.error;
   return (
     <PageShell>
       <section className="flex flex-1 flex-col py-8">
@@ -102,6 +150,53 @@ export function PrivateConversationPage() {
             <p className="text-closer-muted mt-4 text-sm">
               Your person is waiting for you to choose when you’re ready.
             </p>
+            <div className="mt-6 flex flex-wrap items-center gap-3">
+              <button
+                className="bg-closer-coral text-closer-navy rounded-2xl px-5 py-3 font-extrabold disabled:opacity-50"
+                disabled={ask.isPending || skip.isPending || like.isPending}
+                onClick={() =>
+                  ask.mutate({
+                    candidateId: view.candidate!.id,
+                    clientRequestId: crypto.randomUUID(),
+                  })
+                }
+              >
+                {ask.isPending ? "Asking…" : "Ask this"}
+              </button>
+              <button
+                className="border-closer-line text-closer-navy rounded-2xl border px-5 py-3 font-extrabold disabled:opacity-50"
+                disabled={ask.isPending || skip.isPending || like.isPending}
+                onClick={() =>
+                  skip.mutate({
+                    candidateId: view.candidate!.id,
+                    clientRequestId: crypto.randomUUID(),
+                  })
+                }
+              >
+                {skip.isPending ? "Skipping…" : "Skip"}
+              </button>
+              <button
+                aria-pressed={view.candidate.liked}
+                className="text-closer-navy rounded-2xl px-4 py-3 font-extrabold underline decoration-2 underline-offset-4 disabled:opacity-50"
+                disabled={ask.isPending || skip.isPending || like.isPending}
+                onClick={() =>
+                  like.mutate({ candidateId: view.candidate!.id, liked: !view.candidate!.liked })
+                }
+              >
+                {view.candidate.liked ? "♥ Liked" : "♡ Like"}
+              </button>
+            </div>
+          </div>
+        )}
+        {view?.state === "CURRENT_ROUND" && view.round && (
+          <div className="bg-closer-peach/60 mt-8 rounded-3xl p-6">
+            <p className="text-closer-muted text-sm font-bold uppercase">
+              Round {view.round.roundNumber}
+            </p>
+            <h1 className="text-closer-navy mt-3 text-3xl leading-tight font-extrabold">
+              {view.round.question.text}
+            </h1>
+            <p className="text-closer-muted mt-4 leading-7">Answers come next.</p>
           </div>
         )}
         {view?.state === "WAITING_FOR_CREATOR" && (
@@ -127,6 +222,9 @@ export function PrivateConversationPage() {
         {conversation.isFetching && !view && <p className="text-closer-muted mt-8">Refreshing…</p>}
         {conversation.error && !start.error && (
           <RecoveryPanel error={conversation.error} onRetry={() => void conversation.refetch()} />
+        )}
+        {mutationError && (
+          <RecoveryPanel error={mutationError} onRetry={() => void conversation.refetch()} />
         )}
       </section>
     </PageShell>

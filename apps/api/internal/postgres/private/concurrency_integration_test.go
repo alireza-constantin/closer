@@ -3,6 +3,7 @@ package private_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"sync"
@@ -16,6 +17,37 @@ import (
 	domain "github.com/alireza-constantin/closer/apps/api/internal/private"
 	"github.com/alireza-constantin/closer/apps/api/internal/question"
 )
+
+func testUUID(t *testing.T, pool *postgres.Pool) string {
+	t.Helper()
+	var id string
+	if err := pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		return db.QueryRow(context.Background(), "SELECT gen_random_uuid()::text").Scan(&id)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func createActiveQuestion(t *testing.T, f fixture, category, text string) string {
+	t.Helper()
+	created, err := f.questions.Create(context.Background(), question.RevisionFields{Text: text, Category: category, RelationshipFit: "both", ModeFit: "private", Intensity: "light"}, f.adminID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.questions.SetActivity(context.Background(), created.ID, "activate", f.adminID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+			_, _ = db.Exec(context.Background(), "UPDATE question SET current_revision_id = NULL WHERE id = $1", created.ID)
+			_, _ = db.Exec(context.Background(), "DELETE FROM question_revision WHERE question_id = $1", created.ID)
+			_, _ = db.Exec(context.Background(), "DELETE FROM question WHERE id = $1", created.ID)
+			return nil
+		})
+	})
+	return created.ID
+}
 
 type fixture struct {
 	pool                                                                      *postgres.Pool
@@ -232,5 +264,402 @@ func TestConcurrentDifferentCategoryStartsKeepOneCreatorProvisional(t *testing.T
 	}
 	if unresolved != 1 {
 		t.Fatalf("unresolved creator candidates = %d, want 1", unresolved)
+	}
+}
+
+func TestAskCreatesOneRoundPinsCandidateRevisionAndKeepsWaitingProjectionSafe(t *testing.T) {
+	f := openFixture(t)
+	view, err := f.service.StartOrResume(context.Background(), domain.StartInput{ParticipantID: f.firstID, PairID: f.pairID, Category: "fun"})
+	if err != nil || view.Candidate == nil {
+		t.Fatalf("start = %+v, err=%v", view, err)
+	}
+	requestID := testUUID(t, f.pool)
+	asked, err := f.service.Ask(context.Background(), domain.AskInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: view.ConversationID, CandidateID: view.Candidate.ID, ClientRequestID: requestID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if asked.RoundNumber != 1 || asked.QuestionID != view.Candidate.Question.ID || asked.QuestionRevisionID != view.Candidate.Question.RevisionID || asked.Text != view.Candidate.Question.Text {
+		t.Fatalf("asked round lost pinned candidate = %+v / %+v", asked, view.Candidate)
+	}
+	retry, err := f.service.Ask(context.Background(), domain.AskInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: view.ConversationID, CandidateID: view.Candidate.ID, ClientRequestID: requestID})
+	if err != nil || retry.ID != asked.ID || retry.RoundNumber != asked.RoundNumber {
+		t.Fatalf("Ask retry = %+v, err=%v; first=%+v", retry, err, asked)
+	}
+	creator, err := f.service.Read(context.Background(), domain.ReadInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: view.ConversationID})
+	if err != nil || creator.State != "CURRENT_ROUND" || creator.Candidate != nil || creator.Round == nil {
+		t.Fatalf("creator projection = %+v, err=%v", creator, err)
+	}
+	other, err := f.service.Read(context.Background(), domain.ReadInput{ParticipantID: f.secondID, PairID: f.pairID, ConversationID: view.ConversationID})
+	if err != nil || other.State != "CURRENT_ROUND" || other.Candidate != nil || other.Round == nil || other.Round.Text != asked.Text {
+		t.Fatalf("other projection = %+v, err=%v", other, err)
+	}
+	var rounds, askedCandidates int
+	if err := f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		if err := db.QueryRow(context.Background(), "SELECT count(*) FROM private_round WHERE conversation_id = $1", view.ConversationID).Scan(&rounds); err != nil {
+			return err
+		}
+		return db.QueryRow(context.Background(), "SELECT count(*) FROM private_question_candidate WHERE conversation_id = $1 AND state = 'asked'", view.ConversationID).Scan(&askedCandidates)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if rounds != 1 || askedCandidates != 1 {
+		t.Fatalf("round/candidate counts = %d/%d", rounds, askedCandidates)
+	}
+}
+
+func TestNormalQuestionEditDoesNotMovePinnedAskRevision(t *testing.T) {
+	f := openFixture(t)
+	view, err := f.service.StartOrResume(context.Background(), domain.StartInput{ParticipantID: f.firstID, PairID: f.pairID, Category: "fun"})
+	if err != nil || view.Candidate == nil {
+		t.Fatalf("start = %+v, err=%v", view, err)
+	}
+	originalRevision := view.Candidate.Question.RevisionID
+	originalText := view.Candidate.Question.Text
+	if _, err := f.questions.Edit(context.Background(), f.questionID, question.RevisionFields{Text: "new current revision", Category: "fun", RelationshipFit: "both", ModeFit: "private", Intensity: "light"}, originalRevision, f.adminID); err != nil {
+		t.Fatal(err)
+	}
+	asked, err := f.service.Ask(context.Background(), domain.AskInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: view.ConversationID, CandidateID: view.Candidate.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if asked.QuestionRevisionID != originalRevision || asked.Text != originalText {
+		t.Fatalf("Ask moved from pinned revision = %+v, want revision=%s text=%q", asked, originalRevision, originalText)
+	}
+}
+
+func TestSkipIsIdempotentAndConsumesLogicalQuestion(t *testing.T) {
+	f := openFixture(t)
+	view, err := f.service.StartOrResume(context.Background(), domain.StartInput{ParticipantID: f.firstID, PairID: f.pairID, Category: "fun"})
+	if err != nil || view.Candidate == nil {
+		t.Fatalf("start = %+v, err=%v", view, err)
+	}
+	requestID := testUUID(t, f.pool)
+	first, err := f.service.Skip(context.Background(), domain.SkipInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: view.ConversationID, CandidateID: view.Candidate.ID, ClientRequestID: requestID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Candidate != nil || first.State != "EXHAUSTED" {
+		t.Fatalf("single-question skip = %+v", first)
+	}
+	retry, err := f.service.Skip(context.Background(), domain.SkipInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: view.ConversationID, CandidateID: view.Candidate.ID, ClientRequestID: requestID})
+	if err != nil || retry.State != first.State || retry.Candidate != nil {
+		t.Fatalf("same-ID skip retry = %+v, err=%v; first=%+v", retry, err, first)
+	}
+	if _, err := f.questions.Edit(context.Background(), f.questionID, question.RevisionFields{Text: "Edited after skip", Category: "fun", RelationshipFit: "both", ModeFit: "private", Intensity: "light"}, view.Candidate.Question.RevisionID, f.adminID); err != nil {
+		t.Fatal(err)
+	}
+	afterEdit, err := f.service.StartOrResume(context.Background(), domain.StartInput{ParticipantID: f.firstID, PairID: f.pairID, Category: "fun"})
+	if err != nil || afterEdit.State != "EXHAUSTED" || afterEdit.Candidate != nil {
+		t.Fatalf("skipped logical question became eligible after edit = %+v, err=%v", afterEdit, err)
+	}
+	if _, err := f.service.Skip(context.Background(), domain.SkipInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: view.ConversationID, CandidateID: view.Candidate.ID, ClientRequestID: testUUID(t, f.pool)}); !errors.Is(err, domain.ErrCandidate) {
+		t.Fatalf("different-ID retry err=%v, want ErrCandidate", err)
+	}
+}
+
+func TestSkipReturnsStableReplacementOnSameRequest(t *testing.T) {
+	f := openFixture(t)
+	createActiveQuestion(t, f, "fun", "replacement candidate")
+	view, err := f.service.StartOrResume(context.Background(), domain.StartInput{ParticipantID: f.firstID, PairID: f.pairID, Category: "fun"})
+	if err != nil || view.Candidate == nil {
+		t.Fatalf("start = %+v, err=%v", view, err)
+	}
+	requestID := testUUID(t, f.pool)
+	first, err := f.service.Skip(context.Background(), domain.SkipInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: view.ConversationID, CandidateID: view.Candidate.ID, ClientRequestID: requestID})
+	if err != nil || first.Candidate == nil {
+		t.Fatalf("first skip = %+v, err=%v", first, err)
+	}
+	retry, err := f.service.Skip(context.Background(), domain.SkipInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: view.ConversationID, CandidateID: view.Candidate.ID, ClientRequestID: requestID})
+	if err != nil || retry.Candidate == nil || retry.Candidate.ID != first.Candidate.ID {
+		t.Fatalf("replacement retry = %+v, err=%v; first=%+v", retry, err, first)
+	}
+}
+
+func TestLikeIsCreatorOnlyAndFreezesAfterAsk(t *testing.T) {
+	f := openFixture(t)
+	view, err := f.service.StartOrResume(context.Background(), domain.StartInput{ParticipantID: f.firstID, PairID: f.pairID, Category: "fun"})
+	if err != nil || view.Candidate == nil {
+		t.Fatalf("start = %+v, err=%v", view, err)
+	}
+	if _, err := f.service.Like(context.Background(), domain.LikeInput{ParticipantID: f.secondID, PairID: f.pairID, ConversationID: view.ConversationID, CandidateID: view.Candidate.ID, Liked: true}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("non-creator Like err=%v, want ErrNotFound", err)
+	}
+	liked, err := f.service.Like(context.Background(), domain.LikeInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: view.ConversationID, CandidateID: view.Candidate.ID, Liked: true})
+	if err != nil || !liked {
+		t.Fatalf("Like = %v, err=%v", liked, err)
+	}
+	afterLike, err := f.service.Read(context.Background(), domain.ReadInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: view.ConversationID})
+	if err != nil || afterLike.Candidate == nil || !afterLike.Candidate.Liked {
+		t.Fatalf("liked candidate projection = %+v, err=%v", afterLike, err)
+	}
+	if _, err := f.service.Ask(context.Background(), domain.AskInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: view.ConversationID, CandidateID: view.Candidate.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.service.Like(context.Background(), domain.LikeInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: view.ConversationID, CandidateID: view.Candidate.ID, Liked: false}); !errors.Is(err, domain.ErrCandidate) {
+		t.Fatalf("late Like err=%v, want ErrCandidate", err)
+	}
+}
+
+func TestPairWideOpenRoundBlocksAskInAnotherConversation(t *testing.T) {
+	f := openFixture(t)
+	otherQuestionID := createActiveQuestion(t, f, "memories", "other lane question")
+	view, err := f.service.StartOrResume(context.Background(), domain.StartInput{ParticipantID: f.firstID, PairID: f.pairID, Category: "fun"})
+	if err != nil || view.Candidate == nil {
+		t.Fatalf("start = %+v, err=%v", view, err)
+	}
+	var otherConversationID, otherCandidateID, eraID, revisionID string
+	if err := f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		if err := db.QueryRow(context.Background(), "SELECT id::text FROM pair_membership_era WHERE pair_id = $1 AND ended_at IS NULL", f.pairID).Scan(&eraID); err != nil {
+			return err
+		}
+		if err := db.QueryRow(context.Background(), "SELECT current_revision_id::text FROM question WHERE id = $1", otherQuestionID).Scan(&revisionID); err != nil {
+			return err
+		}
+		if err := db.QueryRow(context.Background(), "INSERT INTO private_conversation(pair_id, category, created_by_participant_id, membership_era_id) VALUES ($1, 'memories', $2, $3) RETURNING id::text", f.pairID, f.firstID, eraID).Scan(&otherConversationID); err != nil {
+			return err
+		}
+		return db.QueryRow(context.Background(), "INSERT INTO private_question_candidate(conversation_id, question_id, question_revision_id) VALUES ($1, $2, $3) RETURNING id::text", otherConversationID, otherQuestionID, revisionID).Scan(&otherCandidateID)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.service.Ask(context.Background(), domain.AskInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: view.ConversationID, CandidateID: view.Candidate.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.service.Ask(context.Background(), domain.AskInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: otherConversationID, CandidateID: otherCandidateID}); !errors.Is(err, domain.ErrRoundOpen) {
+		t.Fatalf("cross-category Ask err=%v, want ErrRoundOpen", err)
+	}
+}
+
+func TestConcurrentAskAttemptsCreateOneRoundAndOneTerminalCandidate(t *testing.T) {
+	f := openFixture(t)
+	view, err := f.service.StartOrResume(context.Background(), domain.StartInput{ParticipantID: f.firstID, PairID: f.pairID, Category: "fun"})
+	if err != nil || view.Candidate == nil {
+		t.Fatalf("start = %+v, err=%v", view, err)
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			<-start
+			_, err := f.service.Ask(context.Background(), domain.AskInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: view.ConversationID, CandidateID: view.Candidate.ID, ClientRequestID: testUUID(t, f.pool)})
+			results <- err
+		}()
+	}
+	close(start)
+	firstErr, secondErr := <-results, <-results
+	if firstErr != nil && !errors.Is(firstErr, domain.ErrCandidate) && !errors.Is(firstErr, domain.ErrRoundOpen) || secondErr != nil && !errors.Is(secondErr, domain.ErrCandidate) && !errors.Is(secondErr, domain.ErrRoundOpen) {
+		t.Fatalf("Ask race errors = %v / %v", firstErr, secondErr)
+	}
+	var rounds, terminal int
+	if err := f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		if err := db.QueryRow(context.Background(), "SELECT count(*) FROM private_round WHERE conversation_id = $1", view.ConversationID).Scan(&rounds); err != nil {
+			return err
+		}
+		return db.QueryRow(context.Background(), "SELECT count(*) FROM private_question_candidate WHERE conversation_id = $1 AND state IN ('asked', 'skipped', 'invalidated')", view.ConversationID).Scan(&terminal)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if rounds != 1 || terminal != 1 {
+		t.Fatalf("Ask race persisted rounds/terminal candidates = %d/%d", rounds, terminal)
+	}
+}
+
+func TestConcurrentAskAndSkipHaveOneTerminalOutcome(t *testing.T) {
+	f := openFixture(t)
+	view, err := f.service.StartOrResume(context.Background(), domain.StartInput{ParticipantID: f.firstID, PairID: f.pairID, Category: "fun"})
+	if err != nil || view.Candidate == nil {
+		t.Fatalf("start = %+v, err=%v", view, err)
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	go func() {
+		<-start
+		_, err := f.service.Ask(context.Background(), domain.AskInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: view.ConversationID, CandidateID: view.Candidate.ID})
+		results <- err
+	}()
+	go func() {
+		<-start
+		_, err := f.service.Skip(context.Background(), domain.SkipInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: view.ConversationID, CandidateID: view.Candidate.ID, ClientRequestID: testUUID(t, f.pool)})
+		results <- err
+	}()
+	close(start)
+	firstErr, secondErr := <-results, <-results
+	for _, err := range []error{firstErr, secondErr} {
+		if err != nil && !errors.Is(err, domain.ErrCandidate) && !errors.Is(err, domain.ErrRoundOpen) {
+			t.Fatalf("Ask/Skip race error = %v", err)
+		}
+	}
+	var rounds, asked, skipped int
+	if err := f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		if err := db.QueryRow(context.Background(), "SELECT count(*) FROM private_round WHERE conversation_id = $1", view.ConversationID).Scan(&rounds); err != nil {
+			return err
+		}
+		if err := db.QueryRow(context.Background(), "SELECT count(*) FROM private_question_candidate WHERE conversation_id = $1 AND state = 'asked'", view.ConversationID).Scan(&asked); err != nil {
+			return err
+		}
+		return db.QueryRow(context.Background(), "SELECT count(*) FROM private_question_candidate WHERE conversation_id = $1 AND state = 'skipped'", view.ConversationID).Scan(&skipped)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if rounds+skipped != 1 || asked+skipped != 1 {
+		t.Fatalf("Ask/Skip race persisted rounds/asked/skipped = %d/%d/%d", rounds, asked, skipped)
+	}
+}
+
+func TestConcurrentAskAndWithdrawalNeverCreatesRoundFromInvalidatedCandidate(t *testing.T) {
+	f := openFixture(t)
+	view, err := f.service.StartOrResume(context.Background(), domain.StartInput{ParticipantID: f.firstID, PairID: f.pairID, Category: "fun"})
+	if err != nil || view.Candidate == nil {
+		t.Fatalf("start = %+v, err=%v", view, err)
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	go func() {
+		<-start
+		_, err := f.service.Ask(context.Background(), domain.AskInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: view.ConversationID, CandidateID: view.Candidate.ID})
+		results <- err
+	}()
+	go func() {
+		<-start
+		_, err := f.questions.Withdraw(context.Background(), f.questionID, view.Candidate.Question.RevisionID, "race", f.adminID)
+		results <- err
+	}()
+	close(start)
+	firstErr, secondErr := <-results, <-results
+	if firstErr != nil && !errors.Is(firstErr, domain.ErrCandidate) || secondErr != nil && !errors.Is(secondErr, domain.ErrCandidate) {
+		// The withdrawal service returns its own domain error on only malformed
+		// input; a successful withdrawal is nil and Ask may legitimately win.
+		if firstErr != nil || secondErr != nil {
+			t.Fatalf("Ask/withdrawal race errors = %v / %v", firstErr, secondErr)
+		}
+	}
+	var state string
+	var rounds int
+	if err := f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		if err := db.QueryRow(context.Background(), "SELECT state::text FROM private_question_candidate WHERE id = $1", view.Candidate.ID).Scan(&state); err != nil {
+			return err
+		}
+		return db.QueryRow(context.Background(), "SELECT count(*) FROM private_round WHERE candidate_id = $1", view.Candidate.ID).Scan(&rounds)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if state == "invalidated" && rounds != 0 || state == "asked" && rounds != 1 {
+		t.Fatalf("Ask/withdrawal race state/rounds = %s/%d", state, rounds)
+	}
+}
+
+func TestConcurrentLikeAndAskFreezesLikeAtTheWinningTerminalTransition(t *testing.T) {
+	f := openFixture(t)
+	view, err := f.service.StartOrResume(context.Background(), domain.StartInput{ParticipantID: f.firstID, PairID: f.pairID, Category: "fun"})
+	if err != nil || view.Candidate == nil {
+		t.Fatalf("start = %+v, err=%v", view, err)
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	go func() {
+		<-start
+		_, err := f.service.Ask(context.Background(), domain.AskInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: view.ConversationID, CandidateID: view.Candidate.ID})
+		results <- err
+	}()
+	go func() {
+		<-start
+		_, err := f.service.Like(context.Background(), domain.LikeInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: view.ConversationID, CandidateID: view.Candidate.ID, Liked: true})
+		results <- err
+	}()
+	close(start)
+	firstErr, secondErr := <-results, <-results
+	for _, err := range []error{firstErr, secondErr} {
+		if err != nil && !errors.Is(err, domain.ErrCandidate) {
+			t.Fatalf("Like/Ask race error = %v", err)
+		}
+	}
+	var state string
+	var liked bool
+	if err := f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		if err := db.QueryRow(context.Background(), "SELECT state::text, liked_at IS NOT NULL FROM private_question_candidate WHERE id = $1", view.Candidate.ID).Scan(&state, &liked); err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if state != "asked" || (!liked && firstErr == nil && secondErr == nil) {
+		t.Fatalf("Like/Ask race state/liked = %s/%v", state, liked)
+	}
+}
+
+func TestConcurrentLikeAndSkipDoesNotMutateAfterSkip(t *testing.T) {
+	f := openFixture(t)
+	view, err := f.service.StartOrResume(context.Background(), domain.StartInput{ParticipantID: f.firstID, PairID: f.pairID, Category: "fun"})
+	if err != nil || view.Candidate == nil {
+		t.Fatalf("start = %+v, err=%v", view, err)
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	go func() {
+		<-start
+		_, err := f.service.Skip(context.Background(), domain.SkipInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: view.ConversationID, CandidateID: view.Candidate.ID, ClientRequestID: testUUID(t, f.pool)})
+		results <- err
+	}()
+	go func() {
+		<-start
+		_, err := f.service.Like(context.Background(), domain.LikeInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: view.ConversationID, CandidateID: view.Candidate.ID, Liked: true})
+		results <- err
+	}()
+	close(start)
+	firstErr, secondErr := <-results, <-results
+	for _, err := range []error{firstErr, secondErr} {
+		if err != nil && !errors.Is(err, domain.ErrCandidate) {
+			t.Fatalf("Like/Skip race error = %v", err)
+		}
+	}
+	var state string
+	var rounds int
+	if err := f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		if err := db.QueryRow(context.Background(), "SELECT state::text FROM private_question_candidate WHERE id = $1", view.Candidate.ID).Scan(&state); err != nil {
+			return err
+		}
+		return db.QueryRow(context.Background(), "SELECT count(*) FROM private_round WHERE pair_id = $1", f.pairID).Scan(&rounds)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if state != "skipped" || rounds != 0 {
+		t.Fatalf("Like/Skip race state/rounds = %s/%d", state, rounds)
+	}
+}
+
+func TestConcurrentLikeAndWithdrawalDoesNotLikeAfterInvalidation(t *testing.T) {
+	f := openFixture(t)
+	view, err := f.service.StartOrResume(context.Background(), domain.StartInput{ParticipantID: f.firstID, PairID: f.pairID, Category: "fun"})
+	if err != nil || view.Candidate == nil {
+		t.Fatalf("start = %+v, err=%v", view, err)
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	go func() {
+		<-start
+		_, err := f.questions.Withdraw(context.Background(), f.questionID, view.Candidate.Question.RevisionID, "race", f.adminID)
+		results <- err
+	}()
+	go func() {
+		<-start
+		_, err := f.service.Like(context.Background(), domain.LikeInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: view.ConversationID, CandidateID: view.Candidate.ID, Liked: true})
+		results <- err
+	}()
+	close(start)
+	firstErr, secondErr := <-results, <-results
+	for _, err := range []error{firstErr, secondErr} {
+		if err != nil && !errors.Is(err, domain.ErrCandidate) {
+			t.Fatalf("Like/withdrawal race error = %v", err)
+		}
+	}
+	var state string
+	if err := f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		return db.QueryRow(context.Background(), "SELECT state::text FROM private_question_candidate WHERE id = $1", view.Candidate.ID).Scan(&state)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if state != "invalidated" {
+		t.Fatalf("Like/withdrawal race state = %s", state)
 	}
 }
