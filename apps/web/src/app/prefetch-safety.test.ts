@@ -87,7 +87,7 @@ describe("prefetch-safe route entry", () => {
     expect(initialRedeemRoute).toContain("export async function POST");
     expect(initialRedeemRoute).toContain("redeemInitialInvite");
     expect(rejoinRedeemRoute).toContain("export async function POST");
-    expect(rejoinRedeemRoute).toContain("redeemRejoinInvite");
+    expect(rejoinRedeemRoute).toContain("restoreRejoinInvite");
     expect(rejoinRoute).not.toContain("export async function GET");
     expect(rejoinRoute).toContain("export async function POST");
     expect(rejoinRoute).toContain("issueRejoinInvite");

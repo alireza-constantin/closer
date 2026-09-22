@@ -26,8 +26,8 @@ export default function RejoinControls({
           Help them rejoin
         </h1>
         <p className="text-closer-muted mx-auto mt-3 max-w-[34ch] leading-relaxed">
-          If {targetName} lost their guest session, create a new link for their existing place in
-          your space. Either of you can do this for the other person.
+          If {targetName} lost their guest session, create a link that restores the same person and
+          place in your space. Their earlier history stays with them.
         </p>
       </section>
       <InviteControls kind="rejoin" pairId={pairId} />

@@ -1546,6 +1546,104 @@ export async function redeemRejoinInvite(
   });
 }
 
+/** Restore the same Participant and membership era after its guest session is lost. */
+export async function restoreRejoinInvite(
+  database: Database,
+  input: { token: string; authUserId: string },
+) {
+  return database.transaction(async (transaction) => {
+    const tx = transaction as unknown as Database;
+    const inviteRows = await tx
+      .select()
+      .from(rejoinInvite)
+      .where(eq(rejoinInvite.tokenHash, hashInviteToken(input.token)))
+      .limit(1);
+    const invite = inviteRows[0];
+    if (!invite) throw new CloserDomainError("REJOIN_UNAVAILABLE");
+
+    await requireActivePairInTransaction(tx, invite.pairId);
+    const targetRows = await tx
+      .select({ membership: pairMembership, targetParticipant: participant })
+      .from(pairMembership)
+      .innerJoin(participant, eq(pairMembership.participantId, participant.id))
+      .where(
+        and(
+          eq(pairMembership.pairId, invite.pairId),
+          eq(pairMembership.slot, invite.targetSlot),
+          eq(pairMembership.participantId, invite.targetParticipantId),
+          isNull(pairMembership.endedAt),
+        ),
+      )
+      .limit(1);
+    const target = targetRows[0];
+    if (!target) throw new CloserDomainError("REJOIN_UNAVAILABLE");
+
+    const alreadyParticipant = await tx
+      .select({ id: participant.id })
+      .from(participant)
+      .where(eq(participant.authUserId, input.authUserId))
+      .limit(1);
+    if (alreadyParticipant[0]) throw new CloserDomainError("REJOIN_UNAVAILABLE");
+
+    const eraRows = await tx
+      .select()
+      .from(pairMembershipEra)
+      .where(and(eq(pairMembershipEra.pairId, invite.pairId), isNull(pairMembershipEra.endedAt)))
+      .limit(1);
+    const era = eraRows[0];
+    if (
+      !era ||
+      (era.firstMembershipId !== target.membership.id &&
+        era.secondMembershipId !== target.membership.id)
+    ) {
+      throw new CloserDomainError("REJOIN_UNAVAILABLE");
+    }
+
+    const redeemed = await tx
+      .update(rejoinInvite)
+      .set({ redeemedAt: new Date(), redeemedByParticipantId: target.membership.participantId })
+      .where(
+        and(
+          eq(rejoinInvite.id, invite.id),
+          isNull(rejoinInvite.redeemedAt),
+          isNull(rejoinInvite.revokedAt),
+          gt(rejoinInvite.expiresAt, new Date()),
+        ),
+      )
+      .returning({ pairId: rejoinInvite.pairId });
+    if (!redeemed[0]) throw new CloserDomainError("REJOIN_UNAVAILABLE");
+
+    const rebound = await tx
+      .update(participant)
+      .set({ authUserId: input.authUserId })
+      .where(
+        and(
+          eq(participant.id, target.membership.participantId),
+          eq(participant.authUserId, target.targetParticipant.authUserId),
+        ),
+      )
+      .returning({ id: participant.id });
+    if (!rebound[0]) throw new CloserDomainError("REJOIN_UNAVAILABLE");
+
+    await tx.delete(session).where(eq(session.userId, target.targetParticipant.authUserId));
+    const revokedAt = new Date();
+    await tx
+      .update(rejoinInvite)
+      .set({ revokedAt })
+      .where(
+        and(
+          eq(rejoinInvite.pairId, invite.pairId),
+          eq(rejoinInvite.targetSlot, invite.targetSlot),
+          eq(rejoinInvite.targetParticipantId, invite.targetParticipantId),
+          isNull(rejoinInvite.revokedAt),
+          isNull(rejoinInvite.redeemedAt),
+        ),
+      );
+
+    return { pairId: invite.pairId, membershipEraId: era.id, participantId: rebound[0].id };
+  });
+}
+
 export async function getPairForParticipant(
   database: Database,
   participantId: string,

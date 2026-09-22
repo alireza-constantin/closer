@@ -33,6 +33,7 @@ export {
   markPrivateRevealViewed,
   redeemInitialInvite,
   redeemRejoinInvite,
+  restoreRejoinInvite,
   removePrivateReaction,
   removePrivateReply,
   resolveOrCreateParticipant,

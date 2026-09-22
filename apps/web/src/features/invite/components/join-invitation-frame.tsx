@@ -29,7 +29,7 @@ export function JoinInvitationFrame({
       </h1>
       <p className="text-closer-muted mt-3 max-w-[31ch] text-[.98rem] leading-relaxed">
         {isRejoin
-          ? "Choose a name for a new guest profile in this space. Earlier activity stays private."
+          ? "This restores your existing person and place in the space. No new member or history is created."
           : "Review this space, then choose Join space when you’re ready."}
       </p>
       {children}
