@@ -3,6 +3,7 @@ package postgres_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -59,7 +60,11 @@ func TestTransactionalRealtimePublisherCommitsAfterBusinessTransaction(t *testin
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	want := realtime.Event{Version: realtime.Version, PairID: "00000000-0000-4000-8000-000000000001", Type: realtime.PairChanged}
+	want := realtime.Event{
+		Version: realtime.Version,
+		PairID:  fmt.Sprintf("realtime-commit-%d", time.Now().UnixNano()),
+		Type:    realtime.PairChanged,
+	}
 	if err := pool.WithinTx(ctx, func(db postgres.QueryDB) error {
 		return postgres.NewTransactionalRealtimePublisher(db).Publish(ctx, want)
 	}); err != nil {
@@ -82,7 +87,11 @@ func TestTransactionalRealtimePublisherRollsBackWithBusinessTransaction(t *testi
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	want := realtime.Event{Version: realtime.Version, PairID: "00000000-0000-4000-8000-000000000002", Type: realtime.PairChanged}
+	want := realtime.Event{
+		Version: realtime.Version,
+		PairID:  fmt.Sprintf("realtime-rollback-%d", time.Now().UnixNano()),
+		Type:    realtime.PairChanged,
+	}
 	wantErr := errors.New("rollback test")
 	if err := pool.WithinTx(ctx, func(db postgres.QueryDB) error {
 		if err := postgres.NewTransactionalRealtimePublisher(db).Publish(ctx, want); err != nil {
@@ -92,9 +101,18 @@ func TestTransactionalRealtimePublisherRollsBackWithBusinessTransaction(t *testi
 	}); !errors.Is(err, wantErr) {
 		t.Fatalf("transaction error = %v, want %v", err, wantErr)
 	}
-	short, shortCancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
-	defer shortCancel()
-	if _, err := listener.WaitForNotification(short); err == nil {
-		t.Fatal("rolled-back notification reached LISTEN")
+	deadline := time.Now().Add(250 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		waitFor := time.Until(deadline)
+		short, shortCancel := context.WithTimeout(context.Background(), waitFor)
+		notification, waitErr := listener.WaitForNotification(short)
+		shortCancel()
+		if waitErr != nil {
+			return
+		}
+		event, decodeErr := realtime.Decode([]byte(notification.Payload))
+		if decodeErr == nil && event == want {
+			t.Fatal("rolled-back notification reached LISTEN")
+		}
 	}
 }
