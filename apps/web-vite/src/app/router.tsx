@@ -19,6 +19,14 @@ import {
 } from "@/features/private-conversation/components";
 import { queryClient } from "@/lib/query-client";
 import { QueryClientProvider } from "@tanstack/react-query";
+import {
+  AdminGuard,
+  AdminHomePage,
+  AdminLoginPage,
+  AdminNewQuestionPage,
+  AdminQuestionDetailPage,
+  AdminQuestionListPage,
+} from "@/features/admin/components";
 
 function RootPage() {
   return (
@@ -50,6 +58,17 @@ export const appRoutes: RouteObject[] = [
   { path: "/pair/:pairId/together/sessions/:sessionId", Component: TogetherSessionPage },
   { path: "/invite/:token", Component: InvitePage },
   { path: "/rejoin/:token", Component: RejoinPage },
+  { path: "/admin/login", Component: AdminLoginPage },
+  {
+    path: "/admin",
+    Component: AdminGuard,
+    children: [
+      { index: true, Component: AdminHomePage },
+      { path: "questions", Component: AdminQuestionListPage },
+      { path: "questions/new", Component: AdminNewQuestionPage },
+      { path: "questions/:questionId", Component: AdminQuestionDetailPage },
+    ],
+  },
   {
     path: "*",
     Component: NotFoundPage,
