@@ -7,6 +7,7 @@ sql:
       - "db/schema/003_initial_invite.sql"
       - "db/schema/004_rejoin_invite.sql"
       - "db/schema/005_question_revision.sql"
+      - "db/schema/006_together.sql"
     queries:
       - "db/queries/auth.sql"
       - "db/queries/participant.sql"
@@ -14,6 +15,7 @@ sql:
       - "db/queries/invite.sql"
       - "db/queries/test_helpers.sql"
       - "db/queries/question.sql"
+      - "db/queries/together.sql"
     gen:
       go:
         package: "sqlc"

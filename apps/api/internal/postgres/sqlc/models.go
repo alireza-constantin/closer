@@ -227,3 +227,28 @@ type RejoinInvite struct {
 	RedeemedByParticipantID pgtype.UUID        `json:"redeemed_by_participant_id"`
 	CreatedAt               pgtype.Timestamptz `json:"created_at"`
 }
+
+type TogetherSession struct {
+	ID                     pgtype.UUID        `json:"id"`
+	PairID                 pgtype.UUID        `json:"pair_id"`
+	MembershipEraID        pgtype.UUID        `json:"membership_era_id"`
+	Category               string             `json:"category"`
+	StartedByParticipantID pgtype.UUID        `json:"started_by_participant_id"`
+	StartRequestID         pgtype.UUID        `json:"start_request_id"`
+	SelectionSeed          string             `json:"selection_seed"`
+	StartedAt              pgtype.Timestamptz `json:"started_at"`
+	EndedAt                pgtype.Timestamptz `json:"ended_at"`
+}
+
+type TogetherSessionQuestion struct {
+	ID                 pgtype.UUID        `json:"id"`
+	SessionID          pgtype.UUID        `json:"session_id"`
+	QuestionID         pgtype.UUID        `json:"question_id"`
+	QuestionRevisionID pgtype.UUID        `json:"question_revision_id"`
+	Position           int32              `json:"position"`
+	ShownAt            pgtype.Timestamptz `json:"shown_at"`
+	LikedAt            pgtype.Timestamptz `json:"liked_at"`
+	SkippedAt          pgtype.Timestamptz `json:"skipped_at"`
+	AdvancedAt         pgtype.Timestamptz `json:"advanced_at"`
+	AdvanceRequestID   pgtype.UUID        `json:"advance_request_id"`
+}

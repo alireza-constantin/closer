@@ -22,8 +22,10 @@ import (
 	postgrespair "github.com/alireza-constantin/closer/apps/api/internal/postgres/pair"
 	postgresparticipant "github.com/alireza-constantin/closer/apps/api/internal/postgres/participant"
 	postgresquestion "github.com/alireza-constantin/closer/apps/api/internal/postgres/question"
+	postgrestogether "github.com/alireza-constantin/closer/apps/api/internal/postgres/together"
 	"github.com/alireza-constantin/closer/apps/api/internal/question"
 	"github.com/alireza-constantin/closer/apps/api/internal/realtime"
+	"github.com/alireza-constantin/closer/apps/api/internal/together"
 )
 
 func main() {
@@ -54,8 +56,9 @@ func run(logger *slog.Logger) error {
 	realtimePublisher := postgres.NewRealtimePublisher(database)
 	inviteService := invite.NewServiceWithPublisher(postgresinvite.NewStore(database), realtimePublisher)
 	questionService := question.NewService(postgresquestion.NewStore(database))
+	togetherService := together.NewService(postgrestogether.NewStore(database))
 	realtimeRegistry := realtime.NewRegistry(32)
-	router := httpapi.NewRouterWithQuestionRealtime(logger, database, authService, participantService, pairService, inviteService, questionService, realtimeRegistry, httpapi.SecurityConfig{
+	router := httpapi.NewRouterWithQuestionAndTogetherRealtime(logger, database, authService, participantService, pairService, inviteService, questionService, togetherService, realtimeRegistry, realtimePublisher, httpapi.SecurityConfig{
 		TrustedOrigins:    cfg.TrustedOrigins,
 		TrustedProxyCIDRs: cfg.TrustedProxyCIDRs,
 	})

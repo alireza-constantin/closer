@@ -13,6 +13,7 @@ import (
 type Querier interface {
 	AddQuestionLifecycleEvent(ctx context.Context, arg AddQuestionLifecycleEventParams) error
 	ClearIntendedPersonName(ctx context.Context, pairID pgtype.UUID) error
+	ClosePreclaimTogetherSessions(ctx context.Context, pairID pgtype.UUID) error
 	CreateAdminUser(ctx context.Context, arg CreateAdminUserParams) error
 	CreateAuthCredential(ctx context.Context, arg CreateAuthCredentialParams) error
 	CreateAuthSession(ctx context.Context, arg CreateAuthSessionParams) (AuthSession, error)
@@ -29,6 +30,8 @@ type Querier interface {
 	CreateQuestionRevision(ctx context.Context, arg CreateQuestionRevisionParams) (QuestionRevision, error)
 	CreateRegisteredAuthUser(ctx context.Context, arg CreateRegisteredAuthUserParams) (AuthUser, error)
 	CreateRejoinInvite(ctx context.Context, arg CreateRejoinInviteParams) (CreateRejoinInviteRow, error)
+	CreateTogetherSession(ctx context.Context, arg CreateTogetherSessionParams) (TogetherSession, error)
+	CreateTogetherSessionQuestion(ctx context.Context, arg CreateTogetherSessionQuestionParams) (TogetherSessionQuestion, error)
 	// Infrastructure-only query used by the test-database guard and transaction
 	// smoke tests. Domain query files belong to their owning tickets.
 	CurrentDatabase(ctx context.Context) (string, error)

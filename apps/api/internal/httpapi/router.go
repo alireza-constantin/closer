@@ -18,6 +18,7 @@ import (
 	"github.com/alireza-constantin/closer/apps/api/internal/participant"
 	"github.com/alireza-constantin/closer/apps/api/internal/question"
 	"github.com/alireza-constantin/closer/apps/api/internal/realtime"
+	"github.com/alireza-constantin/closer/apps/api/internal/together"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -90,6 +91,22 @@ func NewRouterWithQuestionRealtime(
 	realtimeRegistry *realtime.Registry,
 	security SecurityConfig,
 ) http.Handler {
+	return NewRouterWithQuestionAndTogetherRealtime(logger, readiness, authService, participantService, pairService, inviteService, questionService, nil, realtimeRegistry, nil, security)
+}
+
+func NewRouterWithQuestionAndTogetherRealtime(
+	logger *slog.Logger,
+	readiness ReadinessChecker,
+	authService *auth.Service,
+	participantService *participant.Service,
+	pairService *pair.Service,
+	inviteService *invite.Service,
+	questionService *question.Service,
+	togetherService *together.Service,
+	realtimeRegistry *realtime.Registry,
+	realtimePublisher realtime.Publisher,
+	security SecurityConfig,
+) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -134,6 +151,9 @@ func NewRouterWithQuestionRealtime(
 			}
 			if questionService != nil {
 				registerAdminQuestionRoutes(api, authService, questionService, security)
+			}
+			if togetherService != nil && participantService != nil {
+				registerTogetherRoutes(api, authService, participantService, togetherService, realtimePublisher, security)
 			}
 			if realtimeRegistry != nil && participantService != nil && pairService != nil {
 				registerRealtimeRoutes(api, authService, participantService, pairService, realtimeRegistry)

@@ -12,6 +12,7 @@ import {
   RoutePending,
   SpacesPage,
 } from "@/app/pages";
+import { TogetherPickerPage, TogetherSessionPage } from "@/features/together/together-pages";
 import { queryClient } from "@/lib/query-client";
 import { QueryClientProvider } from "@tanstack/react-query";
 
@@ -39,6 +40,8 @@ export const appRoutes: RouteObject[] = [
   { path: "/spaces", Component: SpacesPage },
   { path: "/pair/:pairId", Component: PairPage },
   { path: "/pair/:pairId/invite", Component: PairInvitePage },
+  { path: "/pair/:pairId/together", Component: TogetherPickerPage },
+  { path: "/pair/:pairId/together/sessions/:sessionId", Component: TogetherSessionPage },
   { path: "/invite/:token", Component: InvitePage },
   { path: "/rejoin/:token", Component: RejoinPage },
   {

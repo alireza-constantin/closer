@@ -304,12 +304,15 @@ export function PairPage() {
                   Share a secure invitation link.
                 </span>
               </Link>
-              <div className="bg-closer-lavender/60 rounded-3xl p-5">
+              <Link
+                className="bg-closer-lavender/60 block rounded-3xl p-5"
+                to={`/pair/${pairId}/together`}
+              >
                 <span className="text-closer-navy font-extrabold">Together</span>
                 <span className="text-closer-muted mt-1 block text-sm">
-                  A shared-device experience is coming next.
+                  A shared-device experience for your next little moment.
                 </span>
-              </div>
+              </Link>
             </div>
           </>
         )}

@@ -466,6 +466,13 @@ func (s *Store) Claim(ctx context.Context, tokenHash [32]byte, participantID str
 		if err != nil {
 			return err
 		}
+		// Initial claim is the membership boundary for Together. Close every
+		// pre-claim session in the same transaction before the claim commits.
+		// The Pair lock above gives this update the same serialization boundary
+		// as Together start/end mutations.
+		if _, err := db.Exec(ctx, `UPDATE together_session SET ended_at=COALESCE(ended_at, clock_timestamp()) WHERE pair_id=$1 AND membership_era_id IS NULL AND ended_at IS NULL`, resolved.PairID); err != nil {
+			return err
+		}
 		if err := queries.ClearIntendedPersonName(ctx, resolved.PairID); err != nil {
 			return err
 		}

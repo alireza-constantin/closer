@@ -97,3 +97,116 @@ export async function redeemRejoin(token: string, displayName: string) {
     body: { displayName },
   });
 }
+
+const togetherQuestionSchema = z.object({
+  questionId: z.string(),
+  questionRevisionId: z.string(),
+  text: z.string(),
+  intensity: z.string().optional(),
+  position: z.number().optional(),
+  liked: z.boolean().optional(),
+});
+const togetherPageSchema = z.object({
+  items: z.array(togetherQuestionSchema),
+  nextCursor: z.string().nullable().optional(),
+  hasMore: z.boolean(),
+});
+export const togetherPlaybackSchema = z.object({
+  id: z.string(),
+  pairId: z.string(),
+  relationshipType: z.string(),
+  category: z.string(),
+  startedByParticipantId: z.string(),
+  startedAt: z.string(),
+  endedAt: z.string().nullable().optional(),
+  exhausted: z.boolean(),
+  completedNextTransitions: z.number(),
+  question: togetherQuestionSchema.nullable(),
+  pages: z.object({
+    light: togetherPageSchema,
+    medium: togetherPageSchema,
+    deep: togetherPageSchema,
+  }),
+});
+export type TogetherPlayback = z.infer<typeof togetherPlaybackSchema>;
+export const togetherAdvanceSchema = z.object({
+  kind: z.enum(["QUESTION", "EXHAUSTED"]),
+  sessionId: z.string(),
+  questionId: z.string().optional(),
+  questionRevisionId: z.string().optional(),
+  position: z.number().optional(),
+  completedNextTransitions: z.number(),
+});
+
+function togetherPath(pairId: string, suffix = "") {
+  return `/pairs/${encodeURIComponent(pairId)}/together/sessions${suffix}`;
+}
+
+export async function startTogetherSession(pairId: string, category: string) {
+  return z
+    .object({ sessionId: z.string(), questionId: z.string(), questionRevisionId: z.string() })
+    .parse(
+      await requestJson(togetherPath(pairId), {
+        method: "POST",
+        body: { category, clientRequestId: crypto.randomUUID() },
+      }),
+    );
+}
+
+export async function getTogetherPlayback(pairId: string, sessionId: string) {
+  return togetherPlaybackSchema.parse(
+    await requestJson(togetherPath(pairId, `/${encodeURIComponent(sessionId)}`)),
+  );
+}
+
+export async function getTogetherQuestionPage(
+  pairId: string,
+  sessionId: string,
+  band: string,
+  cursor?: string,
+) {
+  const params = new URLSearchParams({ band });
+  if (cursor) params.set("cursor", cursor);
+  return togetherPageSchema.parse(
+    await requestJson(
+      togetherPath(pairId, `/${encodeURIComponent(sessionId)}/questions?${params}`),
+    ),
+  );
+}
+
+export async function advanceTogetherSession(
+  pairId: string,
+  sessionId: string,
+  action: "next" | "skip",
+  currentQuestionId?: string,
+) {
+  return togetherAdvanceSchema.parse(
+    await requestJson(togetherPath(pairId, `/${encodeURIComponent(sessionId)}/advance`), {
+      method: "POST",
+      body: { action, clientRequestId: crypto.randomUUID(), currentQuestionId },
+    }),
+  );
+}
+
+export async function likeTogetherQuestion(
+  pairId: string,
+  sessionId: string,
+  liked: boolean,
+  currentQuestionId?: string,
+) {
+  return togetherPlaybackSchema.parse(
+    await requestJson(togetherPath(pairId, `/${encodeURIComponent(sessionId)}/like`), {
+      method: "PUT",
+      body: { liked, currentQuestionId },
+    }),
+  );
+}
+
+export async function endTogetherSession(pairId: string, sessionId: string) {
+  return togetherPlaybackSchema.parse(
+    await requestJson(togetherPath(pairId, `/${encodeURIComponent(sessionId)}/end`), {
+      method: "POST",
+      body: {},
+    }),
+  );
+}
