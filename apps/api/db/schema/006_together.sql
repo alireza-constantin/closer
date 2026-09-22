@@ -15,6 +15,9 @@ CREATE UNIQUE INDEX together_session_start_request_uidx
     ON together_session (pair_id, started_by_participant_id, start_request_id)
     WHERE start_request_id IS NOT NULL;
 CREATE INDEX together_session_pair_started_idx ON together_session (pair_id, started_at);
+CREATE UNIQUE INDEX together_session_one_active_pair_uidx
+    ON together_session (pair_id)
+    WHERE ended_at IS NULL;
 
 CREATE TABLE together_session_question (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

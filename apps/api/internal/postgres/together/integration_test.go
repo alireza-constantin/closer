@@ -3,6 +3,7 @@ package together
 import (
 	"context"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -77,9 +78,38 @@ func TestTogetherStartAndAdvanceRetryConverge(t *testing.T) {
 	})
 
 	service := domain.NewService(NewStore(p))
-	started, err := service.Start(ctx, domain.StartInput{ParticipantID: participantID, PairID: pairID, Category: "fun", ClientRequestID: "123e4567-e89b-12d3-a456-426614174000", SelectionSeed: "retry-seed"})
-	if err != nil {
-		t.Fatal(err)
+	start := make(chan struct{})
+	starts := make(chan domain.StartResult, 2)
+	errorsSeen := make(chan error, 2)
+	var wait sync.WaitGroup
+	for _, requestID := range []string{"123e4567-e89b-12d3-a456-426614174000", "223e4567-e89b-12d3-a456-426614174000"} {
+		wait.Add(1)
+		go func(requestID string) {
+			defer wait.Done()
+			<-start
+			result, startErr := service.Start(ctx, domain.StartInput{ParticipantID: participantID, PairID: pairID, Category: "fun", ClientRequestID: requestID, SelectionSeed: "retry-seed"})
+			starts <- result
+			errorsSeen <- startErr
+		}(requestID)
+	}
+	close(start)
+	wait.Wait()
+	close(starts)
+	close(errorsSeen)
+	var started domain.StartResult
+	for result := range starts {
+		if started.SessionID == "" {
+			started = result
+			continue
+		}
+		if result.SessionID != started.SessionID || result.QuestionID != started.QuestionID || result.QuestionRevisionID != started.QuestionRevisionID {
+			t.Fatalf("concurrent starts diverged: %#v and %#v", started, result)
+		}
+	}
+	for startErr := range errorsSeen {
+		if startErr != nil {
+			t.Fatal(startErr)
+		}
 	}
 	if started.QuestionID != questionA && started.QuestionID != questionB {
 		t.Fatalf("unexpected first question %s", started.QuestionID)

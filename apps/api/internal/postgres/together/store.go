@@ -81,6 +81,20 @@ func (s *Store) Start(ctx context.Context, input domain.StartInput) (domain.Star
 				return err
 			}
 		}
+		var activeID string
+		if err := db.QueryRow(ctx, `SELECT id::text FROM together_session WHERE pair_id=$1 AND ended_at IS NULL FOR UPDATE`, pairID).Scan(&activeID); err == nil {
+			current, currentErr := currentOccurrence(ctx, db, activeID)
+			if currentErr != nil {
+				return currentErr
+			}
+			if current == nil {
+				return domain.ErrSessionExhausted
+			}
+			result = domain.StartResult{SessionID: activeID, QuestionID: current.questionID, QuestionRevisionID: current.revisionID}
+			return nil
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
 		seed := input.SelectionSeed
 		if seed == "" {
 			seed, err = randomSeed()
