@@ -38,7 +38,7 @@
     "api:schema:reset:test": "go -C apps/api run ./cmd/testdb-schema reset",
     "api:admin-bootstrap": "go -C apps/api run ./cmd/admin-bootstrap",
     "api:admin-recover": "go -C apps/api run ./cmd/admin-recover",
-    "api:test": "go -C apps/api test ./...",
+    "api:test": "go -C apps/api test -p 1 ./...",
     "api:build": "go -C apps/api build -o build/server ./cmd/server",
     "dev:web": "bun run --filter web dev",
     "db:push": "bun run --filter @Closer/db db:push",

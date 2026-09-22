@@ -34,7 +34,8 @@ timeout on pool connections. GO-02 provides a dedicated listener connection
 constructor and lifecycle, but does not start `LISTEN`, realtime fanout, or
 SSE.
 
-From the repository root, `bun run api:test` runs the Go tests and
+From the repository root, `bun run api:test` runs the Go tests serially (the
+integration suites share the guarded local database) and
 `bun run api:build` writes the server binary under the ignored
 `apps/api/build/` directory. `GET /healthz` reports process health;
 `go vet ./...` and `go build ./...` can be run from `apps/api` as well.
