@@ -83,6 +83,12 @@ FROM auth_user
 WHERE id = $1
 FOR UPDATE;
 
+-- name: LockAuthUserForRejoin :one
+SELECT id, kind, created_at, disabled_at
+FROM auth_user
+WHERE id = sqlc.arg(auth_user_id)
+FOR UPDATE;
+
 -- name: GetCredentialByEmail :one
 SELECT u.id AS auth_user_id, u.kind, u.disabled_at, c.password_hash
 FROM auth_credential AS c

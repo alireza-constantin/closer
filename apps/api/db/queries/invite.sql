@@ -142,6 +142,18 @@ WHERE m.pair_id = sqlc.arg(pair_id)
   AND m.slot = sqlc.arg(target_slot)
   AND m.ended_at IS NULL;
 
+-- name: LockTargetMembershipForRejoin :one
+SELECT m.id, m.pair_id, m.participant_id, m.slot, p.display_name,
+       p.auth_user_id, u.kind AS auth_user_kind
+FROM pair_membership AS m
+JOIN participant AS p ON p.id = m.participant_id
+JOIN auth_user AS u ON u.id = p.auth_user_id
+WHERE m.pair_id = sqlc.arg(pair_id)
+  AND m.slot = sqlc.arg(target_slot)
+  AND m.participant_id = sqlc.arg(target_participant_id)
+  AND m.ended_at IS NULL
+FOR UPDATE OF m, p, u;
+
 -- name: GetCurrentMembershipEraForRejoin :one
 SELECT id, pair_id, first_membership_id, second_membership_id
 FROM pair_membership_era
@@ -193,12 +205,6 @@ SELECT EXISTS (
       AND revoked_at IS NULL AND expires_at > clock_timestamp()
 )::boolean;
 
--- name: CreateRejoinParticipant :one
-INSERT INTO participant (auth_user_id, display_name)
-VALUES (sqlc.arg(auth_user_id), sqlc.arg(display_name))
-ON CONFLICT (auth_user_id) DO NOTHING
-RETURNING id, auth_user_id, display_name;
-
 -- name: RedeemRejoinInvite :execrows
 UPDATE rejoin_invite
 SET redeemed_at = clock_timestamp(), redeemed_by_participant_id = sqlc.arg(participant_id)
@@ -206,35 +212,8 @@ WHERE id = sqlc.arg(id)
   AND revoked_at IS NULL AND redeemed_at IS NULL
   AND expires_at > clock_timestamp();
 
--- name: EndMembershipForRejoin :execrows
-UPDATE pair_membership
-SET ended_at = sqlc.arg(ended_at), ended_display_name = sqlc.arg(ended_display_name)
-WHERE id = sqlc.arg(id) AND ended_at IS NULL;
-
--- name: EndMembershipEraForRejoin :execrows
-UPDATE pair_membership_era
-SET ended_at = sqlc.arg(ended_at)
-WHERE id = sqlc.arg(id) AND ended_at IS NULL;
-
--- name: CreateReplacementMembership :one
-INSERT INTO pair_membership (pair_id, participant_id, slot)
-VALUES (sqlc.arg(pair_id), sqlc.arg(participant_id), sqlc.arg(slot))
-RETURNING id;
-
--- name: CreateReplacementMembershipEra :one
-INSERT INTO pair_membership_era (pair_id, first_membership_id, second_membership_id)
-VALUES (sqlc.arg(pair_id), sqlc.arg(first_membership_id), sqlc.arg(second_membership_id))
-RETURNING id;
-
--- name: HasDuplicateActiveParticipantPairForRejoin :one
-SELECT EXISTS (
-  SELECT 1
-  FROM pair_membership first_member
-  JOIN pair_membership second_member ON second_member.pair_id = first_member.pair_id
-  JOIN pair_membership_era era ON era.pair_id = first_member.pair_id AND era.ended_at IS NULL
-  JOIN pair other_pair ON other_pair.id = first_member.pair_id AND other_pair.terminated_at IS NULL
-  WHERE first_member.pair_id <> sqlc.arg(excluded_pair_id)
-    AND first_member.ended_at IS NULL AND second_member.ended_at IS NULL
-    AND ((first_member.participant_id = sqlc.arg(participant_a) AND second_member.participant_id = sqlc.arg(participant_b))
-      OR (first_member.participant_id = sqlc.arg(participant_b) AND second_member.participant_id = sqlc.arg(participant_a)))
-)::boolean;
+-- name: RebindParticipantAuthUserForRejoin :execrows
+UPDATE participant
+SET auth_user_id = sqlc.arg(new_auth_user_id), updated_at = clock_timestamp()
+WHERE id = sqlc.arg(participant_id)
+  AND auth_user_id = sqlc.arg(old_auth_user_id);

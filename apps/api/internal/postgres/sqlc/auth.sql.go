@@ -431,6 +431,25 @@ func (q *Queries) LockAdminByEmailForRecovery(ctx context.Context, emailNormaliz
 	return auth_user_id, err
 }
 
+const lockAuthUserForRejoin = `-- name: LockAuthUserForRejoin :one
+SELECT id, kind, created_at, disabled_at
+FROM auth_user
+WHERE id = $1
+FOR UPDATE
+`
+
+func (q *Queries) LockAuthUserForRejoin(ctx context.Context, authUserID pgtype.UUID) (AuthUser, error) {
+	row := q.db.QueryRow(ctx, lockAuthUserForRejoin, authUserID)
+	var i AuthUser
+	err := row.Scan(
+		&i.ID,
+		&i.Kind,
+		&i.CreatedAt,
+		&i.DisabledAt,
+	)
+	return i, err
+}
+
 const lockAuthUserForUpgrade = `-- name: LockAuthUserForUpgrade :one
 SELECT id, kind, created_at, disabled_at
 FROM auth_user

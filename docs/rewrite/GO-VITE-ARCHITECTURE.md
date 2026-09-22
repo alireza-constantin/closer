@@ -425,7 +425,8 @@ mandatory across services.
 | --------------------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | initial issue/reuse/replace       | Pair; usable invite; token hash unique                                           | existing/one replacement result; `pair.changed`                                                                       |
 | initial claim                     | Pair; invite; memberships/era; ordered-pair advisory transaction lock            | consumed result or exact conflict; `pair.changed`                                                                     |
-| rejoin/replacement                | Pair; target membership/active era; credentials; affected Conversations/Sessions | one new era or conflict; `pair.changed` and relevant private/together invalidation                                    |
+| rejoin recovery                   | Pair; target current membership/era; credentials; auth/session ownership         | same Participant/membership/era or conflict; `pair.changed` after commit                                              |
+| replacement                       | Pair; target membership/active era; credentials; affected Conversations/Sessions | one new era or conflict; `pair.changed` and relevant private/together invalidation                                    |
 | termination                       | Pair; active memberships/era; active credentials/Candidates/Sessions             | repeated terminate returns terminal projection; `pair.terminated`                                                     |
 | Private start/resume              | Pair; active era; category Conversation; active unresolved-round guard           | unique Pair/era/category converges; `private.changed`                                                                 |
 | Ask vs Skip                       | Pair; Conversation; unresolved candidate                                         | conditional candidate state + unique Round/request IDs; same idempotent result; `private.changed`                     |
@@ -580,18 +581,19 @@ The public functions in `packages/db/src/closer.ts` are the current command and
 query vocabulary. The named operation is the Go service boundary; helper
 functions remain implementation details.
 
-| Capability             | Current operations                                                                                                                | Main reference                                       |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| Participant            | `resolveOrCreateParticipant`, `getParticipantByAuthUserId`                                                                        | `packages/db/src/closer.ts:L210-L248`                |
-| Question/Admin catalog | create Question, create revision, restore, duplicate search, activate, reactivate, deactivate, withdraw                           | `packages/db/src/closer.ts:L250-L647`                |
-| Pair access/lifecycle  | list spaces, active access, complete access, status, terminate                                                                    | `packages/db/src/closer.ts:L657-L856`, `L1549-L1651` |
-| Pair creation          | `createPairForParticipant`, `updateIntendedPersonName`                                                                            | `packages/db/src/closer.ts:L891-L982`                |
-| Initial invite         | status, issue/reuse, replace, usable check, revoke, landing, redeem                                                               | `packages/db/src/closer.ts:L858-L1278`               |
-| Guest replacement      | issue/revoke, landing, redeem                                                                                                     | `packages/db/src/closer.ts:L1280-L1547`              |
-| Together               | start, playback, page, advance/skip, like, end                                                                                    | `packages/db/src/closer.ts:L1653-L2284`              |
-| Private                | list eligible, start/resume, candidate select/Skip/Like, round projection/status, answer, Decline/retire, Reveal, reaction, reply | `packages/db/src/closer.ts:L2286-L4040`              |
-| Former history         | `getFormerEraHistoryForParticipant`                                                                                               | `packages/db/src/closer.ts:L3516-L3827`              |
-| Realtime               | `publishRealtimeEvent`, `getRealtimeBus`                                                                                          | `packages/db/src/realtime.ts:L1-L158`                |
+| Capability             | Current operations                                                                                                                | Main reference                                                                     |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Participant            | `resolveOrCreateParticipant`, `getParticipantByAuthUserId`                                                                        | `packages/db/src/closer.ts:L210-L248`                                              |
+| Question/Admin catalog | create Question, create revision, restore, duplicate search, activate, reactivate, deactivate, withdraw                           | `packages/db/src/closer.ts:L250-L647`                                              |
+| Pair access/lifecycle  | list spaces, active access, complete access, status, terminate                                                                    | `packages/db/src/closer.ts:L657-L856`, `L1549-L1651`                               |
+| Pair creation          | `createPairForParticipant`, `updateIntendedPersonName`                                                                            | `packages/db/src/closer.ts:L891-L982`                                              |
+| Initial invite         | status, issue/reuse, replace, usable check, revoke, landing, redeem                                                               | `packages/db/src/closer.ts:L858-L1278`                                             |
+| Guest rejoin recovery  | issue/revoke, landing, redeem                                                                                                     | Go invite service/store and `apps/api/internal/httpapi/rejoin_integration_test.go` |
+| Guest replacement      | separate replacement transition and history boundary                                                                              | `packages/db/src/rejoin-replacement.integration.test.ts`                           |
+| Together               | start, playback, page, advance/skip, like, end                                                                                    | `packages/db/src/closer.ts:L1653-L2284`                                            |
+| Private                | list eligible, start/resume, candidate select/Skip/Like, round projection/status, answer, Decline/retire, Reveal, reaction, reply | `packages/db/src/closer.ts:L2286-L4040`                                            |
+| Former history         | `getFormerEraHistoryForParticipant`                                                                                               | `packages/db/src/closer.ts:L3516-L3827`                                            |
+| Realtime               | `publishRealtimeEvent`, `getRealtimeBus`                                                                                          | `packages/db/src/realtime.ts:L1-L158`                                              |
 
 The Go rewrite must not split these into independently authoritative Pair,
 Private, Together, and history state machines. Their common lock boundary is a
@@ -608,7 +610,7 @@ Pair and its active membership era.
 | `pair_membership`            | Slot occupancy and membership history                            | UUID PK; partial unique active slot and active participant per Pair; active participant index  | Preserve; maps logical slot to Participant and era history            |
 | `pair_membership_era`        | Stable authorization/history boundary for two active memberships | UUID PK; one active era per Pair; Pair/started index; restrict FKs to memberships              | Preserve; it is the current executable ADR-005 choice                 |
 | `initial_invite`             | Slot-2 bearer credential lifecycle                               | hash unique; Pair index; second-slot check                                                     | Preserve hash-only, 7-day expiry, single use                          |
-| `rejoin_invite`              | Guest replacement credential                                     | hash unique; Pair and target indexes                                                           | Preserve separately from initial invite, 24-hour expiry               |
+| `rejoin_invite`              | Guest rejoin recovery credential                                 | hash unique; Pair and target membership/Participant indexes                                    | Preserve separately from initial invite, 24-hour expiry               |
 | `question`                   | Stable logical Question identity/current pointer                 | UUID PK; current revision composite FK; selection index                                        | Preserve; consumption uses this ID                                    |
 | `question_revision`          | Immutable wording/eligibility snapshot                           | UUID PK; `(question_id, revision_number)` unique; selection indexes; content/fit checks        | Preserve; sqlc queries must always pin revision IDs                   |
 | `question_lifecycle_event`   | Append-only editorial history                                    | UUID PK; Question/revision composite FK; occurred indexes; withdrawal reason check             | Preserve; no hard delete                                              |
@@ -673,6 +675,7 @@ versioned baseline must be established before real production users exist.
 | Private first answer               | Pair lock; commit provisional Round atomically; one initiator unresolved check; unique answer                              | overlapping initiator work and answer/termination race                 | Pair lock through commit and answer insert                              |
 | Private Decline                    | Pair lock; answer count/actor check; status update conditional                                                             | pass vs answer and duplicate pass                                      | update open row under Pair lock                                         |
 | Reveal/reaction/reply              | Pair lock for mutable round; unique viewer records/upserts                                                                 | unauthorized or stale post-reveal writes                               | authorization projection inside tx, unique upsert                       |
+| Rejoin recovery                    | Pair row lock; credential lock; current target membership/Participant lock; auth ownership checks                          | concurrent redemption and ended/registered target                      | one tx rebinds auth ownership without changing membership or era        |
 | Replacement                        | Pair row lock; active era/membership checks; close old era; invalidate candidates; end Together; insert replacement era    | replacement vs Private/Together/termination                            | one tx from Pair lock through new era                                   |
 | Termination                        | Pair row lock, active membership locks, one tx cleanup                                                                     | termination vs every Pair-scoped mutation; idempotent repeat           | same exact order; terminal Pair check first                             |
 | Revision edit                      | Question row lock; expected current revision; unique per-question ordinal                                                  | stale Admin writer and pointer regression                              | `SELECT question FOR UPDATE`; compare expected ID; insert next revision |
@@ -760,6 +763,10 @@ password reset, multi-admin RBAC) are out of scope until separately specified.
   closes the old membership/era, freezes its display name, invalidates old
   unresolved candidates, ends old Together sessions, revokes target invites,
   and begins a new era. The replacement sees no old-era content.
+- Guest rejoin recovery targets the same occupied anonymous slot after session
+  loss. It rebinds a fresh auth identity to the existing Participant and keeps
+  the same membership, logical slot, Pair, and current era. It creates no new
+  Participant, membership, or era.
 - Either active member may terminate. Termination is irreversible and
   idempotent; it ends memberships/era, revokes credentials, invalidates
   unresolved candidates, ends Together, and leaves old content read-only.
@@ -852,7 +859,7 @@ Use React Router for the current user-facing URLs:
 /rejoin/:token            rejoin landing
 /pair/:pairId             Pair Home
 /pair/:pairId/invite      Connect/initial invite
-/pair/:pairId/rejoin      guest replacement controls
+/pair/:pairId/rejoin      guest rejoin recovery controls
 /pair/:pairId/private     Private category hub
 /pair/:pairId/private/conversation/:conversationId
 /pair/:pairId/private/round/:roundId

@@ -435,7 +435,13 @@ const cases = [
     preconditions: [
       "Pair has two members, one is an eligible guest, and the old era has Together and Private activity.",
     ],
-    actions: [action("replace", "participant-a", "redeem guest rejoin for participant-b's slot")],
+    actions: [
+      action(
+        "replace",
+        "participant-a",
+        "run authorized guest replacement for participant-b's slot",
+      ),
+    ],
     expected: {
       actions: [{ id: "replace" }],
       persistedState: {
@@ -459,6 +465,45 @@ const cases = [
       "docs/adr/005-pair-membership-era-termination-and-history.md — era boundaries",
       "packages/db/src/rejoin-replacement.integration.test.ts — guest replacement atomically closes the old exact era and isolates its activity",
       "packages/db/src/rejoin-replacement.integration.test.ts — former-era history is participant-relative, revision-pinned, and immutable",
+    ],
+  },
+  {
+    id: "pair.rejoin-preserves-identity",
+    area: "pair-invite-era",
+    gate: "must-pass-before-cutover",
+    title: "Guest rejoin recovers access without creating a new domain identity or era",
+    preconditions: [
+      "Pair has two members in one current era; the target is an anonymous guest whose session has been lost.",
+    ],
+    actions: [
+      action("issue", "continuing-member", "issue a fresh rejoin credential"),
+      action(
+        "redeem",
+        "fresh-anonymous-auth",
+        "redeem the rejoin credential for the lost guest slot",
+      ),
+    ],
+    expected: {
+      actions: [
+        { id: "issue", status: 201 },
+        { id: "redeem", status: 200 },
+      ],
+      persistedState: {
+        participantIdUnchanged: true,
+        membershipIdUnchanged: true,
+        logicalSlotUnchanged: true,
+        membershipEraIdUnchanged: true,
+        pairIdUnchanged: true,
+        participantCountUnchanged: true,
+        membershipCountUnchanged: true,
+        eraCountUnchanged: true,
+        oldAuthSessionsRevoked: true,
+      },
+      projections: [{ actor: "fresh-anonymous-auth", mustResolveParticipant: "$existing-target" }],
+    },
+    sources: [
+      "apps/api/internal/httpapi/rejoin_integration_test.go — rejoin rebinds existing Participant and preserves membership/era",
+      "docs/rewrite/PARITY-CHECKLIST.md — rejoin identity and membership preservation gate",
     ],
   },
   {
