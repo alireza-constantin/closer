@@ -2,6 +2,9 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { createElement } from "react";
 import { Window } from "happy-dom";
 
+import { createNextNavigationMock } from "@/test/next-navigation-mock";
+import { acquireDomTestLock } from "@/test/dom-test-lock";
+
 const browserWindow = new Window({ url: "https://closer.test" });
 const browserGlobalNames = [
   "window",
@@ -40,17 +43,21 @@ function restoreBrowserGlobals() {
 const routerPush = mock(() => {});
 const routerRefresh = mock(() => {});
 const originalFetch = globalThis.fetch;
-mock.module("next/navigation", () => ({
-  useRouter: () => ({ push: routerPush, refresh: routerRefresh }),
-}));
+mock.module("next/navigation", () =>
+  createNextNavigationMock({
+    useRouter: () => ({ push: routerPush, refresh: routerRefresh }),
+  }),
+);
 mock.module("next/link", () => ({
   default: ({ href, children, ...props }: { href: string; children: unknown }) =>
     createElement("a", { href, ...props }, children),
 }));
 
+const releaseImportLock = await acquireDomTestLock();
 installBrowserGlobals();
-const { cleanup, fireEvent, render, screen, waitFor } = await import("@testing-library/react");
+const { cleanup, fireEvent, render, waitFor, within } = await import("@testing-library/react");
 restoreBrowserGlobals();
+releaseImportLock();
 const { AdminQuestionEditor } = await import("./admin-question-editor");
 
 const duplicate = {
@@ -60,11 +67,19 @@ const duplicate = {
   isActive: true,
 };
 
-beforeEach(installBrowserGlobals);
+let releaseTestLock: (() => void) | undefined;
 
-afterEach(() => {
+beforeEach(async () => {
+  releaseTestLock = await acquireDomTestLock();
+  installBrowserGlobals();
+});
+
+afterEach(async () => {
   cleanup();
+  await Bun.sleep(0);
   restoreBrowserGlobals();
+  releaseTestLock?.();
+  releaseTestLock = undefined;
   globalThis.fetch = originalFetch;
   routerPush.mockClear();
   routerRefresh.mockClear();
@@ -75,16 +90,15 @@ describe("Admin question authoring", () => {
     globalThis.fetch = mock(async () => Response.json({ matches: [duplicate] })) as typeof fetch;
 
     render(createElement(AdminQuestionEditor, {}));
-    fireEvent.change(screen.getByLabelText("Question wording"), {
+    const view = within(browserWindow.document.body);
+    fireEvent.change(view.getByLabelText("Question wording"), {
       target: { value: "What is one thing you appreciate?" },
     });
 
-    expect(await screen.findByText("Potential duplicate found")).toBeTruthy();
+    expect(await view.findByText("Potential duplicate found")).toBeTruthy();
+    expect(view.getByText(/You can still save it if the distinction is intentional/)).toBeTruthy();
     expect(
-      screen.getByText(/You can still save it if the distinction is intentional/),
-    ).toBeTruthy();
-    expect(
-      (screen.getByRole("button", { name: "Create question" }) as HTMLButtonElement).disabled,
+      (view.getByRole("button", { name: "Create question" }) as HTMLButtonElement).disabled,
     ).toBe(false);
   });
 
@@ -109,18 +123,19 @@ describe("Admin question authoring", () => {
         },
       }),
     );
-    fireEvent.change(screen.getByLabelText("Question wording"), {
+    const view = within(browserWindow.document.body);
+    fireEvent.change(view.getByLabelText("Question wording"), {
       target: { value: "A revised wording for the question" },
     });
-    const submit = screen.getByRole("button", { name: "Save new revision" }) as HTMLButtonElement;
+    const submit = view.getByRole("button", { name: "Save new revision" }) as HTMLButtonElement;
     await waitFor(() => expect(submit.disabled).toBe(false));
     fireEvent.click(submit);
 
     await waitFor(() => {
-      expect(screen.getByRole("alert").textContent).toContain(
+      expect(view.getByRole("alert").textContent).toContain(
         "This question changed after you opened this form",
       );
     });
-    expect(screen.getByRole("link", { name: "Review the latest revision" })).toBeTruthy();
+    expect(view.getByRole("link", { name: "Review the latest revision" })).toBeTruthy();
   });
 });

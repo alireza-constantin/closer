@@ -55,30 +55,50 @@ bun dev
 
 Open [http://localhost:3001](http://localhost:3001) and smoke test Closer.
 
-### Integration tests on Development
+### Integration tests
 
-There is no Neon TEST branch and no `.env.test.example`. Integration tests use
-the configured Development connection, create fixtures, and clean them up, so
-they are blocked unless the operator explicitly opts in.
+The default `bun test` runs safe unit, frontend, parity, and harness tests. It
+does not discover destructive `*.integration.test.*` files. Those suites use
+only an explicit local PostgreSQL database named `closer_test`; they never fall
+back to `DATABASE_URL`, `closer_dev`, Production, or Neon.
 
-First confirm that `apps/web/.env.local` targets Neon DEVELOPMENT, then set the
-guard for that shell only:
+Create the database and apply the required test schema separately, then set
+both guards for that shell only:
 
 ```bash
-CLOSER_ALLOW_DESTRUCTIVE_DB_TESTS=1 bun test packages/db/src/*.integration.test.ts apps/web/src/server/modules/admin-questions/*.integration.test.ts
+CLOSER_ALLOW_DESTRUCTIVE_DB_TESTS=1 \
+CLOSER_TEST_DATABASE_URL=postgres://closer:local-only-password@127.0.0.1:5432/closer_test \
+bun run test:integration
 ```
 
 PowerShell:
 
 ```powershell
 $env:CLOSER_ALLOW_DESTRUCTIVE_DB_TESTS = "1"
-bun test packages/db/src/*.integration.test.ts apps/web/src/server/modules/admin-questions/*.integration.test.ts
+$env:CLOSER_TEST_DATABASE_URL = "postgres://closer:local-only-password@127.0.0.1:5432/closer_test"
+bun run test:integration
 ```
 
 The helper refuses Production (`NODE_ENV=production` or
-`VERCEL_ENV=production`) and uses the direct Development URL when available.
-Unit tests that do not require database access remain available independently
-of this guard.
+`VERCEL_ENV=production`), remote hosts, and any database name other than
+`closer_test`. If the explicit test URL or opt-in flag is absent, the guarded
+command fails with a clear configuration error before opening a connection.
+Unit tests that do not require database access remain available through the
+default command.
+
+### Worktrees
+
+Worktrees do not share ignored `.env.local` files or `node_modules`. From a new
+worktree, run `bun install --frozen-lockfile`, then copy the ignored local
+environment file from the canonical checkout only when needed:
+
+```powershell
+Copy-Item ..\closer\apps\web\.env.local apps\web\.env.local
+```
+
+Never commit that file. For destructive tests, configure
+`CLOSER_TEST_DATABASE_URL` explicitly in the test shell and verify it points to
+the local `closer_test` database before running `bun run test:integration`.
 
 ### Production environment
 

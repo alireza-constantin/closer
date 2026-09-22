@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 
 import { createCloserAuthMock } from "@/test/closer-auth-mock";
+import { createNextNavigationMock } from "@/test/next-navigation-mock";
 
 const getCurrentParticipant = mock(async () => null as { id: string; displayName: string } | null);
 const listActivePairsForParticipant = mock(async () => []);
@@ -54,13 +55,15 @@ mock.module("@/server/modules/pairs/pair.service", () => ({
   listParticipantSpaces: listActivePairsForParticipant,
 }));
 
-mock.module("next/navigation", () => ({
-  notFound: () => {
-    throw new Error("NOT_FOUND");
-  },
-  redirect,
-  unstable_rethrow: () => {},
-}));
+mock.module("next/navigation", () =>
+  createNextNavigationMock({
+    notFound: () => {
+      throw new Error("NOT_FOUND");
+    },
+    redirect,
+    unstable_rethrow: () => {},
+  }),
+);
 mock.module("@/features/pair/components/zero-space-home", () => ({ default: "zero-space-home" }));
 mock.module("@/features/pair/components/your-spaces", () => ({ default: "your-spaces" }));
 

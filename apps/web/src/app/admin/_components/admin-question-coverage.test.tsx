@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { createElement } from "react";
 import { Window } from "happy-dom";
 
+import { acquireDomTestLock } from "@/test/dom-test-lock";
+
 const browserWindow = new Window({ url: "https://closer.test" });
 const browserGlobalNames = [
   "window",
@@ -42,9 +44,11 @@ mock.module("next/link", () => ({
     createElement("a", { href, ...props }, children),
 }));
 
+const releaseImportLock = await acquireDomTestLock();
 installBrowserGlobals();
 const { cleanup, render, screen } = await import("@testing-library/react");
 restoreBrowserGlobals();
+releaseImportLock();
 const { getMostUrgentQuestionCoverage, QuestionCoverageSummary, QuestionCoverageWorkspace } =
   await import("./admin-question-coverage");
 
@@ -67,11 +71,19 @@ function lane(
   };
 }
 
-beforeEach(installBrowserGlobals);
+let releaseTestLock: (() => void) | undefined;
 
-afterEach(() => {
+beforeEach(async () => {
+  releaseTestLock = await acquireDomTestLock();
+  installBrowserGlobals();
+});
+
+afterEach(async () => {
   cleanup();
+  await Bun.sleep(0);
   restoreBrowserGlobals();
+  releaseTestLock?.();
+  releaseTestLock = undefined;
 });
 
 describe("Admin question coverage", () => {

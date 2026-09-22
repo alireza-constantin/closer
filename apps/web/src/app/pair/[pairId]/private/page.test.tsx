@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 
 import { createCloserAuthMock } from "@/test/closer-auth-mock";
+import { createNextNavigationMock } from "@/test/next-navigation-mock";
 
 const redirect = mock((destination: string): never => {
   throw new Error(`redirect:${destination}`);
@@ -31,15 +32,17 @@ mock.module("@/features/private-conversation/components/private-picker", () => (
   default: "private-picker",
 }));
 
-mock.module("next/navigation", () => ({
-  notFound: () => {
-    throw new Error("notFound");
-  },
-  redirect,
-  unstable_rethrow: (error: unknown) => {
-    if (error instanceof Error && error.message.startsWith("redirect:")) throw error;
-  },
-}));
+mock.module("next/navigation", () =>
+  createNextNavigationMock({
+    notFound: () => {
+      throw new Error("notFound");
+    },
+    redirect,
+    unstable_rethrow: (error: unknown) => {
+      if (error instanceof Error && error.message.startsWith("redirect:")) throw error;
+    },
+  }),
+);
 
 const { default: PrivatePickerPageContent } =
   await import("./_components/private-picker-page-content");

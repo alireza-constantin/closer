@@ -2,6 +2,8 @@ import { afterEach, expect, mock, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
 
+import "@Closer/db/test-env";
+
 mock.module("server-only", () => ({}));
 
 const [{ auth, adminAuth, createAdminAuth }, { db }, schema, closerSchema, { env }, provisioning] =

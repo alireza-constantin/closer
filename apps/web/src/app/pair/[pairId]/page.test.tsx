@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 
 import { createCloserAuthMock } from "@/test/closer-auth-mock";
+import { createNextNavigationMock } from "@/test/next-navigation-mock";
 
 let relationshipType: "partner" | "friend" = "friend";
 let entryState: "active" | "terminated" | "unauthorized" = "active";
@@ -49,15 +50,17 @@ mock.module("@/server/modules/pairs/pair.service", () => ({
   listParticipantSpaces: async () => [{ pairId: "pair-1" }],
 }));
 
-mock.module("next/navigation", () => ({
-  notFound: () => {
-    throw new Error("notFound");
-  },
-  redirect: () => {
-    throw new Error("redirect");
-  },
-  unstable_rethrow: () => {},
-}));
+mock.module("next/navigation", () =>
+  createNextNavigationMock({
+    notFound: () => {
+      throw new Error("notFound");
+    },
+    redirect: () => {
+      throw new Error("redirect");
+    },
+    unstable_rethrow: () => {},
+  }),
+);
 
 mock.module("@/features/pair/components/pair-home", () => ({ default: "pair-home" }));
 mock.module("@/features/pair/components/terminated-pair-screen", () => ({
