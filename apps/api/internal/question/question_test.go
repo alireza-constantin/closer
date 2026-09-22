@@ -28,6 +28,9 @@ func (*recordingRepository) List(context.Context, ListFilter) ([]Question, error
 func (*recordingRepository) ListRevisions(context.Context, string) ([]Revision, error) {
 	return nil, nil
 }
+func (*recordingRepository) FindDuplicates(context.Context, string, string) ([]DuplicateMatch, error) {
+	return []DuplicateMatch{{QuestionID: "other", Text: "A deep question", RevisionNumber: 2, IsActive: false}}, nil
+}
 
 func TestCreateNormalizesWordingAndKeepsDeepIntensityDistinct(t *testing.T) {
 	repository := &recordingRepository{}
@@ -46,5 +49,19 @@ func TestRelationshipCategoryRequiresMatchingFit(t *testing.T) {
 	_, err := service.Create(context.Background(), RevisionFields{Text: "Question", Category: "relationship", RelationshipFit: "friend", ModeFit: "both", Intensity: "light"}, "admin")
 	if err != ErrInvalidInput {
 		t.Fatalf("error = %v, want ErrInvalidInput", err)
+	}
+}
+
+func TestFindDuplicatesNormalizesWordingAndDoesNotBlockEditing(t *testing.T) {
+	service := NewService(&recordingRepository{})
+	matches, err := service.FindDuplicates(context.Background(), "  A\tdeep\nquestion ", "self")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 1 || matches[0].QuestionID != "other" {
+		t.Fatalf("matches = %+v", matches)
+	}
+	if _, err := service.Edit(context.Background(), "self", RevisionFields{Text: " A deep question ", Category: "fun", RelationshipFit: "both", ModeFit: "both", Intensity: "light"}, "revision", "admin"); err != nil {
+		t.Fatalf("duplicate wording must remain a warning: %v", err)
 	}
 }

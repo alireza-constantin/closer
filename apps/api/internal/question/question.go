@@ -23,6 +23,12 @@ type Revision struct {
 	RevisionNumber int32
 	Withdrawn      bool
 }
+type DuplicateMatch struct {
+	QuestionID     string
+	Text           string
+	RevisionNumber int32
+	IsActive       bool
+}
 type Question struct {
 	ID, CurrentRevisionID string
 	IsActive              bool
@@ -33,16 +39,22 @@ type ListFilter struct {
 	Limit, Offset                                         int32
 }
 
-// CandidateInvalidator is the future Private-domain port for withdrawal. Q-01
-// deliberately does not implement candidate persistence; the Private lane must
-// provide this port and invoke it in the same transaction as withdrawal.
+// WithdrawalExecutor is the transaction-scoped SQL capability that a future
+// Private invalidator may use. It deliberately exposes no domain tables.
+type WithdrawalExecutor interface {
+	Exec(context.Context, string, ...any) error
+}
+
+// CandidateInvalidator is the future Private-domain port for withdrawal. The
+// executor is owned by the same database transaction as the revision update,
+// so a later implementation can invalidate candidates atomically.
 type CandidateInvalidator interface {
-	InvalidateUnresolvedCandidates(context.Context, string) error
+	InvalidateUnresolvedCandidates(context.Context, WithdrawalExecutor, string) error
 }
 
 type DeferredCandidateInvalidator struct{}
 
-func (DeferredCandidateInvalidator) InvalidateUnresolvedCandidates(context.Context, string) error {
+func (DeferredCandidateInvalidator) InvalidateUnresolvedCandidates(context.Context, WithdrawalExecutor, string) error {
 	return nil
 }
 
@@ -55,6 +67,7 @@ type Repository interface {
 	Get(context.Context, string) (Question, error)
 	List(context.Context, ListFilter) ([]Question, error)
 	ListRevisions(context.Context, string) ([]Revision, error)
+	FindDuplicates(context.Context, string, string) ([]DuplicateMatch, error)
 }
 
 type Service struct{ repository Repository }
@@ -102,6 +115,12 @@ func (s *Service) List(ctx context.Context, filter ListFilter) ([]Question, erro
 }
 func (s *Service) ListRevisions(ctx context.Context, id string) ([]Revision, error) {
 	return s.repository.ListRevisions(ctx, id)
+}
+func (s *Service) FindDuplicates(ctx context.Context, text, excludeQuestionID string) ([]DuplicateMatch, error) {
+	if strings.TrimSpace(text) == "" {
+		return nil, ErrInvalidInput
+	}
+	return s.repository.FindDuplicates(ctx, normalized(RevisionFields{Text: text}).Text, excludeQuestionID)
 }
 
 func validate(value RevisionFields) error {
