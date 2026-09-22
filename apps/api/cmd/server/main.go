@@ -51,7 +51,8 @@ func run(logger *slog.Logger) error {
 	authService := auth.NewServiceWithCredentials(authStore, authStore, nil)
 	participantService := participant.NewService(postgresparticipant.NewStore(database))
 	pairService := pair.NewService(postgrespair.NewStore(database))
-	inviteService := invite.NewService(postgresinvite.NewStore(database))
+	realtimePublisher := postgres.NewRealtimePublisher(database)
+	inviteService := invite.NewServiceWithPublisher(postgresinvite.NewStore(database), realtimePublisher)
 	questionService := question.NewService(postgresquestion.NewStore(database))
 	realtimeRegistry := realtime.NewRegistry(32)
 	router := httpapi.NewRouterWithQuestionRealtime(logger, database, authService, participantService, pairService, inviteService, questionService, realtimeRegistry, httpapi.SecurityConfig{

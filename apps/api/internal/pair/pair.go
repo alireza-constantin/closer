@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf16"
+
+	"github.com/alireza-constantin/closer/apps/api/internal/realtime"
 )
 
 var (
@@ -94,6 +96,7 @@ type Tx interface {
 	ParticipantHasActiveMembership(context.Context, string, string) (bool, error)
 	HasActiveSecondSlot(context.Context, string) (bool, error)
 	UpdateIntendedPersonName(context.Context, string, string) (Pair, error)
+	Publish(context.Context, realtime.Event) error
 }
 
 type Store interface {
@@ -154,6 +157,9 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (Pair, error) {
 			return err
 		}
 		if err := tx.CreateCreatorMembership(ctx, created.ID, input.ParticipantID); err != nil {
+			return err
+		}
+		if err := tx.Publish(ctx, realtime.Event{Version: realtime.Version, PairID: created.ID, Type: realtime.PairChanged}); err != nil {
 			return err
 		}
 		result = *created
@@ -237,6 +243,12 @@ func (s *Service) UpdateIntendedPersonName(ctx context.Context, participantID, p
 			return ErrPairAlreadyClaimed
 		}
 		result, err = tx.UpdateIntendedPersonName(ctx, pairID, name)
+		if err != nil {
+			return err
+		}
+		if err := tx.Publish(ctx, realtime.Event{Version: realtime.Version, PairID: pairID, Type: realtime.PairChanged}); err != nil {
+			return err
+		}
 		return err
 	})
 	return result, err

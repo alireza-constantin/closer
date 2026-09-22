@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf16"
+
+	"github.com/alireza-constantin/closer/apps/api/internal/realtime"
 )
 
 var (
@@ -73,10 +75,25 @@ type Store interface {
 }
 
 type Service struct {
-	store Store
+	store     Store
+	publisher realtime.Publisher
 }
 
 func NewService(store Store) *Service { return &Service{store: store} }
+
+func NewServiceWithPublisher(store Store, publisher realtime.Publisher) *Service {
+	return &Service{store: store, publisher: publisher}
+}
+
+func (s *Service) publishPairChanged(ctx context.Context, pairID string) {
+	if s.publisher == nil || pairID == "" {
+		return
+	}
+	// Realtime is an after-commit invalidation path. A temporary delivery
+	// failure must never turn a committed invite or membership mutation into a
+	// failed business operation; the consumer refetch/polling path recovers.
+	_ = s.publisher.Publish(ctx, realtime.Event{Version: realtime.Version, PairID: pairID, Type: realtime.PairChanged})
+}
 
 func (s *Service) Preview(ctx context.Context, token string) (*Landing, error) {
 	if token == "" {
@@ -88,13 +105,25 @@ func (s *Service) Status(ctx context.Context, participantID, pairID string) (*ti
 	return s.store.Status(ctx, participantID, pairID)
 }
 func (s *Service) Issue(ctx context.Context, participantID, pairID string) (Issued, error) {
-	return s.store.Issue(ctx, participantID, pairID, false)
+	result, err := s.store.Issue(ctx, participantID, pairID, false)
+	if err == nil && result.State == "issued" {
+		s.publishPairChanged(ctx, pairID)
+	}
+	return result, err
 }
 func (s *Service) Replace(ctx context.Context, participantID, pairID string) (Issued, error) {
-	return s.store.Issue(ctx, participantID, pairID, true)
+	result, err := s.store.Issue(ctx, participantID, pairID, true)
+	if err == nil {
+		s.publishPairChanged(ctx, pairID)
+	}
+	return result, err
 }
 func (s *Service) Revoke(ctx context.Context, participantID, pairID string) error {
-	return s.store.Revoke(ctx, participantID, pairID)
+	err := s.store.Revoke(ctx, participantID, pairID)
+	if err == nil {
+		s.publishPairChanged(ctx, pairID)
+	}
+	return err
 }
 func (s *Service) Claim(ctx context.Context, token, participantID string) (Claimed, error) {
 	if participantID == "" {
@@ -103,7 +132,11 @@ func (s *Service) Claim(ctx context.Context, token, participantID string) (Claim
 	if token == "" {
 		return Claimed{}, ErrUnavailable
 	}
-	return s.store.Claim(ctx, hash(token), participantID)
+	result, err := s.store.Claim(ctx, hash(token), participantID)
+	if err == nil {
+		s.publishPairChanged(ctx, result.PairID)
+	}
+	return result, err
 }
 
 func (s *Service) RejoinPreview(ctx context.Context, token string) (*RejoinLanding, error) {
@@ -114,11 +147,19 @@ func (s *Service) RejoinPreview(ctx context.Context, token string) (*RejoinLandi
 }
 
 func (s *Service) IssueRejoin(ctx context.Context, participantID, pairID string) (RejoinIssued, error) {
-	return s.store.IssueRejoin(ctx, participantID, pairID)
+	result, err := s.store.IssueRejoin(ctx, participantID, pairID)
+	if err == nil {
+		s.publishPairChanged(ctx, pairID)
+	}
+	return result, err
 }
 
 func (s *Service) RevokeRejoin(ctx context.Context, participantID, pairID string) error {
-	return s.store.RevokeRejoin(ctx, participantID, pairID)
+	err := s.store.RevokeRejoin(ctx, participantID, pairID)
+	if err == nil {
+		s.publishPairChanged(ctx, pairID)
+	}
+	return err
 }
 
 func (s *Service) Rejoin(ctx context.Context, token, authUserID, rawDisplayName string) (Rejoined, error) {
@@ -133,6 +174,7 @@ func (s *Service) Rejoin(ctx context.Context, token, authUserID, rawDisplayName 
 	if err != nil {
 		return Rejoined{}, err
 	}
+	s.publishPairChanged(ctx, result.PairID)
 	return result, nil
 }
 func hash(token string) [32]byte { return sha256.Sum256([]byte(token)) }
