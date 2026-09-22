@@ -142,8 +142,8 @@ func (ns NullPrivateQuestionCandidateState) Value() (driver.Value, error) {
 type PrivateRoundStatus string
 
 const (
-	PrivateRoundStatusOpen   PrivateRoundStatus = "open"
-	PrivateRoundStatusClosed PrivateRoundStatus = "closed"
+	PrivateRoundStatusOpen    PrivateRoundStatus = "open"
+	PrivateRoundStatusRetired PrivateRoundStatus = "retired"
 )
 
 func (e *PrivateRoundStatus) Scan(src interface{}) error {
@@ -268,6 +268,16 @@ type Participant struct {
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
+type PrivateAnswer struct {
+	ID              pgtype.UUID        `json:"id"`
+	RoundID         pgtype.UUID        `json:"round_id"`
+	MembershipEraID pgtype.UUID        `json:"membership_era_id"`
+	MembershipID    pgtype.UUID        `json:"membership_id"`
+	ParticipantID   pgtype.UUID        `json:"participant_id"`
+	Body            string             `json:"body"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+}
+
 type PrivateConversation struct {
 	ID                     pgtype.UUID        `json:"id"`
 	PairID                 pgtype.UUID        `json:"pair_id"`
@@ -291,18 +301,29 @@ type PrivateQuestionCandidate struct {
 	SkipResultCandidateID pgtype.UUID                   `json:"skip_result_candidate_id"`
 }
 
+type PrivateRevealView struct {
+	ID              pgtype.UUID        `json:"id"`
+	RoundID         pgtype.UUID        `json:"round_id"`
+	MembershipEraID pgtype.UUID        `json:"membership_era_id"`
+	MembershipID    pgtype.UUID        `json:"membership_id"`
+	ParticipantID   pgtype.UUID        `json:"participant_id"`
+	ViewedAt        pgtype.Timestamptz `json:"viewed_at"`
+}
+
 type PrivateRound struct {
-	ID                 pgtype.UUID        `json:"id"`
-	PairID             pgtype.UUID        `json:"pair_id"`
-	ConversationID     pgtype.UUID        `json:"conversation_id"`
-	MembershipEraID    pgtype.UUID        `json:"membership_era_id"`
-	CandidateID        pgtype.UUID        `json:"candidate_id"`
-	QuestionID         pgtype.UUID        `json:"question_id"`
-	QuestionRevisionID pgtype.UUID        `json:"question_revision_id"`
-	RoundNumber        int32              `json:"round_number"`
-	Status             PrivateRoundStatus `json:"status"`
-	AskedAt            pgtype.Timestamptz `json:"asked_at"`
-	ClientRequestID    pgtype.UUID        `json:"client_request_id"`
+	ID                     pgtype.UUID        `json:"id"`
+	PairID                 pgtype.UUID        `json:"pair_id"`
+	ConversationID         pgtype.UUID        `json:"conversation_id"`
+	MembershipEraID        pgtype.UUID        `json:"membership_era_id"`
+	CandidateID            pgtype.UUID        `json:"candidate_id"`
+	QuestionID             pgtype.UUID        `json:"question_id"`
+	QuestionRevisionID     pgtype.UUID        `json:"question_revision_id"`
+	RoundNumber            int32              `json:"round_number"`
+	Status                 PrivateRoundStatus `json:"status"`
+	DeclinedByMembershipID pgtype.UUID        `json:"declined_by_membership_id"`
+	DeclinedAt             pgtype.Timestamptz `json:"declined_at"`
+	AskedAt                pgtype.Timestamptz `json:"asked_at"`
+	ClientRequestID        pgtype.UUID        `json:"client_request_id"`
 }
 
 type Question struct {

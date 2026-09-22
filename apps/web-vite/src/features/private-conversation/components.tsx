@@ -1,20 +1,32 @@
 import * as React from "react";
+import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { QueryClient } from "@tanstack/react-query";
+import { useForm } from "react-hook-form";
 import { Link, useNavigate, useParams } from "react-router";
 
 import { PageShell } from "@/app/page-shell";
 import { ApiError } from "@/lib/api-client";
 import {
   askPrivateCandidate,
+  declinePrivateRound,
   getPrivateConversation,
+  getPrivateRound,
   likePrivateCandidate,
+  privateAnswerSchema,
   privateCategories,
+  revealPrivateRound,
   skipPrivateCandidate,
   startPrivateConversation,
+  submitPrivateAnswer,
+  type PrivateAnswerValues,
+  type PrivateConversation,
+  type PrivateRound,
 } from "@/features/private-conversation/api";
 import {
   connectPrivateRealtime,
   privateConversationKey,
+  privateRoundKey,
 } from "@/features/private-conversation/realtime";
 
 const categoryLabel: Record<string, string> = {
@@ -82,6 +94,13 @@ export function PrivateConversationPage() {
   }, [pairId, queryClient]);
 
   const view = conversation.data ?? start.data;
+  const roundId = view?.round?.roundId ?? "";
+  const roundQuery = useQuery({
+    queryKey: privateRoundKey(pairId, roundId),
+    queryFn: () => getPrivateRound(pairId, roundId),
+    enabled: Boolean(roundId),
+    initialData: view?.round,
+  });
   const ask = useMutation({
     mutationFn: ({
       candidateId,
@@ -188,16 +207,13 @@ export function PrivateConversationPage() {
             </div>
           </div>
         )}
-        {view?.state === "CURRENT_ROUND" && view.round && (
-          <div className="bg-closer-peach/60 mt-8 rounded-3xl p-6">
-            <p className="text-closer-muted text-sm font-bold uppercase">
-              Round {view.round.roundNumber}
-            </p>
-            <h1 className="text-closer-navy mt-3 text-3xl leading-tight font-extrabold">
-              {view.round.question.text}
-            </h1>
-            <p className="text-closer-muted mt-4 leading-7">Answers come next.</p>
-          </div>
+        {view?.state === "CURRENT_ROUND" && roundQuery.data && (
+          <PrivateRoundPanel
+            category={category}
+            pairId={pairId}
+            queryClient={queryClient}
+            round={roundQuery.data}
+          />
         )}
         {view?.state === "WAITING_FOR_CREATOR" && (
           <div className="bg-closer-lavender/60 mt-8 rounded-3xl p-6">
@@ -228,6 +244,179 @@ export function PrivateConversationPage() {
         )}
       </section>
     </PageShell>
+  );
+}
+
+function PrivateRoundPanel({
+  category,
+  pairId,
+  queryClient,
+  round,
+}: {
+  category: string;
+  pairId: string;
+  queryClient: QueryClient;
+  round: PrivateRound;
+}) {
+  const answerForm = useForm<PrivateAnswerValues>({
+    defaultValues: { body: "" },
+    mode: "onChange",
+    resolver: zodResolver(privateAnswerSchema),
+  });
+  const updateRound = React.useCallback(
+    (next: PrivateRound) => {
+      queryClient.setQueryData(privateRoundKey(pairId, round.roundId), next);
+      queryClient.setQueryData(
+        privateConversationKey(pairId, category),
+        (current: PrivateConversation | undefined) =>
+          current ? { ...current, round: next } : current,
+      );
+      void queryClient.invalidateQueries({ queryKey: privateConversationKey(pairId, category) });
+    },
+    [category, pairId, queryClient, round.roundId],
+  );
+  const answer = useMutation({
+    mutationFn: (values: PrivateAnswerValues) =>
+      submitPrivateAnswer(pairId, round.roundId, values.body),
+    onSuccess: (next) => {
+      answerForm.reset();
+      updateRound(next);
+    },
+  });
+  const decline = useMutation({
+    mutationFn: () => declinePrivateRound(pairId, round.roundId),
+    onSuccess: updateRound,
+  });
+  const reveal = useMutation({
+    mutationFn: () => revealPrivateRound(pairId, round.roundId),
+    onSuccess: updateRound,
+  });
+
+  const hasOwnAnswer = round.yourAnswer !== null && round.yourAnswer !== undefined;
+  const hasOtherAnswer = round.hasOtherAnswer === true;
+  const isDeclined = round.state === "DECLINED" || round.state === "RETIRED";
+  const isRevealed = round.state === "REVEAL_VIEWED" || Boolean(round.revealViewedAt);
+  const isRevealReady =
+    round.state === "REVEAL_READY" ||
+    (hasOwnAnswer && hasOtherAnswer && !isRevealed && !isDeclined);
+  const error = answer.error ?? decline.error ?? reveal.error;
+  const busy = answer.isPending || decline.isPending || reveal.isPending;
+
+  return (
+    <div className="bg-closer-peach/60 mt-8 rounded-3xl p-6">
+      <p className="text-closer-muted text-sm font-bold uppercase">Round {round.roundNumber}</p>
+      <h1 className="text-closer-navy mt-3 text-3xl leading-tight font-extrabold">
+        {round.question.text}
+      </h1>
+
+      {isDeclined ? (
+        <div className="mt-5 rounded-2xl bg-white/60 p-4">
+          <p className="text-closer-navy font-extrabold">This question was let go.</p>
+          <p className="text-closer-muted mt-1 text-sm leading-6">
+            It stays private, and no answer can be added to this round.
+          </p>
+        </div>
+      ) : isRevealed ? (
+        <RevealedAnswers round={round} />
+      ) : isRevealReady ? (
+        <div className="mt-5">
+          <p className="text-closer-muted leading-7">
+            Both answers are in. Reveal opens them for you; your person can reveal theirs
+            separately.
+          </p>
+          <button
+            className="bg-closer-coral text-closer-navy mt-5 rounded-2xl px-5 py-3 font-extrabold disabled:opacity-50"
+            disabled={busy}
+            onClick={() => reveal.mutate()}
+            type="button"
+          >
+            {reveal.isPending ? "Opening…" : "Reveal answers"}
+          </button>
+        </div>
+      ) : hasOwnAnswer ? (
+        <div className="mt-5 rounded-2xl bg-white/60 p-4">
+          <p className="text-closer-navy font-extrabold">Answer saved</p>
+          <p className="text-closer-muted mt-1 text-sm leading-6">
+            Your person’s answer stays hidden until you choose to reveal your own view.
+          </p>
+        </div>
+      ) : (
+        <form
+          className="mt-5"
+          onSubmit={answerForm.handleSubmit((values) => answer.mutate(values))}
+        >
+          <label className="text-closer-navy text-sm font-extrabold" htmlFor="private-answer">
+            Your answer
+          </label>
+          <textarea
+            {...answerForm.register("body")}
+            aria-describedby="private-answer-help private-answer-error"
+            aria-invalid={Boolean(answerForm.formState.errors.body)}
+            className="border-closer-line mt-2 min-h-32 w-full rounded-2xl border bg-white/75 p-4 text-sm outline-none focus:ring-2 focus:ring-[#29305f]/20"
+            id="private-answer"
+            maxLength={2000}
+            placeholder="Write your answer…"
+          />
+          <p className="text-closer-muted mt-2 text-xs" id="private-answer-help">
+            Your person cannot see this yet.
+          </p>
+          {answerForm.formState.errors.body?.message && (
+            <p className="text-closer-coral mt-2 text-sm" id="private-answer-error" role="alert">
+              {answerForm.formState.errors.body.message}
+            </p>
+          )}
+          <button
+            className="bg-closer-coral text-closer-navy mt-4 rounded-2xl px-5 py-3 font-extrabold disabled:opacity-50"
+            disabled={busy || !answerForm.formState.isValid}
+            type="submit"
+          >
+            {answer.isPending ? "Saving…" : "Save my answer"}
+          </button>
+          <button
+            className="border-closer-line text-closer-navy ml-3 rounded-2xl border px-5 py-3 font-extrabold disabled:opacity-50"
+            disabled={busy}
+            onClick={() => decline.mutate()}
+            type="button"
+          >
+            {decline.isPending ? "Letting go…" : "Let this one go"}
+          </button>
+        </form>
+      )}
+
+      {isRevealed && round.otherRevealViewed === false && (
+        <p className="text-closer-muted mt-5 text-sm leading-6">
+          Your reveal is independent. Your person has not opened their view yet.
+        </p>
+      )}
+      {error && (
+        <p className="text-closer-coral mt-4 text-sm" role="alert">
+          {error instanceof Error ? error.message : "That action could not be completed."}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function RevealedAnswers({ round }: { round: PrivateRound }) {
+  const answers = round.answers ?? [];
+  return (
+    <div className="mt-5 space-y-3">
+      <p className="text-closer-navy font-extrabold">Your answers</p>
+      {answers.length > 0 ? (
+        answers.map((answer, index) => (
+          <article className="rounded-2xl bg-white/70 p-4" key={`${answer.participantId}-${index}`}>
+            <p className="text-closer-muted text-xs font-bold uppercase">
+              {round.yourAnswer === answer.body ? "Your answer" : "Your person’s answer"}
+            </p>
+            <p className="text-closer-navy mt-2 leading-7">{answer.body}</p>
+          </article>
+        ))
+      ) : (
+        <p className="text-closer-muted text-sm leading-6">
+          Your reveal is recorded. Refreshing the shared answers…
+        </p>
+      )}
+    </div>
   );
 }
 

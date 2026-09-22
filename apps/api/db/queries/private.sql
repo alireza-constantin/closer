@@ -3,6 +3,7 @@ SELECT
     p.id AS pair_id,
     p.relationship_type,
     actor_membership.id AS actor_membership_id,
+    other_membership.id AS other_membership_id,
     actor_membership.participant_id AS actor_participant_id,
     other_membership.participant_id AS other_participant_id,
     active_era.id AS membership_era_id
@@ -102,6 +103,60 @@ WHERE round.pair_id = sqlc.arg(pair_id)
   AND round.status = 'open'
 ORDER BY round.round_number DESC
 LIMIT 1;
+
+-- name: GetPrivateRoundForParticipant :one
+SELECT round.id, round.pair_id, round.conversation_id, round.membership_era_id,
+       round.candidate_id, round.question_id, round.question_revision_id,
+       round.round_number, round.status, round.asked_at, round.client_request_id,
+       round.declined_by_membership_id, round.declined_at,
+       r.text, r.category, r.intensity
+FROM private_round AS round
+JOIN question_revision AS r ON r.id = round.question_revision_id
+WHERE round.id = sqlc.arg(round_id)
+  AND round.pair_id = sqlc.arg(pair_id)
+  AND round.membership_era_id = sqlc.arg(membership_era_id);
+
+-- name: ListPrivateAnswers :many
+SELECT id, round_id, membership_era_id, membership_id, participant_id, body, created_at
+FROM private_answer
+WHERE round_id = sqlc.arg(round_id)
+  AND membership_era_id = sqlc.arg(membership_era_id)
+ORDER BY created_at, id;
+
+-- name: GetPrivateAnswerByMembership :one
+SELECT id, round_id, membership_era_id, membership_id, participant_id, body, created_at
+FROM private_answer
+WHERE round_id = sqlc.arg(round_id)
+  AND membership_id = sqlc.arg(membership_id)
+  AND membership_era_id = sqlc.arg(membership_era_id);
+
+-- name: CreatePrivateAnswer :one
+INSERT INTO private_answer (round_id, membership_era_id, membership_id, participant_id, body)
+VALUES (sqlc.arg(round_id), sqlc.arg(membership_era_id), sqlc.arg(membership_id), sqlc.arg(participant_id), sqlc.arg(body))
+ON CONFLICT (round_id, membership_id) DO NOTHING
+RETURNING id, round_id, membership_era_id, membership_id, participant_id, body, created_at;
+
+-- name: RetirePrivateRound :one
+UPDATE private_round
+SET status = 'retired', declined_by_membership_id = sqlc.arg(membership_id), declined_at = now()
+WHERE id = sqlc.arg(round_id)
+  AND pair_id = sqlc.arg(pair_id)
+  AND membership_era_id = sqlc.arg(membership_era_id)
+  AND status = 'open'
+RETURNING id;
+
+-- name: ListPrivateRevealViews :many
+SELECT id, round_id, membership_era_id, membership_id, participant_id, viewed_at
+FROM private_reveal_view
+WHERE round_id = sqlc.arg(round_id)
+  AND membership_era_id = sqlc.arg(membership_era_id)
+ORDER BY viewed_at, id;
+
+-- name: CreatePrivateRevealView :one
+INSERT INTO private_reveal_view (round_id, membership_era_id, membership_id, participant_id)
+VALUES (sqlc.arg(round_id), sqlc.arg(membership_era_id), sqlc.arg(membership_id), sqlc.arg(participant_id))
+ON CONFLICT (round_id, membership_id) DO NOTHING
+RETURNING id, round_id, membership_era_id, membership_id, participant_id, viewed_at;
 
 -- name: GetPrivateRoundByCandidate :one
 SELECT round.id, round.pair_id, round.conversation_id, round.membership_era_id, round.candidate_id, round.question_id,

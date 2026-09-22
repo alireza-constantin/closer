@@ -663,3 +663,276 @@ func TestConcurrentLikeAndWithdrawalDoesNotLikeAfterInvalidation(t *testing.T) {
 		t.Fatalf("Like/withdrawal race state = %s", state)
 	}
 }
+
+func TestAnswerProjectionIsViewerRelativeAndRevealIsIndependent(t *testing.T) {
+	f := openFixture(t)
+	started, err := f.service.StartOrResume(context.Background(), domain.StartInput{ParticipantID: f.firstID, PairID: f.pairID, Category: "fun"})
+	if err != nil || started.Candidate == nil {
+		t.Fatalf("start = %+v, err=%v", started, err)
+	}
+	round, err := f.service.Ask(context.Background(), domain.AskInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: started.ConversationID, CandidateID: started.Candidate.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstInput := domain.RoundInput{ParticipantID: f.firstID, PairID: f.pairID, RoundID: round.ID}
+	secondInput := domain.RoundInput{ParticipantID: f.secondID, PairID: f.pairID, RoundID: round.ID}
+	if _, err := f.service.Answer(context.Background(), domain.AnswerInput{RoundInput: firstInput, Body: "FIRST-SENTINEL"}); err != nil {
+		t.Fatal(err)
+	}
+	first, err := f.service.GetRound(context.Background(), firstInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := f.service.GetRound(context.Background(), secondInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstJSON, _ := json.Marshal(first)
+	secondJSON, _ := json.Marshal(second)
+	if first.YourAnswer == nil || *first.YourAnswer != "FIRST-SENTINEL" || strings.Contains(string(firstJSON), "SECOND-SENTINEL") {
+		t.Fatalf("first pre-reveal projection = %s", firstJSON)
+	}
+	if second.YourAnswer != nil || strings.Contains(string(secondJSON), "FIRST-SENTINEL") || second.State != "YOUR_TURN" {
+		t.Fatalf("second pre-answer projection = %s", secondJSON)
+	}
+	if _, err := f.service.Answer(context.Background(), domain.AnswerInput{RoundInput: secondInput, Body: "SECOND-SENTINEL"}); err != nil {
+		t.Fatal(err)
+	}
+	ready, err := f.service.GetRound(context.Background(), firstInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readyJSON, _ := json.Marshal(ready)
+	if ready.State != "REVEAL_READY" || len(ready.Answers) != 0 || strings.Contains(string(readyJSON), "SECOND-SENTINEL") {
+		t.Fatalf("ready projection leaked answer = %s", readyJSON)
+	}
+	if _, err := f.service.Reveal(context.Background(), firstInput); err != nil {
+		t.Fatal(err)
+	}
+	revealed, err := f.service.GetRound(context.Background(), firstInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revealed.State != "REVEAL_VIEWED" || len(revealed.Answers) != 2 {
+		t.Fatalf("first reveal projection = %+v", revealed)
+	}
+	secondBeforeReveal, err := f.service.GetRound(context.Background(), secondInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondBeforeJSON, _ := json.Marshal(secondBeforeReveal)
+	if len(secondBeforeReveal.Answers) != 0 || strings.Contains(string(secondBeforeJSON), "FIRST-SENTINEL") {
+		t.Fatalf("second received answer before own Reveal = %s", secondBeforeJSON)
+	}
+	if _, err := f.service.Reveal(context.Background(), secondInput); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.service.Reveal(context.Background(), secondInput); err != nil {
+		t.Fatal(err)
+	}
+	var revealViews int
+	if err := f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		return db.QueryRow(context.Background(), "SELECT count(*) FROM private_reveal_view WHERE round_id = $1", round.ID).Scan(&revealViews)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if revealViews != 2 {
+		t.Fatalf("reveal views = %d, want 2", revealViews)
+	}
+	final, err := f.service.GetRound(context.Background(), firstInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !final.CanContinue {
+		t.Fatalf("both Reveal Views did not unlock progression: %+v", final)
+	}
+}
+
+func TestConcurrentAnswersBothCommitWithoutCrossViewerLeak(t *testing.T) {
+	f := openFixture(t)
+	started, err := f.service.StartOrResume(context.Background(), domain.StartInput{ParticipantID: f.firstID, PairID: f.pairID, Category: "fun"})
+	if err != nil || started.Candidate == nil {
+		t.Fatalf("start = %+v, err=%v", started, err)
+	}
+	round, err := f.service.Ask(context.Background(), domain.AskInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: started.ConversationID, CandidateID: started.Candidate.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for _, input := range []domain.AnswerInput{
+		{RoundInput: domain.RoundInput{ParticipantID: f.firstID, PairID: f.pairID, RoundID: round.ID}, Body: "CONCURRENT-FIRST"},
+		{RoundInput: domain.RoundInput{ParticipantID: f.secondID, PairID: f.pairID, RoundID: round.ID}, Body: "CONCURRENT-SECOND"},
+	} {
+		go func(input domain.AnswerInput) {
+			<-start
+			_, answerErr := f.service.Answer(context.Background(), input)
+			results <- answerErr
+		}(input)
+	}
+	close(start)
+	if firstErr, secondErr := <-results, <-results; firstErr != nil || secondErr != nil {
+		t.Fatalf("concurrent answers errors = %v / %v", firstErr, secondErr)
+	}
+
+	first, err := f.service.GetRound(context.Background(), domain.RoundInput{ParticipantID: f.firstID, PairID: f.pairID, RoundID: round.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := f.service.GetRound(context.Background(), domain.RoundInput{ParticipantID: f.secondID, PairID: f.pairID, RoundID: round.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstJSON, _ := json.Marshal(first)
+	secondJSON, _ := json.Marshal(second)
+	if first.State != "REVEAL_READY" || first.YourAnswer == nil || *first.YourAnswer != "CONCURRENT-FIRST" || len(first.Answers) != 0 || strings.Contains(string(firstJSON), "CONCURRENT-SECOND") {
+		t.Fatalf("first concurrent projection = %s", firstJSON)
+	}
+	if second.State != "REVEAL_READY" || second.YourAnswer == nil || *second.YourAnswer != "CONCURRENT-SECOND" || len(second.Answers) != 0 || strings.Contains(string(secondJSON), "CONCURRENT-FIRST") {
+		t.Fatalf("second concurrent projection = %s", secondJSON)
+	}
+}
+
+func TestAnswerIsImmutableAndDeclineAnswerRaceHasOneTerminalOutcome(t *testing.T) {
+	f := openFixture(t)
+	started, err := f.service.StartOrResume(context.Background(), domain.StartInput{ParticipantID: f.firstID, PairID: f.pairID, Category: "fun"})
+	if err != nil || started.Candidate == nil {
+		t.Fatalf("start = %+v, err=%v", started, err)
+	}
+	round, err := f.service.Ask(context.Background(), domain.AskInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: started.ConversationID, CandidateID: started.Candidate.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := domain.RoundInput{ParticipantID: f.firstID, PairID: f.pairID, RoundID: round.ID}
+	if _, err := f.service.Answer(context.Background(), domain.AnswerInput{RoundInput: input, Body: "IMMUTABLE"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.service.Answer(context.Background(), domain.AnswerInput{RoundInput: input, Body: "different"}); !errors.Is(err, domain.ErrAnswerImmutable) {
+		t.Fatalf("changed answer err = %v, want ErrAnswerImmutable", err)
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	go func() {
+		<-start
+		_, err := f.service.Answer(context.Background(), domain.AnswerInput{RoundInput: domain.RoundInput{ParticipantID: f.secondID, PairID: f.pairID, RoundID: round.ID}, Body: "RACING"})
+		results <- err
+	}()
+	go func() {
+		<-start
+		_, err := f.service.Decline(context.Background(), domain.RoundInput{ParticipantID: f.secondID, PairID: f.pairID, RoundID: round.ID})
+		results <- err
+	}()
+	close(start)
+	firstErr, secondErr := <-results, <-results
+	if (firstErr == nil) == (secondErr == nil) {
+		t.Fatalf("answer/decline race errors = %v / %v, want one winner", firstErr, secondErr)
+	}
+	var status string
+	var answerCount int
+	if err := f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		if err := db.QueryRow(context.Background(), "SELECT status::text FROM private_round WHERE id = $1", round.ID).Scan(&status); err != nil {
+			return err
+		}
+		return db.QueryRow(context.Background(), "SELECT count(*) FROM private_answer WHERE round_id = $1", round.ID).Scan(&answerCount)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if status == "retired" && answerCount != 1 || status == "open" && answerCount != 2 {
+		t.Fatalf("race persisted status=%s answers=%d", status, answerCount)
+	}
+}
+
+func TestRejoinPreservesPrivateEraAndReplacementCannotReadOldRound(t *testing.T) {
+	f := openFixture(t)
+	started, err := f.service.StartOrResume(context.Background(), domain.StartInput{ParticipantID: f.firstID, PairID: f.pairID, Category: "fun"})
+	if err != nil || started.Candidate == nil {
+		t.Fatalf("start = %+v, err=%v", started, err)
+	}
+	round, err := f.service.Ask(context.Background(), domain.AskInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: started.ConversationID, CandidateID: started.Candidate.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstInput := domain.RoundInput{ParticipantID: f.firstID, PairID: f.pairID, RoundID: round.ID}
+	if _, err := f.service.Answer(context.Background(), domain.AnswerInput{RoundInput: firstInput, Body: "REJOIN-SAFE"}); err != nil {
+		t.Fatal(err)
+	}
+
+	var oldEraID, firstMembershipID, secondMembershipID string
+	if err := f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		if err := db.QueryRow(context.Background(), "SELECT id::text FROM pair_membership_era WHERE pair_id=$1 AND ended_at IS NULL", f.pairID).Scan(&oldEraID); err != nil {
+			return err
+		}
+		if err := db.QueryRow(context.Background(), "SELECT id::text FROM pair_membership WHERE pair_id=$1 AND participant_id=$2 AND ended_at IS NULL", f.pairID, f.firstID).Scan(&firstMembershipID); err != nil {
+			return err
+		}
+		return db.QueryRow(context.Background(), "SELECT id::text FROM pair_membership WHERE pair_id=$1 AND participant_id=$2 AND ended_at IS NULL", f.pairID, f.secondID).Scan(&secondMembershipID)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var reboundAuthID string
+	if err := f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		if err := db.QueryRow(context.Background(), "INSERT INTO auth_user(id, kind, created_at) VALUES (gen_random_uuid(), 'anonymous', now()) RETURNING id::text").Scan(&reboundAuthID); err != nil {
+			return err
+		}
+		_, err := db.Exec(context.Background(), "UPDATE participant SET auth_user_id=$1 WHERE id=$2", reboundAuthID, f.firstID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+			_, _ = db.Exec(context.Background(), "UPDATE participant SET auth_user_id=$1 WHERE id=$2", f.firstAuthID, f.firstID)
+			_, _ = db.Exec(context.Background(), "DELETE FROM auth_user WHERE id=$1", reboundAuthID)
+			return nil
+		})
+	})
+
+	rejoined, err := f.service.GetRound(context.Background(), firstInput)
+	if err != nil {
+		t.Fatalf("rejoined participant lost private round: %v", err)
+	}
+	if rejoined.MembershipEraID != oldEraID || rejoined.YourAnswer == nil || *rejoined.YourAnswer != "REJOIN-SAFE" {
+		t.Fatalf("rejoin changed private projection: %+v, want era %s", rejoined, oldEraID)
+	}
+
+	var replacementParticipantID, replacementAuthID, replacementMembershipID, replacementEraID string
+	if err := f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		if _, err := db.Exec(context.Background(), "UPDATE pair_membership_era SET ended_at=now() WHERE id=$1", oldEraID); err != nil {
+			return err
+		}
+		if _, err := db.Exec(context.Background(), "UPDATE pair_membership SET ended_at=now(), ended_display_name='First' WHERE id=$1", firstMembershipID); err != nil {
+			return err
+		}
+		if err := db.QueryRow(context.Background(), "INSERT INTO auth_user(id, kind, created_at) VALUES (gen_random_uuid(), 'anonymous', now()) RETURNING id::text").Scan(&replacementAuthID); err != nil {
+			return err
+		}
+		if err := db.QueryRow(context.Background(), "INSERT INTO participant(auth_user_id, display_name) VALUES ($1, 'Replacement') RETURNING id::text", replacementAuthID).Scan(&replacementParticipantID); err != nil {
+			return err
+		}
+		if err := db.QueryRow(context.Background(), "INSERT INTO pair_membership(pair_id, participant_id, slot) VALUES ($1, $2, 'first') RETURNING id::text", f.pairID, replacementParticipantID).Scan(&replacementMembershipID); err != nil {
+			return err
+		}
+		return db.QueryRow(context.Background(), "INSERT INTO pair_membership_era(pair_id, first_membership_id, second_membership_id) VALUES ($1, $2, $3) RETURNING id::text", f.pairID, replacementMembershipID, secondMembershipID).Scan(&replacementEraID)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+			_, _ = db.Exec(context.Background(), "DELETE FROM pair_membership_era WHERE id=$1", replacementEraID)
+			_, _ = db.Exec(context.Background(), "DELETE FROM pair_membership WHERE id=$1", replacementMembershipID)
+			_, _ = db.Exec(context.Background(), "DELETE FROM participant WHERE id=$1", replacementParticipantID)
+			_, _ = db.Exec(context.Background(), "DELETE FROM auth_user WHERE id=$1", replacementAuthID)
+			return nil
+		})
+	})
+
+	replacementInput := domain.RoundInput{ParticipantID: replacementParticipantID, PairID: f.pairID, RoundID: round.ID}
+	if _, err := f.service.GetRound(context.Background(), replacementInput); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("replacement participant accessed old private round: %v", err)
+	}
+	secondInput := domain.RoundInput{ParticipantID: f.secondID, PairID: f.pairID, RoundID: round.ID}
+	if _, err := f.service.GetRound(context.Background(), secondInput); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("remaining participant accessed old private round after replacement: %v", err)
+	}
+}

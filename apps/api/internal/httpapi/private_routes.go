@@ -26,6 +26,10 @@ type privateLikeRequest struct {
 	Liked *bool `json:"liked"`
 }
 
+type privateAnswerRequest struct {
+	Body *string `json:"body"`
+}
+
 type privateCandidateProjection struct {
 	ID       string `json:"id"`
 	Liked    bool   `json:"liked"`
@@ -49,18 +53,30 @@ type privateConversationProjection struct {
 }
 
 type privateRoundProjection struct {
-	ID                 string `json:"roundId"`
-	ConversationID     string `json:"conversationId"`
-	QuestionID         string `json:"questionId"`
-	QuestionRevisionID string `json:"questionRevisionId"`
-	RoundNumber        int32  `json:"roundNumber"`
-	State              string `json:"state"`
-	AskedAt            string `json:"askedAt"`
-	Question           struct {
+	ID                  string                    `json:"roundId"`
+	ConversationID      string                    `json:"conversationId"`
+	QuestionID          string                    `json:"questionId"`
+	QuestionRevisionID  string                    `json:"questionRevisionId"`
+	RoundNumber         int32                     `json:"roundNumber"`
+	State               string                    `json:"state"`
+	AskedAt             string                    `json:"askedAt"`
+	YourAnswer          *string                   `json:"yourAnswer"`
+	HasOtherAnswer      bool                      `json:"hasOtherAnswer"`
+	RevealViewedAt      string                    `json:"revealViewedAt,omitempty"`
+	OtherRevealViewedAt string                    `json:"otherRevealViewedAt,omitempty"`
+	OtherRevealViewed   bool                      `json:"otherRevealViewed"`
+	CanContinue         bool                      `json:"canContinue"`
+	Answers             []privateAnswerProjection `json:"answers,omitempty"`
+	Question            struct {
 		Text      string `json:"text"`
 		Category  string `json:"category"`
 		Intensity string `json:"intensity"`
 	} `json:"question"`
+}
+
+type privateAnswerProjection struct {
+	ParticipantID string `json:"participantId"`
+	Body          string `json:"body"`
 }
 
 func registerPrivateRoutes(router chi.Router, authService *auth.Service, participantService *participant.Service, service *privatedomain.Service, security SecurityConfig) {
@@ -162,6 +178,75 @@ func registerPrivateRoutes(router chi.Router, authService *auth.Service, partici
 		}
 		writeJSON(w, http.StatusOK, map[string]bool{"liked": liked})
 	})
+	api.Get("/pairs/{pairID}/private-rounds/{roundID}", func(w http.ResponseWriter, r *http.Request) {
+		setPrivateNoStore(w)
+		actor, ok := requiredActorParticipant(w, r, participantService)
+		if !ok {
+			return
+		}
+		result, err := service.GetRound(r.Context(), privatedomain.RoundInput{ParticipantID: actor.ID, PairID: chi.URLParam(r, "pairID"), RoundID: chi.URLParam(r, "roundID")})
+		if err != nil {
+			writePrivateError(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, projectPrivateRound(result))
+	})
+	api.Post("/pairs/{pairID}/private-rounds/{roundID}/answer", func(w http.ResponseWriter, r *http.Request) {
+		setPrivateNoStore(w)
+		if !requireTrustedMutationOrigin(w, r, security) {
+			return
+		}
+		actor, ok := requiredActorParticipant(w, r, participantService)
+		if !ok {
+			return
+		}
+		var request privateAnswerRequest
+		if !decodeDomainJSON(w, r, &request) {
+			return
+		}
+		if request.Body == nil {
+			writeAPIError(w, r, http.StatusBadRequest, "ANSWER_INVALID", "The answer is invalid.")
+			return
+		}
+		result, err := service.Answer(r.Context(), privatedomain.AnswerInput{RoundInput: privatedomain.RoundInput{ParticipantID: actor.ID, PairID: chi.URLParam(r, "pairID"), RoundID: chi.URLParam(r, "roundID")}, Body: *request.Body})
+		if err != nil {
+			writePrivateError(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, projectPrivateRound(result))
+	})
+	api.Post("/pairs/{pairID}/private-rounds/{roundID}/retire", func(w http.ResponseWriter, r *http.Request) {
+		setPrivateNoStore(w)
+		if !requireTrustedMutationOrigin(w, r, security) {
+			return
+		}
+		actor, ok := requiredActorParticipant(w, r, participantService)
+		if !ok {
+			return
+		}
+		result, err := service.Decline(r.Context(), privatedomain.RoundInput{ParticipantID: actor.ID, PairID: chi.URLParam(r, "pairID"), RoundID: chi.URLParam(r, "roundID")})
+		if err != nil {
+			writePrivateError(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, projectPrivateRound(result))
+	})
+	api.Post("/pairs/{pairID}/private-rounds/{roundID}/reveal", func(w http.ResponseWriter, r *http.Request) {
+		setPrivateNoStore(w)
+		if !requireTrustedMutationOrigin(w, r, security) {
+			return
+		}
+		actor, ok := requiredActorParticipant(w, r, participantService)
+		if !ok {
+			return
+		}
+		result, err := service.Reveal(r.Context(), privatedomain.RoundInput{ParticipantID: actor.ID, PairID: chi.URLParam(r, "pairID"), RoundID: chi.URLParam(r, "roundID")})
+		if err != nil {
+			writePrivateError(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, projectPrivateRound(result))
+	})
 }
 
 func projectPrivateView(view privatedomain.View) privateConversationProjection {
@@ -183,10 +268,16 @@ func projectPrivateView(view privatedomain.View) privateConversationProjection {
 }
 
 func projectPrivateRound(round privatedomain.Round) *privateRoundProjection {
-	result := &privateRoundProjection{ID: round.ID, ConversationID: round.ConversationID, QuestionID: round.QuestionID, QuestionRevisionID: round.QuestionRevisionID, RoundNumber: round.RoundNumber, State: round.State, AskedAt: round.AskedAt}
+	result := &privateRoundProjection{ID: round.ID, ConversationID: round.ConversationID, QuestionID: round.QuestionID, QuestionRevisionID: round.QuestionRevisionID, RoundNumber: round.RoundNumber, State: round.State, AskedAt: round.AskedAt, YourAnswer: round.YourAnswer, HasOtherAnswer: round.HasOtherAnswer, RevealViewedAt: round.RevealViewedAt, OtherRevealViewedAt: round.OtherRevealViewedAt, OtherRevealViewed: round.OtherRevealViewed, CanContinue: round.CanContinue}
 	result.Question.Text = round.Text
 	result.Question.Category = round.Category
 	result.Question.Intensity = round.Intensity
+	if round.Answers != nil {
+		result.Answers = make([]privateAnswerProjection, 0, len(round.Answers))
+		for _, answer := range round.Answers {
+			result.Answers = append(result.Answers, privateAnswerProjection{ParticipantID: answer.ParticipantID, Body: answer.Body})
+		}
+	}
 	return result
 }
 
@@ -202,6 +293,14 @@ func writePrivateError(w http.ResponseWriter, r *http.Request, err error) {
 		writeAPIError(w, r, http.StatusConflict, "PRIVATE_ROUND_OPEN", "A Private question is already open.")
 	case errors.Is(err, privatedomain.ErrInvalidInput):
 		writeAPIError(w, r, http.StatusBadRequest, "VALIDATION_ERROR", "The Private command is invalid.")
+	case errors.Is(err, privatedomain.ErrAnswerInvalid):
+		writeAPIError(w, r, http.StatusBadRequest, "ANSWER_INVALID", "The answer is invalid.")
+	case errors.Is(err, privatedomain.ErrAnswerImmutable):
+		writeAPIError(w, r, http.StatusConflict, "ANSWER_IMMUTABLE", "Your answer cannot be changed.")
+	case errors.Is(err, privatedomain.ErrQuestionUnavailable):
+		writeAPIError(w, r, http.StatusBadRequest, "QUESTION_UNAVAILABLE", "This Private question is unavailable.")
+	case errors.Is(err, privatedomain.ErrRevealNotReady):
+		writeAPIError(w, r, http.StatusBadRequest, "REVEAL_NOT_READY", "Reveal is not ready yet.")
 	default:
 		writeAuthInternalError(w, r)
 	}
