@@ -118,6 +118,7 @@ func registerTogetherRoutes(router chi.Router, authService *auth.Service, partic
 			writeTogetherError(w, r, err)
 			return
 		}
+		publishTogetherChanged(r, publisher, chi.URLParam(r, "pairID"))
 		writeJSON(w, http.StatusOK, result)
 	})
 
@@ -139,6 +140,7 @@ func registerTogetherRoutes(router chi.Router, authService *auth.Service, partic
 			writeTogetherError(w, r, err)
 			return
 		}
+		publishTogetherChanged(r, publisher, chi.URLParam(r, "pairID"))
 		writeJSON(w, http.StatusOK, result)
 	})
 
