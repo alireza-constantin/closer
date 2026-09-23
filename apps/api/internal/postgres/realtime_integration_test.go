@@ -63,7 +63,7 @@ func TestTransactionalRealtimePublisherCommitsAfterBusinessTransaction(t *testin
 	want := realtime.Event{
 		Version: realtime.Version,
 		PairID:  fmt.Sprintf("realtime-commit-%d", time.Now().UnixNano()),
-		Type:    realtime.PairChanged,
+		Type:    realtime.PairTerminated,
 	}
 	if err := pool.WithinTx(ctx, func(db postgres.QueryDB) error {
 		return postgres.NewTransactionalRealtimePublisher(db).Publish(ctx, want)
@@ -90,7 +90,7 @@ func TestTransactionalRealtimePublisherRollsBackWithBusinessTransaction(t *testi
 	want := realtime.Event{
 		Version: realtime.Version,
 		PairID:  fmt.Sprintf("realtime-rollback-%d", time.Now().UnixNano()),
-		Type:    realtime.PairChanged,
+		Type:    realtime.PairTerminated,
 	}
 	wantErr := errors.New("rollback test")
 	if err := pool.WithinTx(ctx, func(db postgres.QueryDB) error {
