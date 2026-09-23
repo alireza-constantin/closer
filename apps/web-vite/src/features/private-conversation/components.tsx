@@ -14,12 +14,21 @@ import {
   getPrivateRound,
   likePrivateCandidate,
   privateAnswerSchema,
+  privateReplySchema,
+  privateReactionValues,
+  progressPrivateRound,
   privateCategories,
+  removePrivateReaction,
+  removePrivateReply,
   revealPrivateRound,
   skipPrivateCandidate,
   startPrivateConversation,
   submitPrivateAnswer,
+  setPrivateReaction,
+  setPrivateReply,
   type PrivateAnswerValues,
+  type PrivateReplyValues,
+  type PrivateReactionValue,
   type PrivateConversation,
   type PrivateRound,
 } from "@/features/private-conversation/api";
@@ -209,6 +218,7 @@ export function PrivateConversationPage() {
         )}
         {view?.state === "CURRENT_ROUND" && roundQuery.data && (
           <PrivateRoundPanel
+            availableCategories={view.availableCategories ?? [...privateCategories]}
             category={category}
             pairId={pairId}
             queryClient={queryClient}
@@ -248,21 +258,33 @@ export function PrivateConversationPage() {
 }
 
 function PrivateRoundPanel({
+  availableCategories,
   category,
   pairId,
   queryClient,
   round,
 }: {
+  availableCategories: string[];
   category: string;
   pairId: string;
   queryClient: QueryClient;
   round: PrivateRound;
 }) {
+  const navigate = useNavigate();
   const answerForm = useForm<PrivateAnswerValues>({
     defaultValues: { body: "" },
     mode: "onChange",
     resolver: zodResolver(privateAnswerSchema),
   });
+  const replyForm = useForm<PrivateReplyValues>({
+    defaultValues: { body: "" },
+    mode: "onChange",
+    resolver: zodResolver(privateReplySchema),
+  });
+  const existingReply = round.replies?.find((item) => item.isOwner)?.body ?? "";
+  React.useEffect(() => {
+    replyForm.reset({ body: existingReply });
+  }, [existingReply, replyForm.reset, round.roundId]);
   const updateRound = React.useCallback(
     (next: PrivateRound) => {
       queryClient.setQueryData(privateRoundKey(pairId, round.roundId), next);
@@ -291,6 +313,47 @@ function PrivateRoundPanel({
     mutationFn: () => revealPrivateRound(pairId, round.roundId),
     onSuccess: updateRound,
   });
+  const reaction = useMutation({
+    mutationFn: ({ value }: { value: PrivateReactionValue | null }) =>
+      value
+        ? setPrivateReaction(pairId, round.roundId, value)
+        : removePrivateReaction(pairId, round.roundId),
+    onSuccess: updateRound,
+  });
+  const reply = useMutation({
+    mutationFn: (values: PrivateReplyValues) => setPrivateReply(pairId, round.roundId, values.body),
+    onSuccess: (next) => {
+      updateRound(next);
+      replyForm.reset({ body: next.replies?.find((item) => item.isOwner)?.body ?? "" });
+    },
+  });
+  const clearReply = useMutation({
+    mutationFn: () => removePrivateReply(pairId, round.roundId),
+    onSuccess: (next) => {
+      updateRound(next);
+      replyForm.reset({ body: "" });
+    },
+  });
+  const [choosingLane, setChoosingLane] = React.useState(false);
+  const progress = useMutation({
+    mutationFn: ({
+      action,
+      category,
+      clientRequestId,
+    }: {
+      action: "ask_another" | "something_else";
+      category: string;
+      clientRequestId: string;
+    }) => progressPrivateRound(pairId, round.roundId, action, category, clientRequestId),
+    retry: 1,
+    onSuccess: (next) => {
+      queryClient.setQueryData(privateConversationKey(pairId, next.category), next);
+      void queryClient.invalidateQueries({
+        queryKey: privateConversationKey(pairId, next.category),
+      });
+      navigate(`/pair/${pairId}/private/${next.category}`);
+    },
+  });
 
   const hasOwnAnswer = round.yourAnswer !== null && round.yourAnswer !== undefined;
   const hasOtherAnswer = round.hasOtherAnswer === true;
@@ -299,8 +362,22 @@ function PrivateRoundPanel({
   const isRevealReady =
     round.state === "REVEAL_READY" ||
     (hasOwnAnswer && hasOtherAnswer && !isRevealed && !isDeclined);
-  const error = answer.error ?? decline.error ?? reveal.error;
-  const busy = answer.isPending || decline.isPending || reveal.isPending;
+  const error =
+    answer.error ??
+    decline.error ??
+    reveal.error ??
+    reaction.error ??
+    reply.error ??
+    clearReply.error ??
+    progress.error;
+  const busy =
+    answer.isPending ||
+    decline.isPending ||
+    reveal.isPending ||
+    reaction.isPending ||
+    reply.isPending ||
+    clearReply.isPending ||
+    progress.isPending;
 
   return (
     <div className="bg-closer-peach/60 mt-8 rounded-3xl p-6">
@@ -315,9 +392,202 @@ function PrivateRoundPanel({
           <p className="text-closer-muted mt-1 text-sm leading-6">
             It stays private, and no answer can be added to this round.
           </p>
+          {round.canContinue && (
+            <div className="mt-5 grid gap-2">
+              <button
+                className="bg-closer-coral text-closer-navy rounded-2xl px-5 py-3 font-extrabold disabled:opacity-50"
+                disabled={busy}
+                onClick={() =>
+                  progress.mutate({
+                    action: "ask_another",
+                    category: round.question.category,
+                    clientRequestId: crypto.randomUUID(),
+                  })
+                }
+                type="button"
+              >
+                Ask another
+              </button>
+              <button
+                className="border-closer-line text-closer-navy rounded-2xl border px-5 py-3 font-extrabold"
+                disabled={busy}
+                onClick={() => setChoosingLane((value) => !value)}
+                type="button"
+              >
+                Something else
+              </button>
+              {choosingLane &&
+                availableCategories
+                  .filter((category) => category !== round.question.category)
+                  .map((category) => (
+                    <button
+                      className="text-closer-navy rounded-xl bg-white px-4 py-3 text-left font-bold"
+                      disabled={busy}
+                      key={category}
+                      onClick={() =>
+                        progress.mutate({
+                          action: "something_else",
+                          category,
+                          clientRequestId: crypto.randomUUID(),
+                        })
+                      }
+                      type="button"
+                    >
+                      {categoryLabel[category] ?? category}
+                    </button>
+                  ))}
+              <button
+                className="text-closer-muted rounded-2xl px-5 py-3 font-bold"
+                onClick={() => navigate(`/pair/${pairId}`)}
+                type="button"
+              >
+                Leave it here
+              </button>
+            </div>
+          )}
         </div>
       ) : isRevealed ? (
-        <RevealedAnswers round={round} />
+        <div>
+          <RevealedAnswers round={round} />
+          <div className="mt-6 rounded-2xl bg-white/60 p-4">
+            <p className="text-closer-navy font-extrabold">React to your person’s answer</p>
+            <div className="mt-3 flex gap-2" aria-label="Choose a reaction">
+              {privateReactionValues.map((value) => {
+                const selected = round.reactions?.find((item) => item.isOwner)?.value === value;
+                const emoji = { heart: "❤️", laugh: "😂", tender: "🥺", surprised: "😮" }[value];
+                return (
+                  <button
+                    aria-pressed={selected}
+                    className="rounded-xl bg-white px-3 py-2 text-xl"
+                    key={value}
+                    onClick={() => reaction.mutate({ value: selected ? null : value })}
+                    type="button"
+                  >
+                    {emoji}
+                  </button>
+                );
+              })}
+            </div>
+            <form
+              className="mt-5"
+              onSubmit={replyForm.handleSubmit((values) => reply.mutate(values))}
+            >
+              <label className="text-closer-navy text-sm font-extrabold" htmlFor="private-reply">
+                A short reply
+              </label>
+              <textarea
+                {...replyForm.register("body")}
+                className="border-closer-line mt-2 min-h-20 w-full rounded-2xl border bg-white/75 p-3 text-sm"
+                id="private-reply"
+                maxLength={500}
+                placeholder="Add a thought…"
+              />
+              {replyForm.formState.errors.body?.message && (
+                <p className="text-closer-coral mt-1 text-sm" role="alert">
+                  {replyForm.formState.errors.body.message}
+                </p>
+              )}
+              <div className="mt-3 flex gap-2">
+                <button
+                  className="bg-closer-coral text-closer-navy rounded-xl px-4 py-2 text-sm font-extrabold disabled:opacity-50"
+                  disabled={!replyForm.formState.isValid || busy}
+                  type="submit"
+                >
+                  {reply.isPending ? "Saving…" : "Save reply"}
+                </button>
+                {round.replies?.some((item) => item.isOwner) && (
+                  <button
+                    className="text-closer-muted rounded-xl px-3 py-2 text-sm font-bold"
+                    disabled={busy}
+                    onClick={() => clearReply.mutate()}
+                    type="button"
+                  >
+                    Remove reply
+                  </button>
+                )}
+              </div>
+            </form>
+            {round.reactions
+              ?.filter((item) => !item.isOwner)
+              .map((item) => (
+                <p className="text-closer-muted mt-3 text-sm" key={item.participantId}>
+                  {item.displayName} reacted{" "}
+                  {
+                    ({ heart: "❤️", laugh: "😂", tender: "🥺", surprised: "😮" } as const)[
+                      item.value
+                    ]
+                  }{" "}
+                  to your answer.
+                </p>
+              ))}
+            {round.replies
+              ?.filter((item) => !item.isOwner)
+              .map((item) => (
+                <p className="text-closer-muted mt-2 text-sm" key={item.participantId}>
+                  {item.displayName}: “{item.body}”
+                </p>
+              ))}
+          </div>
+          {round.canContinue && (
+            <div className="mt-5 grid gap-2">
+              <button
+                className="bg-closer-coral text-closer-navy rounded-2xl px-5 py-3 font-extrabold disabled:opacity-50"
+                disabled={busy}
+                onClick={() =>
+                  progress.mutate({
+                    action: "ask_another",
+                    category: round.question.category,
+                    clientRequestId: crypto.randomUUID(),
+                  })
+                }
+                type="button"
+              >
+                {progress.isPending && progress.variables?.action === "ask_another"
+                  ? "Choosing…"
+                  : "Ask another"}
+              </button>
+              <button
+                className="border-closer-line text-closer-navy rounded-2xl border px-5 py-3 font-extrabold"
+                disabled={busy}
+                onClick={() => setChoosingLane((value) => !value)}
+                type="button"
+              >
+                Something else
+              </button>
+              {choosingLane && (
+                <div className="grid gap-2 rounded-2xl bg-white/60 p-3">
+                  <p className="text-closer-muted text-sm">Choose another lane.</p>
+                  {availableCategories
+                    .filter((category) => category !== round.question.category)
+                    .map((category) => (
+                      <button
+                        className="text-closer-navy rounded-xl bg-white px-4 py-3 text-left font-bold"
+                        disabled={busy}
+                        key={category}
+                        onClick={() =>
+                          progress.mutate({
+                            action: "something_else",
+                            category,
+                            clientRequestId: crypto.randomUUID(),
+                          })
+                        }
+                        type="button"
+                      >
+                        {categoryLabel[category] ?? category}
+                      </button>
+                    ))}
+                </div>
+              )}
+              <button
+                className="text-closer-muted rounded-2xl px-5 py-3 font-bold"
+                onClick={() => navigate(`/pair/${pairId}`)}
+                type="button"
+              >
+                Leave it here
+              </button>
+            </div>
+          )}
+        </div>
       ) : isRevealReady ? (
         <div className="mt-5">
           <p className="text-closer-muted leading-7">
@@ -406,7 +676,7 @@ function RevealedAnswers({ round }: { round: PrivateRound }) {
         answers.map((answer, index) => (
           <article className="rounded-2xl bg-white/70 p-4" key={`${answer.participantId}-${index}`}>
             <p className="text-closer-muted text-xs font-bold uppercase">
-              {round.yourAnswer === answer.body ? "Your answer" : "Your person’s answer"}
+              {answer.isOwner ? "Your answer" : "Your person’s answer"}
             </p>
             <p className="text-closer-navy mt-2 leading-7">{answer.body}</p>
           </article>

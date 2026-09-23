@@ -49,6 +49,31 @@ func createActiveQuestion(t *testing.T, f fixture, category, text string) string
 	return created.ID
 }
 
+func createMutuallyRevealedRound(t *testing.T, f fixture) (domain.Round, domain.RoundInput, domain.RoundInput) {
+	t.Helper()
+	started, err := f.service.StartOrResume(context.Background(), domain.StartInput{ParticipantID: f.firstID, PairID: f.pairID, Category: "fun"})
+	if err != nil || started.Candidate == nil {
+		t.Fatalf("start = %+v, err=%v", started, err)
+	}
+	round, err := f.service.Ask(context.Background(), domain.AskInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: started.ConversationID, CandidateID: started.Candidate.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := domain.RoundInput{ParticipantID: f.firstID, PairID: f.pairID, RoundID: round.ID}
+	b := domain.RoundInput{ParticipantID: f.secondID, PairID: f.pairID, RoundID: round.ID}
+	for _, input := range []domain.RoundInput{a, b} {
+		if _, err := f.service.Answer(context.Background(), domain.AnswerInput{RoundInput: input, Body: "complete"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, input := range []domain.RoundInput{a, b} {
+		if _, err := f.service.Reveal(context.Background(), input); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return round, a, b
+}
+
 type fixture struct {
 	pool                                                                      *postgres.Pool
 	service                                                                   *domain.Service
@@ -790,6 +815,420 @@ func TestConcurrentAnswersBothCommitWithoutCrossViewerLeak(t *testing.T) {
 	}
 	if second.State != "REVEAL_READY" || second.YourAnswer == nil || *second.YourAnswer != "CONCURRENT-SECOND" || len(second.Answers) != 0 || strings.Contains(string(secondJSON), "CONCURRENT-FIRST") {
 		t.Fatalf("second concurrent projection = %s", secondJSON)
+	}
+}
+
+func TestPostRevealReactionReplyAndProgressionGate(t *testing.T) {
+	f := openFixture(t)
+	createActiveQuestion(t, f, "fun", "P-04 next prompt")
+	started, err := f.service.StartOrResume(context.Background(), domain.StartInput{ParticipantID: f.firstID, PairID: f.pairID, Category: "fun"})
+	if err != nil || started.Candidate == nil {
+		t.Fatalf("start = %+v, err=%v", started, err)
+	}
+	round, err := f.service.Ask(context.Background(), domain.AskInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: started.ConversationID, CandidateID: started.Candidate.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := domain.RoundInput{ParticipantID: f.firstID, PairID: f.pairID, RoundID: round.ID}
+	b := domain.RoundInput{ParticipantID: f.secondID, PairID: f.pairID, RoundID: round.ID}
+	if _, err := f.service.Answer(context.Background(), domain.AnswerInput{RoundInput: a, Body: "answer a"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.service.Answer(context.Background(), domain.AnswerInput{RoundInput: b, Body: "answer b"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.service.SetReaction(context.Background(), domain.ReactionInput{RoundInput: b, Value: "heart"}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("pre-reveal reaction error = %v", err)
+	}
+	if _, err := f.service.SetReply(context.Background(), domain.ReplyInput{RoundInput: b, Body: "nice"}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("pre-reveal reply error = %v", err)
+	}
+	if _, err := f.service.Reveal(context.Background(), a); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.service.Progress(context.Background(), domain.ProgressInput{RoundInput: a, Action: "ask_another", Category: "fun", ClientRequestID: testUUID(t, f.pool)}); !errors.Is(err, domain.ErrProgressionNotReady) {
+		t.Fatalf("one-reveal progression error = %v", err)
+	}
+	if _, err := f.service.Reveal(context.Background(), b); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.service.Progress(context.Background(), domain.ProgressInput{RoundInput: b, Action: "ask_another", Category: "fun", ClientRequestID: testUUID(t, f.pool)}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("non-creator progression error = %v", err)
+	}
+	if _, err := f.service.SetReaction(context.Background(), domain.ReactionInput{RoundInput: b, Value: "heart"}); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := f.service.SetReaction(context.Background(), domain.ReactionInput{RoundInput: b, Value: "tender"})
+	if err != nil || len(updated.Reactions) != 1 || updated.Reactions[0].Value != "tender" || !updated.Reactions[0].IsOwner {
+		t.Fatalf("reaction replacement = %+v, err=%v", updated.Reactions, err)
+	}
+	updated, err = f.service.SetReply(context.Background(), domain.ReplyInput{RoundInput: b, Body: "  a short thought  "})
+	if err != nil || len(updated.Replies) != 1 || updated.Replies[0].Body != "a short thought" || !updated.Replies[0].IsOwner {
+		t.Fatalf("reply upsert = %+v, err=%v", updated.Replies, err)
+	}
+	updated, err = f.service.SetReply(context.Background(), domain.ReplyInput{RoundInput: b, Body: "edited thought"})
+	if err != nil || len(updated.Replies) != 1 || updated.Replies[0].Body != "edited thought" {
+		t.Fatalf("reply edit = %+v, err=%v", updated.Replies, err)
+	}
+	if _, err := f.service.RemoveReply(context.Background(), b); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.service.RemoveReaction(context.Background(), b); err != nil {
+		t.Fatal(err)
+	}
+	requestID := testUUID(t, f.pool)
+	progressInput := domain.ProgressInput{RoundInput: a, Action: "ask_another", Category: "fun", ClientRequestID: requestID}
+	first, err := f.service.Progress(context.Background(), progressInput)
+	if err != nil || first.Candidate == nil {
+		t.Fatalf("progress = %+v, err=%v", first, err)
+	}
+	retry, err := f.service.Progress(context.Background(), progressInput)
+	if err != nil || retry.Candidate == nil || retry.Candidate.ID != first.Candidate.ID {
+		t.Fatalf("retry = %+v, first=%+v, err=%v", retry, first, err)
+	}
+	nonCreator, err := f.service.Read(context.Background(), domain.ReadInput{ParticipantID: f.secondID, PairID: f.pairID, ConversationID: started.ConversationID})
+	if err != nil || nonCreator.State != "WAITING_FOR_CREATOR" || nonCreator.Candidate != nil {
+		t.Fatalf("non-creator progression projection = %+v, err=%v", nonCreator, err)
+	}
+}
+
+func TestAskAnotherAndSomethingElseHaveOneSerializedOutcome(t *testing.T) {
+	f := openFixture(t)
+	createActiveQuestion(t, f, "fun", "Next in same lane")
+	createActiveQuestion(t, f, "deep", "Next in another lane")
+	started, err := f.service.StartOrResume(context.Background(), domain.StartInput{ParticipantID: f.firstID, PairID: f.pairID, Category: "fun"})
+	if err != nil || started.Candidate == nil {
+		t.Fatalf("start = %+v, err=%v", started, err)
+	}
+	round, err := f.service.Ask(context.Background(), domain.AskInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: started.ConversationID, CandidateID: started.Candidate.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := domain.RoundInput{ParticipantID: f.firstID, PairID: f.pairID, RoundID: round.ID}
+	b := domain.RoundInput{ParticipantID: f.secondID, PairID: f.pairID, RoundID: round.ID}
+	for _, input := range []domain.RoundInput{a, b} {
+		if _, err := f.service.Answer(context.Background(), domain.AnswerInput{RoundInput: input, Body: "ready"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, input := range []domain.RoundInput{a, b} {
+		if _, err := f.service.Reveal(context.Background(), input); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inputs := []domain.ProgressInput{
+		{RoundInput: a, Action: "ask_another", Category: "fun", ClientRequestID: testUUID(t, f.pool)},
+		{RoundInput: a, Action: "something_else", Category: "deep", ClientRequestID: testUUID(t, f.pool)},
+	}
+	start := make(chan struct{})
+	results := make(chan struct {
+		view  domain.View
+		err   error
+		input domain.ProgressInput
+	}, 2)
+	for _, input := range inputs {
+		go func(input domain.ProgressInput) {
+			<-start
+			view, err := f.service.Progress(context.Background(), input)
+			results <- struct {
+				view  domain.View
+				err   error
+				input domain.ProgressInput
+			}{view, err, input}
+		}(input)
+	}
+	close(start)
+	first, second := <-results, <-results
+	if (first.err == nil) == (second.err == nil) {
+		t.Fatalf("progress race should have one winner: first=%+v second=%+v", first, second)
+	}
+	winner, loser := first, second
+	if winner.err != nil {
+		winner, loser = second, first
+	}
+	if !errors.Is(loser.err, domain.ErrProgressionConflict) {
+		t.Fatalf("losing progression path error = %v", loser.err)
+	}
+	if winner.view.Candidate == nil {
+		t.Fatalf("winning path did not produce exactly one candidate: %+v", winner.view)
+	}
+	replayed, err := f.service.Progress(context.Background(), winner.input)
+	if err != nil || replayed.Candidate == nil || replayed.Candidate.ID != winner.view.Candidate.ID {
+		t.Fatalf("winner retry did not replay the same candidate: view=%+v err=%v", replayed, err)
+	}
+	if _, err := f.service.Progress(context.Background(), loser.input); !errors.Is(err, domain.ErrProgressionConflict) {
+		t.Fatalf("opposite retry should be rejected after the winner is fixed: %v", err)
+	}
+}
+
+func TestAskAnotherExhaustionDoesNotRecycleConsumedQuestions(t *testing.T) {
+	f := openFixture(t)
+	started, err := f.service.StartOrResume(context.Background(), domain.StartInput{ParticipantID: f.firstID, PairID: f.pairID, Category: "fun"})
+	if err != nil || started.Candidate == nil {
+		t.Fatalf("start = %+v, err=%v", started, err)
+	}
+	round, err := f.service.Ask(context.Background(), domain.AskInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: started.ConversationID, CandidateID: started.Candidate.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs := []domain.RoundInput{{ParticipantID: f.firstID, PairID: f.pairID, RoundID: round.ID}, {ParticipantID: f.secondID, PairID: f.pairID, RoundID: round.ID}}
+	for _, input := range inputs {
+		if _, err := f.service.Answer(context.Background(), domain.AnswerInput{RoundInput: input, Body: "done"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, input := range inputs {
+		if _, err := f.service.Reveal(context.Background(), input); err != nil {
+			t.Fatal(err)
+		}
+	}
+	progress := domain.ProgressInput{RoundInput: inputs[0], Action: "ask_another", Category: "fun", ClientRequestID: testUUID(t, f.pool)}
+	view, err := f.service.Progress(context.Background(), progress)
+	if err != nil || view.State != "EXHAUSTED" || view.Candidate != nil {
+		t.Fatalf("exhausted progression = %+v, err=%v", view, err)
+	}
+	retry, err := f.service.Progress(context.Background(), progress)
+	if err != nil || retry.State != "EXHAUSTED" || retry.Candidate != nil {
+		t.Fatalf("exhaustion retry = %+v, err=%v", retry, err)
+	}
+	var asked int
+	if err := f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		return db.QueryRow(context.Background(), "SELECT count(*) FROM private_question_candidate WHERE conversation_id = $1 AND state = 'asked'", started.ConversationID).Scan(&asked)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if asked != 1 {
+		t.Fatalf("asked candidate count = %d, want 1", asked)
+	}
+}
+
+func TestDeclinedRoundAllowsCreatorOnlyProgression(t *testing.T) {
+	f := openFixture(t)
+	createActiveQuestion(t, f, "fun", "After decline")
+	started, err := f.service.StartOrResume(context.Background(), domain.StartInput{ParticipantID: f.firstID, PairID: f.pairID, Category: "fun"})
+	if err != nil || started.Candidate == nil {
+		t.Fatalf("start = %+v, err=%v", started, err)
+	}
+	round, err := f.service.Ask(context.Background(), domain.AskInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: started.ConversationID, CandidateID: started.Candidate.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := domain.RoundInput{ParticipantID: f.firstID, PairID: f.pairID, RoundID: round.ID}
+	if _, err := f.service.Decline(context.Background(), a); err != nil {
+		t.Fatal(err)
+	}
+	requestID := testUUID(t, f.pool)
+	if _, err := f.service.Progress(context.Background(), domain.ProgressInput{RoundInput: domain.RoundInput{ParticipantID: f.secondID, PairID: f.pairID, RoundID: round.ID}, Action: "ask_another", Category: "fun", ClientRequestID: testUUID(t, f.pool)}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("non-creator declined progression error = %v", err)
+	}
+	next, err := f.service.Progress(context.Background(), domain.ProgressInput{RoundInput: a, Action: "ask_another", Category: "fun", ClientRequestID: requestID})
+	if err != nil || next.Candidate == nil || next.Candidate.Question.ID == round.QuestionID {
+		t.Fatalf("creator progression after decline = %+v, err=%v", next, err)
+	}
+}
+
+func TestConcurrentReactionAndReplyWritesKeepOneMembershipRow(t *testing.T) {
+	f := openFixture(t)
+	round, _, b := createMutuallyRevealedRound(t, f)
+	start := make(chan struct{})
+	results := make(chan error, 4)
+	for _, input := range []domain.ReactionInput{{RoundInput: b, Value: "heart"}, {RoundInput: b, Value: "laugh"}} {
+		go func(input domain.ReactionInput) {
+			<-start
+			_, err := f.service.SetReaction(context.Background(), input)
+			results <- err
+		}(input)
+	}
+	for _, body := range []string{"first reply", "second reply"} {
+		go func(body string) {
+			<-start
+			_, err := f.service.SetReply(context.Background(), domain.ReplyInput{RoundInput: b, Body: body})
+			results <- err
+		}(body)
+	}
+	close(start)
+	for range 4 {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+	view, err := f.service.GetRound(context.Background(), b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(view.Reactions) != 1 || !view.Reactions[0].IsOwner {
+		t.Fatalf("reaction rows = %+v", view.Reactions)
+	}
+	if len(view.Replies) != 1 || !view.Replies[0].IsOwner {
+		t.Fatalf("reply rows = %+v", view.Replies)
+	}
+	var reactionRows, replyRows int
+	if err := f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		if err := db.QueryRow(context.Background(), "SELECT count(*) FROM private_reaction WHERE round_id = $1", round.ID).Scan(&reactionRows); err != nil {
+			return err
+		}
+		return db.QueryRow(context.Background(), "SELECT count(*) FROM private_reply WHERE round_id = $1", round.ID).Scan(&replyRows)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if reactionRows != 1 || replyRows != 1 {
+		t.Fatalf("stored rows reaction=%d reply=%d", reactionRows, replyRows)
+	}
+}
+
+func TestReactionAndReplyRacingProgressionRemainOwnedAndVisible(t *testing.T) {
+	f := openFixture(t)
+	createActiveQuestion(t, f, "fun", "Next after interactions")
+	round, a, b := createMutuallyRevealedRound(t, f)
+	start := make(chan struct{})
+	results := make(chan error, 3)
+	go func() {
+		<-start
+		_, err := f.service.SetReaction(context.Background(), domain.ReactionInput{RoundInput: b, Value: "surprised"})
+		results <- err
+	}()
+	go func() {
+		<-start
+		_, err := f.service.SetReply(context.Background(), domain.ReplyInput{RoundInput: b, Body: "still here"})
+		results <- err
+	}()
+	go func() {
+		<-start
+		_, err := f.service.Progress(context.Background(), domain.ProgressInput{RoundInput: a, Action: "ask_another", Category: "fun", ClientRequestID: testUUID(t, f.pool)})
+		results <- err
+	}()
+	close(start)
+	for range 3 {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+	view, err := f.service.GetRound(context.Background(), b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(view.Reactions) != 1 || view.Reactions[0].Value != "surprised" || !view.Reactions[0].IsOwner {
+		t.Fatalf("reaction after progression race = %+v", view.Reactions)
+	}
+	if len(view.Replies) != 1 || view.Replies[0].Body != "still here" || !view.Replies[0].IsOwner {
+		t.Fatalf("reply after progression race = %+v", view.Replies)
+	}
+	if view.ID != round.ID {
+		t.Fatalf("mutation returned wrong Round %q", view.ID)
+	}
+}
+
+func TestReplacementMembershipCannotInheritOrMutateReactionAndReply(t *testing.T) {
+	f := openFixture(t)
+	round, _, b := createMutuallyRevealedRound(t, f)
+	if _, err := f.service.SetReaction(context.Background(), domain.ReactionInput{RoundInput: b, Value: "heart"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.service.SetReply(context.Background(), domain.ReplyInput{RoundInput: b, Body: "B only"}); err != nil {
+		t.Fatal(err)
+	}
+
+	var replacementAuthID, replacementID, oldMembershipID string
+	if err := f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		if err := db.QueryRow(context.Background(), "INSERT INTO auth_user(id, kind, created_at) VALUES (gen_random_uuid(), 'anonymous', now()) RETURNING id::text").Scan(&replacementAuthID); err != nil {
+			return err
+		}
+		return db.QueryRow(context.Background(), "INSERT INTO participant(auth_user_id, display_name) VALUES ($1, 'Replacement') RETURNING id::text", replacementAuthID).Scan(&replacementID)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+			_, _ = db.Exec(context.Background(), "DELETE FROM pair WHERE id = $1", f.pairID)
+			_, _ = db.Exec(context.Background(), "DELETE FROM participant WHERE id = $1", replacementID)
+			_, _ = db.Exec(context.Background(), "DELETE FROM auth_user WHERE id = $1", replacementAuthID)
+			return nil
+		})
+	})
+
+	replaceMembership := func() error {
+		return f.pool.WithinTx(context.Background(), func(db postgres.QueryDB) error {
+			var lockedPairID string
+			if err := db.QueryRow(context.Background(), "SELECT id::text FROM pair WHERE id = $1 FOR UPDATE", f.pairID).Scan(&lockedPairID); err != nil {
+				return err
+			}
+			var firstMembershipID, secondMembershipID, eraID string
+			if err := db.QueryRow(context.Background(), `
+			SELECT era.id::text, era.first_membership_id::text, era.second_membership_id::text
+			FROM pair_membership_era AS era
+				WHERE era.pair_id = $1 AND era.ended_at IS NULL`, f.pairID).Scan(&eraID, &firstMembershipID, &secondMembershipID); err != nil {
+				return err
+			}
+			oldMembershipID = secondMembershipID
+			if _, err := db.Exec(context.Background(), "UPDATE pair_membership SET ended_at = now(), ended_display_name = 'Second' WHERE id = $1", secondMembershipID); err != nil {
+				return err
+			}
+			if _, err := db.Exec(context.Background(), "UPDATE pair_membership_era SET ended_at = now() WHERE id = $1", eraID); err != nil {
+				return err
+			}
+			var newMembershipID string
+			if err := db.QueryRow(context.Background(), "INSERT INTO pair_membership(pair_id, participant_id, slot) VALUES ($1, $2, 'second') RETURNING id::text", f.pairID, replacementID).Scan(&newMembershipID); err != nil {
+				return err
+			}
+			_, err := db.Exec(context.Background(), "INSERT INTO pair_membership_era(pair_id, first_membership_id, second_membership_id) VALUES ($1, $2, $3)", f.pairID, firstMembershipID, newMembershipID)
+			return err
+		})
+	}
+	start := make(chan struct{})
+	mutationResults := make(chan error, 2)
+	replacementResult := make(chan error, 1)
+	go func() {
+		<-start
+		_, err := f.service.SetReaction(context.Background(), domain.ReactionInput{RoundInput: b, Value: "laugh"})
+		mutationResults <- err
+	}()
+	go func() {
+		<-start
+		_, err := f.service.SetReply(context.Background(), domain.ReplyInput{RoundInput: b, Body: "B raced replacement"})
+		mutationResults <- err
+	}()
+	go func() {
+		<-start
+		replacementResult <- replaceMembership()
+	}()
+	close(start)
+	for range 2 {
+		if err := <-mutationResults; err != nil && !errors.Is(err, domain.ErrNotFound) {
+			t.Fatalf("replacement/reaction/reply race error = %v", err)
+		}
+	}
+	if err := <-replacementResult; err != nil {
+		t.Fatalf("replacement operation error = %v", err)
+	}
+
+	replacementInput := domain.RoundInput{ParticipantID: replacementID, PairID: f.pairID, RoundID: round.ID}
+	if _, err := f.service.SetReaction(context.Background(), domain.ReactionInput{RoundInput: replacementInput, Value: "laugh"}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("replacement reaction mutation error = %v, want ErrNotFound", err)
+	}
+	if _, err := f.service.SetReply(context.Background(), domain.ReplyInput{RoundInput: replacementInput, Body: "not inherited"}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("replacement reply mutation error = %v, want ErrNotFound", err)
+	}
+	if _, err := f.service.GetRound(context.Background(), replacementInput); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("replacement historical Round read error = %v, want ErrNotFound", err)
+	}
+	var reactionCount, replyCount int
+	var reactionMembershipID, replyMembershipID, reactionValue, replyBody string
+	if err := f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		if err := db.QueryRow(context.Background(), "SELECT membership_id::text, value::text FROM private_reaction WHERE round_id = $1", round.ID).Scan(&reactionMembershipID, &reactionValue); err != nil {
+			return err
+		}
+		if err := db.QueryRow(context.Background(), "SELECT membership_id::text, body FROM private_reply WHERE round_id = $1", round.ID).Scan(&replyMembershipID, &replyBody); err != nil {
+			return err
+		}
+		if err := db.QueryRow(context.Background(), "SELECT count(*) FROM private_reaction WHERE round_id = $1", round.ID).Scan(&reactionCount); err != nil {
+			return err
+		}
+		return db.QueryRow(context.Background(), "SELECT count(*) FROM private_reply WHERE round_id = $1", round.ID).Scan(&replyCount)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if reactionCount != 1 || replyCount != 1 || reactionMembershipID != oldMembershipID || replyMembershipID != oldMembershipID || (reactionValue != "heart" && reactionValue != "laugh") || (replyBody != "B only" && replyBody != "B raced replacement") {
+		t.Fatalf("replacement changed old member state: reactions=%d/%s/%s replies=%d/%s/%q", reactionCount, reactionMembershipID, reactionValue, replyCount, replyMembershipID, replyBody)
 	}
 }
 

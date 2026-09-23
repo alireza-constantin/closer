@@ -37,7 +37,31 @@ const roundSchema = z.object({
   otherRevealViewedAt: z.string().nullable().optional(),
   otherRevealViewed: z.boolean().optional(),
   canContinue: z.boolean().optional(),
-  answers: z.array(z.object({ participantId: z.string(), body: z.string() })).optional(),
+  answers: z
+    .array(
+      z.object({ participantId: z.string(), body: z.string(), isOwner: z.boolean().optional() }),
+    )
+    .optional(),
+  reactions: z
+    .array(
+      z.object({
+        participantId: z.string(),
+        displayName: z.string(),
+        value: z.enum(["heart", "laugh", "tender", "surprised"]),
+        isOwner: z.boolean().optional(),
+      }),
+    )
+    .optional(),
+  replies: z
+    .array(
+      z.object({
+        participantId: z.string(),
+        displayName: z.string(),
+        body: z.string(),
+        isOwner: z.boolean(),
+      }),
+    )
+    .optional(),
   question: z.object({
     text: z.string(),
     category: z.string(),
@@ -51,6 +75,7 @@ export const privateConversationSchema = z.object({
   category: z.string(),
   state: z.enum(["CANDIDATE", "WAITING_FOR_CREATOR", "CURRENT_ROUND", "EXHAUSTED"]),
   creatorDisplayName: z.string().optional(),
+  availableCategories: z.array(z.string()).optional(),
   candidate: candidateSchema.optional(),
   round: roundSchema.optional(),
 });
@@ -65,6 +90,17 @@ export const privateAnswerSchema = z.object({
     .max(2000, "Keep your answer under 2,000 characters."),
 });
 export type PrivateAnswerValues = z.infer<typeof privateAnswerSchema>;
+
+export const privateReplySchema = z.object({
+  body: z
+    .string()
+    .trim()
+    .min(1, "Write a short thought first.")
+    .max(500, "Replies can be up to 500 characters."),
+});
+export type PrivateReplyValues = z.infer<typeof privateReplySchema>;
+export const privateReactionValues = ["heart", "laugh", "tender", "surprised"] as const;
+export type PrivateReactionValue = (typeof privateReactionValues)[number];
 
 export const privateCategories = ["fun", "deep", "memories", "relationship", "friendship"] as const;
 export type PrivateCategory = (typeof privateCategories)[number];
@@ -161,6 +197,61 @@ export async function revealPrivateRound(pairId: string, roundId: string) {
     await requestJson(
       `/pairs/${encodeURIComponent(pairId)}/private-rounds/${encodeURIComponent(roundId)}/reveal`,
       { method: "POST" },
+    ),
+  );
+}
+
+export async function setPrivateReaction(
+  pairId: string,
+  roundId: string,
+  value: PrivateReactionValue,
+) {
+  return roundSchema.parse(
+    await requestJson(
+      `/pairs/${encodeURIComponent(pairId)}/private-rounds/${encodeURIComponent(roundId)}/reaction`,
+      { method: "PUT", body: { value } },
+    ),
+  );
+}
+
+export async function removePrivateReaction(pairId: string, roundId: string) {
+  return roundSchema.parse(
+    await requestJson(
+      `/pairs/${encodeURIComponent(pairId)}/private-rounds/${encodeURIComponent(roundId)}/reaction`,
+      { method: "DELETE" },
+    ),
+  );
+}
+
+export async function setPrivateReply(pairId: string, roundId: string, body: string) {
+  return roundSchema.parse(
+    await requestJson(
+      `/pairs/${encodeURIComponent(pairId)}/private-rounds/${encodeURIComponent(roundId)}/reply`,
+      { method: "PUT", body: { body } },
+    ),
+  );
+}
+
+export async function removePrivateReply(pairId: string, roundId: string) {
+  return roundSchema.parse(
+    await requestJson(
+      `/pairs/${encodeURIComponent(pairId)}/private-rounds/${encodeURIComponent(roundId)}/reply`,
+      { method: "DELETE" },
+    ),
+  );
+}
+
+export async function progressPrivateRound(
+  pairId: string,
+  roundId: string,
+  action: "ask_another" | "something_else",
+  category: string,
+  clientRequestId: string,
+) {
+  return privateConversationSchema.parse(
+    await requestJson(
+      `/pairs/${encodeURIComponent(pairId)}/private-rounds/${encodeURIComponent(roundId)}/progress`,
+      { method: "POST", body: { action, category, clientRequestId } },
     ),
   );
 }

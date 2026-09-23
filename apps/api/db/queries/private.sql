@@ -104,11 +104,36 @@ WHERE round.pair_id = sqlc.arg(pair_id)
 ORDER BY round.round_number DESC
 LIMIT 1;
 
+-- name: GetLatestCompletedPrivateRoundForConversation :one
+SELECT round.id, round.pair_id, round.conversation_id, round.membership_era_id, round.candidate_id, round.question_id,
+       round.question_revision_id, round.round_number, round.status, round.asked_at, round.client_request_id,
+       round.progression_exhausted, round.progression_waiting,
+       r.text, r.category, r.intensity
+FROM private_round AS round
+JOIN question_revision AS r ON r.id = round.question_revision_id
+WHERE round.pair_id = sqlc.arg(pair_id)
+  AND round.conversation_id = sqlc.arg(conversation_id)
+  AND round.membership_era_id = sqlc.arg(membership_era_id)
+  AND round.status IN ('completed', 'retired')
+ORDER BY round.round_number DESC
+LIMIT 1;
+
+-- name: CountPrivateRoundsForConversation :one
+SELECT COUNT(*)::integer FROM private_round
+WHERE conversation_id = sqlc.arg(conversation_id);
+
+-- name: CountMutuallyCompletedPrivateRounds :one
+SELECT COUNT(*)::integer FROM private_round
+WHERE conversation_id = sqlc.arg(conversation_id) AND status = 'completed';
+
 -- name: GetPrivateRoundForParticipant :one
 SELECT round.id, round.pair_id, round.conversation_id, round.membership_era_id,
        round.candidate_id, round.question_id, round.question_revision_id,
        round.round_number, round.status, round.asked_at, round.client_request_id,
-       round.declined_by_membership_id, round.declined_at,
+       round.declined_by_membership_id, round.declined_at, round.progression_request_id,
+       round.progression_action, round.progression_category, round.progression_conversation_id,
+       round.progression_candidate_id, round.progression_exhausted,
+       round.progression_waiting,
        r.text, r.category, r.intensity
 FROM private_round AS round
 JOIN question_revision AS r ON r.id = round.question_revision_id
@@ -157,6 +182,75 @@ INSERT INTO private_reveal_view (round_id, membership_era_id, membership_id, par
 VALUES (sqlc.arg(round_id), sqlc.arg(membership_era_id), sqlc.arg(membership_id), sqlc.arg(participant_id))
 ON CONFLICT (round_id, membership_id) DO NOTHING
 RETURNING id, round_id, membership_era_id, membership_id, participant_id, viewed_at;
+
+-- name: CompletePrivateRound :execrows
+UPDATE private_round
+SET status = 'completed'
+WHERE id = sqlc.arg(round_id)
+  AND pair_id = sqlc.arg(pair_id)
+  AND membership_era_id = sqlc.arg(membership_era_id)
+  AND status = 'open';
+
+-- name: SetPrivateRoundProgression :execrows
+UPDATE private_round
+SET progression_request_id = sqlc.arg(client_request_id),
+    progression_action = sqlc.arg(action),
+    progression_category = sqlc.arg(category),
+    progression_conversation_id = sqlc.arg(conversation_id),
+    progression_candidate_id = sqlc.narg(candidate_id),
+    progression_exhausted = sqlc.arg(exhausted),
+    progression_waiting = sqlc.arg(waiting)
+WHERE id = sqlc.arg(round_id)
+  AND pair_id = sqlc.arg(pair_id)
+  AND membership_era_id = sqlc.arg(membership_era_id)
+  AND status IN ('completed', 'retired')
+  AND progression_request_id IS NULL;
+
+-- name: ListPrivateReactions :many
+SELECT reaction.round_id, reaction.membership_id, reaction.participant_id,
+       participant.display_name, reaction.value
+FROM private_reaction AS reaction
+JOIN pair_membership AS membership ON membership.id = reaction.membership_id
+JOIN participant ON participant.id = reaction.participant_id
+WHERE reaction.round_id = sqlc.arg(round_id)
+  AND reaction.membership_era_id = sqlc.arg(membership_era_id)
+ORDER BY reaction.id;
+
+-- name: ListPrivateReplies :many
+SELECT reply.round_id, reply.membership_id, reply.participant_id,
+       participant.display_name, reply.body
+FROM private_reply AS reply
+JOIN pair_membership AS membership ON membership.id = reply.membership_id
+JOIN participant ON participant.id = reply.participant_id
+WHERE reply.round_id = sqlc.arg(round_id)
+  AND reply.membership_era_id = sqlc.arg(membership_era_id)
+ORDER BY reply.created_at, reply.id;
+
+-- name: UpsertPrivateReaction :one
+INSERT INTO private_reaction (round_id, membership_era_id, membership_id, participant_id, value)
+VALUES (sqlc.arg(round_id), sqlc.arg(membership_era_id), sqlc.arg(membership_id), sqlc.arg(participant_id), sqlc.arg(value))
+ON CONFLICT (round_id, membership_id) DO UPDATE
+SET value = EXCLUDED.value, updated_at = now()
+RETURNING id;
+
+-- name: DeletePrivateReaction :exec
+DELETE FROM private_reaction
+WHERE round_id = sqlc.arg(round_id)
+  AND membership_era_id = sqlc.arg(membership_era_id)
+  AND membership_id = sqlc.arg(membership_id);
+
+-- name: UpsertPrivateReply :one
+INSERT INTO private_reply (round_id, membership_era_id, membership_id, participant_id, body)
+VALUES (sqlc.arg(round_id), sqlc.arg(membership_era_id), sqlc.arg(membership_id), sqlc.arg(participant_id), sqlc.arg(body))
+ON CONFLICT (round_id, membership_id) DO UPDATE
+SET body = EXCLUDED.body, updated_at = now()
+RETURNING id;
+
+-- name: DeletePrivateReply :exec
+DELETE FROM private_reply
+WHERE round_id = sqlc.arg(round_id)
+  AND membership_era_id = sqlc.arg(membership_era_id)
+  AND membership_id = sqlc.arg(membership_id);
 
 -- name: GetPrivateRoundByCandidate :one
 SELECT round.id, round.pair_id, round.conversation_id, round.membership_era_id, round.candidate_id, round.question_id,

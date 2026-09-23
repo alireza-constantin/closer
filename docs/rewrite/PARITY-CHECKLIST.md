@@ -89,6 +89,30 @@ Canonical tests:
 | both answers + only creator Reveal | creator progression               | no      | no automatic advance; creator cannot continue                                | creator waits for other Reveal                                   |
 | both Reveal Views                  | creator continue/category entry   | yes     | next creator candidate in same Conversation                                  | non-creator waits; candidate confidential                        |
 
+P-04 fixes progression on an explicit `POST /private-rounds/:roundId/progress`
+command. The exact completion transition is the transaction that inserts the
+second Reveal View and changes the Round from `open` to `completed`; the
+Pair-wide open-Round guard remains held until that commit. Declined/retired
+Rounds remain terminal and allow only the creator to begin the next candidate
+without Reveal, matching the P-03 Decline rule.
+
+| Before                 | Actor/command                        | Allowed    | Mutation/result                                                            | Visibility                                                |
+| ---------------------- | ------------------------------------ | ---------- | -------------------------------------------------------------------------- | --------------------------------------------------------- |
+| one Reveal View        | creator progress                     | no         | none                                                                       | Reveal completion required                                |
+| completed Round        | non-creator progress                 | no         | none                                                                       | creator remains sole progression authority                |
+| completed Round        | creator Ask another                  | yes        | stable request ID selects one same-lane candidate or canonical exhaustion  | no automatic Ask; non-creator receives waiting projection |
+| completed Round        | creator Something else + chosen lane | yes        | pair-locked lane transition and one target-lane candidate or waiting state | lane stays sticky until this explicit action              |
+| completed Round        | creator retries same request ID      | yes        | replay stored action/candidate/exhaustion                                  | no duplicate candidate or skipped Question                |
+| completed Round        | Ask another races Something else     | serialized | one action is recorded for the Round; competing action conflicts           | never create candidates in both lanes                     |
+| completed Round        | creator Leave it here                | yes        | UI navigation only; no domain write                                        | completed Round remains in its Conversation               |
+| retired/Declined Round | creator progress                     | yes        | same-lane continuation; no Reveal, reaction, or reply is enabled           | lone answer remains author-only                           |
+
+Reaction and reply rows are scoped to `(Round, membership, membership era)`.
+Reaction writes replace the previous value; DELETE removes it. Replies are
+trimmed, editable, removable, and limited to 500 Unicode characters. Every
+successful post-reveal mutation emits only metadata in `private.changed` after
+commit.
+
 The active projection states are `CURRENT_ROUND`, `CANDIDATE`,
 `WAITING_FOR_CREATOR`, `READY_FOR_NEXT`, and `EXHAUSTED`. The current route
 `hideUnviewedReveal` additionally removes answers/reactions/replies from a

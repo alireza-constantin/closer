@@ -30,6 +30,18 @@ type privateAnswerRequest struct {
 	Body *string `json:"body"`
 }
 
+type privateReactionRequest struct {
+	Value *string `json:"value"`
+}
+type privateReplyRequest struct {
+	Body *string `json:"body"`
+}
+type privateProgressRequest struct {
+	ClientRequestID string `json:"clientRequestId"`
+	Action          string `json:"action"`
+	Category        string `json:"category,omitempty"`
+}
+
 type privateCandidateProjection struct {
 	ID       string `json:"id"`
 	Liked    bool   `json:"liked"`
@@ -43,30 +55,33 @@ type privateCandidateProjection struct {
 }
 
 type privateConversationProjection struct {
-	PairID             string                      `json:"pairId"`
-	ConversationID     string                      `json:"conversationId"`
-	Category           string                      `json:"category"`
-	State              string                      `json:"state"`
-	CreatorDisplayName string                      `json:"creatorDisplayName,omitempty"`
-	Candidate          *privateCandidateProjection `json:"candidate,omitempty"`
-	Round              *privateRoundProjection     `json:"round,omitempty"`
+	PairID              string                      `json:"pairId"`
+	ConversationID      string                      `json:"conversationId"`
+	Category            string                      `json:"category"`
+	State               string                      `json:"state"`
+	AvailableCategories []string                    `json:"availableCategories"`
+	CreatorDisplayName  string                      `json:"creatorDisplayName,omitempty"`
+	Candidate           *privateCandidateProjection `json:"candidate,omitempty"`
+	Round               *privateRoundProjection     `json:"round,omitempty"`
 }
 
 type privateRoundProjection struct {
-	ID                  string                    `json:"roundId"`
-	ConversationID      string                    `json:"conversationId"`
-	QuestionID          string                    `json:"questionId"`
-	QuestionRevisionID  string                    `json:"questionRevisionId"`
-	RoundNumber         int32                     `json:"roundNumber"`
-	State               string                    `json:"state"`
-	AskedAt             string                    `json:"askedAt"`
-	YourAnswer          *string                   `json:"yourAnswer"`
-	HasOtherAnswer      bool                      `json:"hasOtherAnswer"`
-	RevealViewedAt      string                    `json:"revealViewedAt,omitempty"`
-	OtherRevealViewedAt string                    `json:"otherRevealViewedAt,omitempty"`
-	OtherRevealViewed   bool                      `json:"otherRevealViewed"`
-	CanContinue         bool                      `json:"canContinue"`
-	Answers             []privateAnswerProjection `json:"answers,omitempty"`
+	ID                  string                      `json:"roundId"`
+	ConversationID      string                      `json:"conversationId"`
+	QuestionID          string                      `json:"questionId"`
+	QuestionRevisionID  string                      `json:"questionRevisionId"`
+	RoundNumber         int32                       `json:"roundNumber"`
+	State               string                      `json:"state"`
+	AskedAt             string                      `json:"askedAt"`
+	YourAnswer          *string                     `json:"yourAnswer"`
+	HasOtherAnswer      bool                        `json:"hasOtherAnswer"`
+	RevealViewedAt      string                      `json:"revealViewedAt,omitempty"`
+	OtherRevealViewedAt string                      `json:"otherRevealViewedAt,omitempty"`
+	OtherRevealViewed   bool                        `json:"otherRevealViewed"`
+	CanContinue         bool                        `json:"canContinue"`
+	Answers             []privateAnswerProjection   `json:"answers,omitempty"`
+	Reactions           []privateReactionProjection `json:"reactions,omitempty"`
+	Replies             []privateReplyProjection    `json:"replies,omitempty"`
 	Question            struct {
 		Text      string `json:"text"`
 		Category  string `json:"category"`
@@ -77,6 +92,20 @@ type privateRoundProjection struct {
 type privateAnswerProjection struct {
 	ParticipantID string `json:"participantId"`
 	Body          string `json:"body"`
+	IsOwner       bool   `json:"isOwner"`
+}
+
+type privateReactionProjection struct {
+	ParticipantID string `json:"participantId"`
+	DisplayName   string `json:"displayName"`
+	Value         string `json:"value"`
+	IsOwner       bool   `json:"isOwner"`
+}
+type privateReplyProjection struct {
+	ParticipantID string `json:"participantId"`
+	DisplayName   string `json:"displayName"`
+	Body          string `json:"body"`
+	IsOwner       bool   `json:"isOwner"`
 }
 
 func registerPrivateRoutes(router chi.Router, authService *auth.Service, participantService *participant.Service, service *privatedomain.Service, security SecurityConfig) {
@@ -247,10 +276,110 @@ func registerPrivateRoutes(router chi.Router, authService *auth.Service, partici
 		}
 		writeJSON(w, http.StatusOK, projectPrivateRound(result))
 	})
+	api.Put("/pairs/{pairID}/private-rounds/{roundID}/reaction", func(w http.ResponseWriter, r *http.Request) {
+		setPrivateNoStore(w)
+		if !requireTrustedMutationOrigin(w, r, security) {
+			return
+		}
+		actor, ok := requiredActorParticipant(w, r, participantService)
+		if !ok {
+			return
+		}
+		var request privateReactionRequest
+		if !decodeDomainJSON(w, r, &request) {
+			return
+		}
+		if request.Value == nil {
+			writeAPIError(w, r, http.StatusBadRequest, "REACTION_INVALID", "The reaction is invalid.")
+			return
+		}
+		result, err := service.SetReaction(r.Context(), privatedomain.ReactionInput{RoundInput: privatedomain.RoundInput{ParticipantID: actor.ID, PairID: chi.URLParam(r, "pairID"), RoundID: chi.URLParam(r, "roundID")}, Value: *request.Value})
+		if err != nil {
+			writePrivateError(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, projectPrivateRound(result))
+	})
+	api.Delete("/pairs/{pairID}/private-rounds/{roundID}/reaction", func(w http.ResponseWriter, r *http.Request) {
+		setPrivateNoStore(w)
+		if !requireTrustedMutationOrigin(w, r, security) {
+			return
+		}
+		actor, ok := requiredActorParticipant(w, r, participantService)
+		if !ok {
+			return
+		}
+		result, err := service.RemoveReaction(r.Context(), privatedomain.RoundInput{ParticipantID: actor.ID, PairID: chi.URLParam(r, "pairID"), RoundID: chi.URLParam(r, "roundID")})
+		if err != nil {
+			writePrivateError(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, projectPrivateRound(result))
+	})
+	api.Put("/pairs/{pairID}/private-rounds/{roundID}/reply", func(w http.ResponseWriter, r *http.Request) {
+		setPrivateNoStore(w)
+		if !requireTrustedMutationOrigin(w, r, security) {
+			return
+		}
+		actor, ok := requiredActorParticipant(w, r, participantService)
+		if !ok {
+			return
+		}
+		var request privateReplyRequest
+		if !decodeDomainJSON(w, r, &request) {
+			return
+		}
+		if request.Body == nil {
+			writeAPIError(w, r, http.StatusBadRequest, "REPLY_INVALID", "The reply is invalid.")
+			return
+		}
+		result, err := service.SetReply(r.Context(), privatedomain.ReplyInput{RoundInput: privatedomain.RoundInput{ParticipantID: actor.ID, PairID: chi.URLParam(r, "pairID"), RoundID: chi.URLParam(r, "roundID")}, Body: *request.Body})
+		if err != nil {
+			writePrivateError(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, projectPrivateRound(result))
+	})
+	api.Delete("/pairs/{pairID}/private-rounds/{roundID}/reply", func(w http.ResponseWriter, r *http.Request) {
+		setPrivateNoStore(w)
+		if !requireTrustedMutationOrigin(w, r, security) {
+			return
+		}
+		actor, ok := requiredActorParticipant(w, r, participantService)
+		if !ok {
+			return
+		}
+		result, err := service.RemoveReply(r.Context(), privatedomain.RoundInput{ParticipantID: actor.ID, PairID: chi.URLParam(r, "pairID"), RoundID: chi.URLParam(r, "roundID")})
+		if err != nil {
+			writePrivateError(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, projectPrivateRound(result))
+	})
+	api.Post("/pairs/{pairID}/private-rounds/{roundID}/progress", func(w http.ResponseWriter, r *http.Request) {
+		setPrivateNoStore(w)
+		if !requireTrustedMutationOrigin(w, r, security) {
+			return
+		}
+		actor, ok := requiredActorParticipant(w, r, participantService)
+		if !ok {
+			return
+		}
+		var request privateProgressRequest
+		if !decodeDomainJSON(w, r, &request) {
+			return
+		}
+		result, err := service.Progress(r.Context(), privatedomain.ProgressInput{RoundInput: privatedomain.RoundInput{ParticipantID: actor.ID, PairID: chi.URLParam(r, "pairID"), RoundID: chi.URLParam(r, "roundID")}, ClientRequestID: request.ClientRequestID, Action: request.Action, Category: request.Category})
+		if err != nil {
+			writePrivateError(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, projectPrivateView(result))
+	})
 }
 
 func projectPrivateView(view privatedomain.View) privateConversationProjection {
-	result := privateConversationProjection{PairID: view.PairID, ConversationID: view.ConversationID, Category: view.Category, State: view.State, CreatorDisplayName: view.CreatorDisplayName}
+	result := privateConversationProjection{PairID: view.PairID, ConversationID: view.ConversationID, Category: view.Category, State: view.State, AvailableCategories: view.AvailableCategories, CreatorDisplayName: view.CreatorDisplayName}
 	if view.Candidate != nil {
 		result.Candidate = &privateCandidateProjection{ID: view.Candidate.ID, Liked: view.Candidate.Liked}
 		result.Candidate.Question = struct {
@@ -275,7 +404,19 @@ func projectPrivateRound(round privatedomain.Round) *privateRoundProjection {
 	if round.Answers != nil {
 		result.Answers = make([]privateAnswerProjection, 0, len(round.Answers))
 		for _, answer := range round.Answers {
-			result.Answers = append(result.Answers, privateAnswerProjection{ParticipantID: answer.ParticipantID, Body: answer.Body})
+			result.Answers = append(result.Answers, privateAnswerProjection{ParticipantID: answer.ParticipantID, Body: answer.Body, IsOwner: answer.IsOwner})
+		}
+	}
+	if round.Reactions != nil {
+		result.Reactions = make([]privateReactionProjection, 0, len(round.Reactions))
+		for _, reaction := range round.Reactions {
+			result.Reactions = append(result.Reactions, privateReactionProjection{ParticipantID: reaction.ParticipantID, DisplayName: reaction.DisplayName, Value: reaction.Value, IsOwner: reaction.IsOwner})
+		}
+	}
+	if round.Replies != nil {
+		result.Replies = make([]privateReplyProjection, 0, len(round.Replies))
+		for _, reply := range round.Replies {
+			result.Replies = append(result.Replies, privateReplyProjection{ParticipantID: reply.ParticipantID, DisplayName: reply.DisplayName, Body: reply.Body, IsOwner: reply.IsOwner})
 		}
 	}
 	return result
@@ -301,6 +442,14 @@ func writePrivateError(w http.ResponseWriter, r *http.Request, err error) {
 		writeAPIError(w, r, http.StatusBadRequest, "QUESTION_UNAVAILABLE", "This Private question is unavailable.")
 	case errors.Is(err, privatedomain.ErrRevealNotReady):
 		writeAPIError(w, r, http.StatusBadRequest, "REVEAL_NOT_READY", "Reveal is not ready yet.")
+	case errors.Is(err, privatedomain.ErrReactionInvalid):
+		writeAPIError(w, r, http.StatusBadRequest, "REACTION_INVALID", "The reaction is invalid.")
+	case errors.Is(err, privatedomain.ErrReplyInvalid):
+		writeAPIError(w, r, http.StatusBadRequest, "REPLY_INVALID", "The reply is invalid.")
+	case errors.Is(err, privatedomain.ErrProgressionNotReady):
+		writeAPIError(w, r, http.StatusConflict, "PROGRESSION_NOT_READY", "This conversation is not ready to continue.")
+	case errors.Is(err, privatedomain.ErrProgressionConflict):
+		writeAPIError(w, r, http.StatusConflict, "PROGRESSION_ALREADY_STARTED", "This conversation has already continued.")
 	default:
 		writeAuthInternalError(w, r)
 	}

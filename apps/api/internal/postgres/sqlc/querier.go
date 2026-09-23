@@ -14,6 +14,9 @@ type Querier interface {
 	AddQuestionLifecycleEvent(ctx context.Context, arg AddQuestionLifecycleEventParams) error
 	ClearIntendedPersonName(ctx context.Context, pairID pgtype.UUID) error
 	ClosePreclaimTogetherSessions(ctx context.Context, pairID pgtype.UUID) error
+	CompletePrivateRound(ctx context.Context, arg CompletePrivateRoundParams) (int64, error)
+	CountMutuallyCompletedPrivateRounds(ctx context.Context, conversationID pgtype.UUID) (int32, error)
+	CountPrivateRoundsForConversation(ctx context.Context, conversationID pgtype.UUID) (int32, error)
 	CreateAdminUser(ctx context.Context, arg CreateAdminUserParams) error
 	CreateAuthCredential(ctx context.Context, arg CreateAuthCredentialParams) error
 	CreateAuthSession(ctx context.Context, arg CreateAuthSessionParams) (AuthSession, error)
@@ -42,6 +45,8 @@ type Querier interface {
 	CurrentDatabase(ctx context.Context) (string, error)
 	DeleteExpiredAuthSessions(ctx context.Context, arg DeleteExpiredAuthSessionsParams) (int64, error)
 	DeleteOldAuthRateLimits(ctx context.Context, dollar_1 interface{}) (int64, error)
+	DeletePrivateReaction(ctx context.Context, arg DeletePrivateReactionParams) error
+	DeletePrivateReply(ctx context.Context, arg DeletePrivateReplyParams) error
 	FindFormerTerminatedPair(ctx context.Context, arg FindFormerTerminatedPairParams) (pgtype.UUID, error)
 	FindInitialInviteForIssue(ctx context.Context, pairID pgtype.UUID) (FindInitialInviteForIssueRow, error)
 	FindQuestionDuplicates(ctx context.Context, arg FindQuestionDuplicatesParams) ([]FindQuestionDuplicatesRow, error)
@@ -64,6 +69,7 @@ type Querier interface {
 	// invite, matching issue/revoke/termination lock ordering.
 	GetInitialInvitePairByHash(ctx context.Context, tokenHash []byte) (GetInitialInvitePairByHashRow, error)
 	GetInitialInviteStatus(ctx context.Context, arg GetInitialInviteStatusParams) (pgtype.Timestamptz, error)
+	GetLatestCompletedPrivateRoundForConversation(ctx context.Context, arg GetLatestCompletedPrivateRoundForConversationParams) (GetLatestCompletedPrivateRoundForConversationRow, error)
 	GetLocalTestValue(ctx context.Context) (string, error)
 	GetOpenPrivateRoundForConversation(ctx context.Context, arg GetOpenPrivateRoundForConversationParams) (GetOpenPrivateRoundForConversationRow, error)
 	GetParticipantByAuthUserID(ctx context.Context, authUserID pgtype.UUID) (Participant, error)
@@ -96,6 +102,8 @@ type Querier interface {
 	ListEligiblePrivateQuestions(ctx context.Context, arg ListEligiblePrivateQuestionsParams) ([]ListEligiblePrivateQuestionsRow, error)
 	ListParticipantSpaces(ctx context.Context, participantID pgtype.UUID) ([]ListParticipantSpacesRow, error)
 	ListPrivateAnswers(ctx context.Context, arg ListPrivateAnswersParams) ([]PrivateAnswer, error)
+	ListPrivateReactions(ctx context.Context, arg ListPrivateReactionsParams) ([]ListPrivateReactionsRow, error)
+	ListPrivateReplies(ctx context.Context, arg ListPrivateRepliesParams) ([]ListPrivateRepliesRow, error)
 	ListPrivateRevealViews(ctx context.Context, arg ListPrivateRevealViewsParams) ([]PrivateRevealView, error)
 	ListQuestionRevisions(ctx context.Context, questionID pgtype.UUID) ([]QuestionRevision, error)
 	ListQuestions(ctx context.Context, arg ListQuestionsParams) ([]ListQuestionsRow, error)
@@ -132,12 +140,15 @@ type Querier interface {
 	SetLocalTestValue(ctx context.Context, value string) (string, error)
 	SetPrivateCandidateLike(ctx context.Context, arg SetPrivateCandidateLikeParams) (pgtype.Timestamptz, error)
 	SetPrivateCandidateSkipResult(ctx context.Context, arg SetPrivateCandidateSkipResultParams) error
+	SetPrivateRoundProgression(ctx context.Context, arg SetPrivateRoundProgressionParams) (int64, error)
 	SetQuestionActivity(ctx context.Context, arg SetQuestionActivityParams) error
 	UpdateAuthCredentialPasswordHash(ctx context.Context, arg UpdateAuthCredentialPasswordHashParams) error
 	UpdateIntendedPersonName(ctx context.Context, arg UpdateIntendedPersonNameParams) (Pair, error)
 	UpgradeAnonymousAuthUser(ctx context.Context, id pgtype.UUID) (int64, error)
 	UpsertAdminLoginRateLimit(ctx context.Context, subject string) (UpsertAdminLoginRateLimitRow, error)
 	UpsertAuthRateLimit(ctx context.Context, arg UpsertAuthRateLimitParams) (UpsertAuthRateLimitRow, error)
+	UpsertPrivateReaction(ctx context.Context, arg UpsertPrivateReactionParams) (pgtype.UUID, error)
+	UpsertPrivateReply(ctx context.Context, arg UpsertPrivateReplyParams) (pgtype.UUID, error)
 	WithdrawQuestionRevision(ctx context.Context, arg WithdrawQuestionRevisionParams) error
 }
 

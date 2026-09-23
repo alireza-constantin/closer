@@ -5,7 +5,13 @@ import {
   declinePrivateRound,
   getPrivateRound,
   likePrivateCandidate,
+  privateReplySchema,
+  progressPrivateRound,
+  removePrivateReaction,
+  removePrivateReply,
   revealPrivateRound,
+  setPrivateReaction,
+  setPrivateReply,
   skipPrivateCandidate,
   submitPrivateAnswer,
 } from "@/features/private-conversation/api";
@@ -155,5 +161,99 @@ describe("Private answer and reveal commands", () => {
     expect(request?.method).toBe("POST");
     expect(request?.body).toBeUndefined();
     expect(result.state).toBe("DECLINED");
+  });
+});
+
+describe("Private post-reveal interactions", () => {
+  test("reactions can be set or removed by explicit commands", async () => {
+    const calls: Array<{ url: string; method: string; body?: unknown }> = [];
+    globalThis.fetch = (async (input, init) => {
+      calls.push({
+        url: String(input),
+        method: String(init?.method),
+        body: init?.body ? JSON.parse(String(init.body)) : undefined,
+      });
+      return Response.json(round);
+    }) as typeof fetch;
+
+    await setPrivateReaction("pair-1", "round-1", "heart");
+    await removePrivateReaction("pair-1", "round-1");
+    expect(calls.map(({ method, body }) => [method, body])).toEqual([
+      ["PUT", { value: "heart" }],
+      ["DELETE", undefined],
+    ]);
+    expect(calls.every(({ url }) => url.endsWith("/private-rounds/round-1/reaction"))).toBe(true);
+  });
+
+  test("reply is trimmed, limited to 500 characters, and removable", async () => {
+    const calls: Array<{ method: string; body?: unknown }> = [];
+    globalThis.fetch = (async (_input, init) => {
+      calls.push({
+        method: String(init?.method),
+        body: init?.body ? JSON.parse(String(init.body)) : undefined,
+      });
+      return Response.json(round);
+    }) as typeof fetch;
+
+    expect(privateReplySchema.parse({ body: "  kind thought  " }).body).toBe("kind thought");
+    expect(privateReplySchema.safeParse({ body: "x".repeat(501) }).success).toBe(false);
+    await setPrivateReply("pair-1", "round-1", "kind thought");
+    await removePrivateReply("pair-1", "round-1");
+    expect(calls).toEqual([
+      { method: "PUT", body: { body: "kind thought" } },
+      { method: "DELETE", body: undefined },
+    ]);
+  });
+
+  test("progression retries reuse their caller-supplied idempotency key", async () => {
+    const bodies: unknown[] = [];
+    globalThis.fetch = (async (_input, init) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return Response.json({
+        ...exhausted,
+        state: "CANDIDATE",
+        candidate: {
+          id: "candidate-2",
+          liked: false,
+          question: {
+            id: "q2",
+            questionRevisionId: "rev2",
+            text: "Next?",
+            category: "fun",
+            intensity: "light",
+          },
+        },
+      });
+    }) as typeof fetch;
+    const requestId = "stable-progress-request";
+    await progressPrivateRound("pair-1", "round-1", "ask_another", "fun", requestId);
+    await progressPrivateRound("pair-1", "round-1", "ask_another", "fun", requestId);
+    expect(bodies).toEqual([
+      { action: "ask_another", category: "fun", clientRequestId: requestId },
+      { action: "ask_another", category: "fun", clientRequestId: requestId },
+    ]);
+  });
+
+  test("a refreshed Round projection recovers saved reaction and reply state from the server", async () => {
+    const responses = [
+      round,
+      {
+        ...round,
+        state: "REVEAL_VIEWED",
+        answers: [],
+        reactions: [
+          { participantId: "participant-b", displayName: "B", value: "tender", isOwner: true },
+        ],
+        replies: [
+          { participantId: "participant-b", displayName: "B", body: "still here", isOwner: true },
+        ],
+      },
+    ];
+    globalThis.fetch = (async () => Response.json(responses.shift())) as unknown as typeof fetch;
+
+    await setPrivateReaction("pair-1", "round-1", "tender");
+    const refreshed = await getPrivateRound("pair-1", "round-1");
+    expect(refreshed.reactions?.find((item) => item.isOwner)?.value).toBe("tender");
+    expect(refreshed.replies?.find((item) => item.isOwner)?.body).toBe("still here");
   });
 });

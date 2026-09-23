@@ -40,6 +40,8 @@ describe("rewrite parity catalog", () => {
       "private.two-answers-race",
       "private.answer-vs-termination-history",
       "private.progression-requires-both-reveals",
+      "private.progression-action-race-and-retry",
+      "private.post-reveal-era-ownership",
       "admin.revision-conflict-and-restore",
     ]) {
       expect(ids.has(id)).toBe(true);
