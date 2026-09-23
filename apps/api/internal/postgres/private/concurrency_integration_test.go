@@ -74,6 +74,56 @@ func createMutuallyRevealedRound(t *testing.T, f fixture) (domain.Round, domain.
 	return round, a, b
 }
 
+func createReplacementParticipant(t *testing.T, f fixture) string {
+	t.Helper()
+	var authID, participantID string
+	if err := f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		if err := db.QueryRow(context.Background(), "INSERT INTO auth_user(id, kind, created_at) VALUES (gen_random_uuid(), 'anonymous', now()) RETURNING id::text").Scan(&authID); err != nil {
+			return err
+		}
+		return db.QueryRow(context.Background(), "INSERT INTO participant(auth_user_id, display_name) VALUES ($1, 'Replacement') RETURNING id::text", authID).Scan(&participantID)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+			_, _ = db.Exec(context.Background(), "DELETE FROM pair WHERE id = $1", f.pairID)
+			_, _ = db.Exec(context.Background(), "DELETE FROM participant WHERE id = $1", participantID)
+			_, _ = db.Exec(context.Background(), "DELETE FROM auth_user WHERE id = $1", authID)
+			return nil
+		})
+	})
+	return participantID
+}
+
+func replaceSecondMembership(ctx context.Context, f fixture, replacementID string) (string, string, error) {
+	var oldMembershipID, newEraID string
+	err := f.pool.WithinTx(ctx, func(db postgres.QueryDB) error {
+		var lockedPairID, eraID, firstMembershipID string
+		if err := db.QueryRow(ctx, "SELECT id::text FROM pair WHERE id = $1 FOR UPDATE", f.pairID).Scan(&lockedPairID); err != nil {
+			return err
+		}
+		if err := db.QueryRow(ctx, `
+			SELECT era.id::text, era.first_membership_id::text, era.second_membership_id::text
+			FROM pair_membership_era AS era
+			WHERE era.pair_id = $1 AND era.ended_at IS NULL`, f.pairID).Scan(&eraID, &firstMembershipID, &oldMembershipID); err != nil {
+			return err
+		}
+		if _, err := db.Exec(ctx, "UPDATE pair_membership SET ended_at = now(), ended_display_name = 'Second' WHERE id = $1", oldMembershipID); err != nil {
+			return err
+		}
+		if _, err := db.Exec(ctx, "UPDATE pair_membership_era SET ended_at = now() WHERE id = $1", eraID); err != nil {
+			return err
+		}
+		var newMembershipID string
+		if err := db.QueryRow(ctx, "INSERT INTO pair_membership(pair_id, participant_id, slot) VALUES ($1, $2, 'second') RETURNING id::text", f.pairID, replacementID).Scan(&newMembershipID); err != nil {
+			return err
+		}
+		return db.QueryRow(ctx, "INSERT INTO pair_membership_era(pair_id, first_membership_id, second_membership_id) VALUES ($1, $2, $3) RETURNING id::text", f.pairID, firstMembershipID, newMembershipID).Scan(&newEraID)
+	})
+	return oldMembershipID, newEraID, err
+}
+
 type fixture struct {
 	pool                                                                      *postgres.Pool
 	service                                                                   *domain.Service
@@ -961,6 +1011,133 @@ func TestAskAnotherAndSomethingElseHaveOneSerializedOutcome(t *testing.T) {
 	}
 }
 
+func TestAskAnotherVsAskAnotherCreatesOneNextCandidate(t *testing.T) {
+	f := openFixture(t)
+	createActiveQuestion(t, f, "fun", "Only next candidate")
+	round, a, _ := createMutuallyRevealedRound(t, f)
+	inputs := []domain.ProgressInput{
+		{RoundInput: a, Action: "ask_another", Category: "fun", ClientRequestID: testUUID(t, f.pool)},
+		{RoundInput: a, Action: "ask_another", Category: "fun", ClientRequestID: testUUID(t, f.pool)},
+	}
+	start := make(chan struct{})
+	results := make(chan struct {
+		view  domain.View
+		err   error
+		input domain.ProgressInput
+	}, 2)
+	for _, input := range inputs {
+		go func(input domain.ProgressInput) {
+			<-start
+			view, err := f.service.Progress(context.Background(), input)
+			results <- struct {
+				view  domain.View
+				err   error
+				input domain.ProgressInput
+			}{view, err, input}
+		}(input)
+	}
+	close(start)
+	first, second := <-results, <-results
+	if (first.err == nil) == (second.err == nil) {
+		t.Fatalf("concurrent Ask another results = %+v / %+v, want one winner", first, second)
+	}
+	winner, loser := first, second
+	if winner.err != nil {
+		winner, loser = second, first
+	}
+	if !errors.Is(loser.err, domain.ErrProgressionConflict) {
+		t.Fatalf("losing Ask another error = %v, want progression conflict", loser.err)
+	}
+	if winner.view.Candidate == nil || winner.view.Candidate.Question.ID == round.QuestionID {
+		t.Fatalf("Ask another candidate = %+v, want one unconsumed question", winner.view.Candidate)
+	}
+	replayed, err := f.service.Progress(context.Background(), winner.input)
+	if err != nil || replayed.Candidate == nil || replayed.Candidate.ID != winner.view.Candidate.ID {
+		t.Fatalf("winning Ask another retry = %+v, original=%+v, err=%v", replayed, winner.view, err)
+	}
+	if _, err := f.service.Progress(context.Background(), loser.input); !errors.Is(err, domain.ErrProgressionConflict) {
+		t.Fatalf("losing Ask another retry error = %v, want progression conflict", err)
+	}
+	var unresolvedCandidates, openRounds int
+	if err := f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		if err := db.QueryRow(context.Background(), "SELECT count(*) FROM private_question_candidate WHERE conversation_id=$1 AND state='unresolved'", replayed.ConversationID).Scan(&unresolvedCandidates); err != nil {
+			return err
+		}
+		return db.QueryRow(context.Background(), "SELECT count(*) FROM private_round WHERE pair_id=$1 AND membership_era_id=$2 AND status='open'", f.pairID, round.MembershipEraID).Scan(&openRounds)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if unresolvedCandidates != 1 || openRounds != 0 {
+		t.Fatalf("after Ask another race unresolved candidates=%d open rounds=%d", unresolvedCandidates, openRounds)
+	}
+}
+
+func TestProgressionRacesWithReplacementWithoutCrossingMembershipEras(t *testing.T) {
+	for _, action := range []string{"ask_another", "something_else"} {
+		t.Run(action, func(t *testing.T) {
+			f := openFixture(t)
+			createActiveQuestion(t, f, "fun", "Next in the current lane")
+			createActiveQuestion(t, f, "deep", "Next in the other lane")
+			round, creator, _ := createMutuallyRevealedRound(t, f)
+			replacementID := createReplacementParticipant(t, f)
+			category := "fun"
+			if action == "something_else" {
+				category = "deep"
+			}
+			progressInput := domain.ProgressInput{RoundInput: creator, Action: action, Category: category, ClientRequestID: testUUID(t, f.pool)}
+			start := make(chan struct{})
+			progressResult := make(chan struct {
+				view domain.View
+				err  error
+			}, 1)
+			replacementResult := make(chan error, 1)
+			go func() {
+				<-start
+				view, err := f.service.Progress(context.Background(), progressInput)
+				progressResult <- struct {
+					view domain.View
+					err  error
+				}{view, err}
+			}()
+			go func() {
+				<-start
+				_, _, err := replaceSecondMembership(context.Background(), f, replacementID)
+				replacementResult <- err
+			}()
+			close(start)
+			progressed := <-progressResult
+			if err := <-replacementResult; err != nil {
+				t.Fatalf("replacement failed: %v", err)
+			}
+			if progressed.err != nil && !errors.Is(progressed.err, domain.ErrNotFound) {
+				t.Fatalf("%s vs replacement error = %v", action, progressed.err)
+			}
+			if progressed.err == nil && (progressed.view.Candidate == nil || progressed.view.Candidate.Question.Category != category) {
+				t.Fatalf("progression winner returned a candidate outside %q: %+v", category, progressed.view)
+			}
+			var currentEraID string
+			var newEraConversations int
+			if err := f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+				if err := db.QueryRow(context.Background(), "SELECT id::text FROM pair_membership_era WHERE pair_id=$1 AND ended_at IS NULL", f.pairID).Scan(&currentEraID); err != nil {
+					return err
+				}
+				return db.QueryRow(context.Background(), "SELECT count(*) FROM private_conversation WHERE pair_id=$1 AND membership_era_id=$2", f.pairID, currentEraID).Scan(&newEraConversations)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if currentEraID == round.MembershipEraID || newEraConversations != 0 {
+				t.Fatalf("replacement era=%s conversations=%d; expected a new era with no candidate side effect", currentEraID, newEraConversations)
+			}
+			if progressed.err == nil {
+				formerEraView, err := f.service.Read(context.Background(), domain.ReadInput{ParticipantID: replacementID, PairID: f.pairID, ConversationID: progressed.view.ConversationID})
+				if !errors.Is(err, domain.ErrNotFound) || formerEraView.Candidate != nil {
+					t.Fatalf("replacement could read progression from former era: view=%+v err=%v", formerEraView, err)
+				}
+			}
+		})
+	}
+}
+
 func TestAskAnotherExhaustionDoesNotRecycleConsumedQuestions(t *testing.T) {
 	f := openFixture(t)
 	started, err := f.service.StartOrResume(context.Background(), domain.StartInput{ParticipantID: f.firstID, PairID: f.pairID, Category: "fun"})
@@ -1128,52 +1305,9 @@ func TestReplacementMembershipCannotInheritOrMutateReactionAndReply(t *testing.T
 		t.Fatal(err)
 	}
 
-	var replacementAuthID, replacementID, oldMembershipID string
-	if err := f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
-		if err := db.QueryRow(context.Background(), "INSERT INTO auth_user(id, kind, created_at) VALUES (gen_random_uuid(), 'anonymous', now()) RETURNING id::text").Scan(&replacementAuthID); err != nil {
-			return err
-		}
-		return db.QueryRow(context.Background(), "INSERT INTO participant(auth_user_id, display_name) VALUES ($1, 'Replacement') RETURNING id::text", replacementAuthID).Scan(&replacementID)
-	}); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_ = f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
-			_, _ = db.Exec(context.Background(), "DELETE FROM pair WHERE id = $1", f.pairID)
-			_, _ = db.Exec(context.Background(), "DELETE FROM participant WHERE id = $1", replacementID)
-			_, _ = db.Exec(context.Background(), "DELETE FROM auth_user WHERE id = $1", replacementAuthID)
-			return nil
-		})
-	})
+	replacementID := createReplacementParticipant(t, f)
 
-	replaceMembership := func() error {
-		return f.pool.WithinTx(context.Background(), func(db postgres.QueryDB) error {
-			var lockedPairID string
-			if err := db.QueryRow(context.Background(), "SELECT id::text FROM pair WHERE id = $1 FOR UPDATE", f.pairID).Scan(&lockedPairID); err != nil {
-				return err
-			}
-			var firstMembershipID, secondMembershipID, eraID string
-			if err := db.QueryRow(context.Background(), `
-			SELECT era.id::text, era.first_membership_id::text, era.second_membership_id::text
-			FROM pair_membership_era AS era
-				WHERE era.pair_id = $1 AND era.ended_at IS NULL`, f.pairID).Scan(&eraID, &firstMembershipID, &secondMembershipID); err != nil {
-				return err
-			}
-			oldMembershipID = secondMembershipID
-			if _, err := db.Exec(context.Background(), "UPDATE pair_membership SET ended_at = now(), ended_display_name = 'Second' WHERE id = $1", secondMembershipID); err != nil {
-				return err
-			}
-			if _, err := db.Exec(context.Background(), "UPDATE pair_membership_era SET ended_at = now() WHERE id = $1", eraID); err != nil {
-				return err
-			}
-			var newMembershipID string
-			if err := db.QueryRow(context.Background(), "INSERT INTO pair_membership(pair_id, participant_id, slot) VALUES ($1, $2, 'second') RETURNING id::text", f.pairID, replacementID).Scan(&newMembershipID); err != nil {
-				return err
-			}
-			_, err := db.Exec(context.Background(), "INSERT INTO pair_membership_era(pair_id, first_membership_id, second_membership_id) VALUES ($1, $2, $3)", f.pairID, firstMembershipID, newMembershipID)
-			return err
-		})
-	}
+	var oldMembershipID string
 	start := make(chan struct{})
 	mutationResults := make(chan error, 2)
 	replacementResult := make(chan error, 1)
@@ -1189,7 +1323,8 @@ func TestReplacementMembershipCannotInheritOrMutateReactionAndReply(t *testing.T
 	}()
 	go func() {
 		<-start
-		replacementResult <- replaceMembership()
+		_, _, err := replaceSecondMembership(context.Background(), f, replacementID)
+		replacementResult <- err
 	}()
 	close(start)
 	for range 2 {
@@ -1199,6 +1334,11 @@ func TestReplacementMembershipCannotInheritOrMutateReactionAndReply(t *testing.T
 	}
 	if err := <-replacementResult; err != nil {
 		t.Fatalf("replacement operation error = %v", err)
+	}
+	if err := f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		return db.QueryRow(context.Background(), "SELECT id::text FROM pair_membership WHERE pair_id=$1 AND participant_id=$2", f.pairID, f.secondID).Scan(&oldMembershipID)
+	}); err != nil {
+		t.Fatal(err)
 	}
 
 	replacementInput := domain.RoundInput{ParticipantID: replacementID, PairID: f.pairID, RoundID: round.ID}
