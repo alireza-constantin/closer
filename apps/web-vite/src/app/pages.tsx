@@ -27,6 +27,7 @@ import {
   type PairForm,
 } from "@/features/consumer/forms";
 import { ApiError } from "@/lib/api-client";
+import { clearConsumerQueryCache } from "@/lib/query-client";
 
 const meKey = ["me"] as const;
 const spacesKey = ["spaces"] as const;
@@ -258,7 +259,7 @@ export function SpacesPage() {
           className="text-closer-muted mt-auto self-start text-sm font-semibold underline"
           onClick={async () => {
             await logout();
-            queryClient.clear();
+            clearConsumerQueryCache(queryClient);
             navigate("/");
           }}
         >
@@ -349,7 +350,7 @@ export function InvitePage() {
       return redeemInvite(token, me.data?.actor?.participant ? undefined : value.displayName);
     },
     onSuccess: async (value: any) => {
-      await queryClient.invalidateQueries({ queryKey: meKey });
+      clearConsumerQueryCache(queryClient);
       navigate(`/pair/${value.pairId}`);
     },
   });
@@ -468,7 +469,7 @@ export function RejoinPage() {
       return redeemRejoin(token, value.displayName);
     },
     onSuccess: async (value: any) => {
-      await queryClient.invalidateQueries({ queryKey: meKey });
+      clearConsumerQueryCache(queryClient);
       navigate(`/pair/${value.pairId}`);
     },
   });

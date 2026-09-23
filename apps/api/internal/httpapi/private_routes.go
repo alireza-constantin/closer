@@ -3,6 +3,7 @@ package httpapi
 import (
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/alireza-constantin/closer/apps/api/internal/auth"
 	"github.com/alireza-constantin/closer/apps/api/internal/participant"
@@ -40,6 +41,36 @@ type privateProgressRequest struct {
 	ClientRequestID string `json:"clientRequestId"`
 	Action          string `json:"action"`
 	Category        string `json:"category,omitempty"`
+}
+
+type privateHistoryProjection struct {
+	Rounds     []privateHistoryRoundProjection `json:"rounds"`
+	NextCursor string                          `json:"nextCursor,omitempty"`
+}
+type privateHistoryRoundProjection struct {
+	RoundNumber int32                              `json:"roundNumber"`
+	AskedAt     string                             `json:"askedAt"`
+	Question    privateHistoryQuestionProjection   `json:"question"`
+	Answers     []privateHistoryAnswerProjection   `json:"answers"`
+	Reactions   []privateHistoryReactionProjection `json:"reactions"`
+	Replies     []privateHistoryReplyProjection    `json:"replies"`
+}
+type privateHistoryQuestionProjection struct {
+	Text      string `json:"text"`
+	Category  string `json:"category"`
+	Intensity string `json:"intensity"`
+}
+type privateHistoryAnswerProjection struct {
+	DisplayName string `json:"displayName"`
+	Body        string `json:"body"`
+}
+type privateHistoryReactionProjection struct {
+	DisplayName string `json:"displayName"`
+	Value       string `json:"value"`
+}
+type privateHistoryReplyProjection struct {
+	DisplayName string `json:"displayName"`
+	Body        string `json:"body"`
 }
 
 type privateCandidateProjection struct {
@@ -110,6 +141,42 @@ type privateReplyProjection struct {
 
 func registerPrivateRoutes(router chi.Router, authService *auth.Service, participantService *participant.Service, service *privatedomain.Service, security SecurityConfig) {
 	api := router.With(authActorMiddleware(authService))
+	api.Get("/pairs/{pairID}/private-history", func(w http.ResponseWriter, r *http.Request) {
+		setPrivateNoStore(w)
+		actor, ok := requiredActorParticipant(w, r, participantService)
+		if !ok {
+			return
+		}
+		limit := int32(20)
+		if rawLimit := r.URL.Query().Get("limit"); rawLimit != "" {
+			parsed, err := strconv.ParseInt(rawLimit, 10, 32)
+			if err != nil || parsed < 1 || parsed > 50 {
+				writeAPIError(w, r, http.StatusBadRequest, "VALIDATION_ERROR", "The Private history page size is invalid.")
+				return
+			}
+			limit = int32(parsed)
+		}
+		page, err := service.History(r.Context(), privatedomain.HistoryInput{ParticipantID: actor.ID, PairID: chi.URLParam(r, "pairID"), Cursor: r.URL.Query().Get("cursor"), Limit: limit})
+		if err != nil {
+			writePrivateError(w, r, err)
+			return
+		}
+		projection := privateHistoryProjection{Rounds: make([]privateHistoryRoundProjection, 0, len(page.Rounds)), NextCursor: page.NextCursor}
+		for _, round := range page.Rounds {
+			item := privateHistoryRoundProjection{RoundNumber: round.RoundNumber, AskedAt: round.AskedAt, Question: privateHistoryQuestionProjection{Text: round.Text, Category: round.Category, Intensity: round.Intensity}, Answers: make([]privateHistoryAnswerProjection, 0, len(round.Answers)), Reactions: make([]privateHistoryReactionProjection, 0, len(round.Reactions)), Replies: make([]privateHistoryReplyProjection, 0, len(round.Replies))}
+			for _, answer := range round.Answers {
+				item.Answers = append(item.Answers, privateHistoryAnswerProjection{DisplayName: answer.DisplayName, Body: answer.Body})
+			}
+			for _, reaction := range round.Reactions {
+				item.Reactions = append(item.Reactions, privateHistoryReactionProjection{DisplayName: reaction.DisplayName, Value: reaction.Value})
+			}
+			for _, reply := range round.Replies {
+				item.Replies = append(item.Replies, privateHistoryReplyProjection{DisplayName: reply.DisplayName, Body: reply.Body})
+			}
+			projection.Rounds = append(projection.Rounds, item)
+		}
+		writeJSON(w, http.StatusOK, projection)
+	})
 	api.Post("/pairs/{pairID}/private-conversations", func(w http.ResponseWriter, r *http.Request) {
 		setPrivateNoStore(w)
 		if !requireTrustedMutationOrigin(w, r, security) {
@@ -428,6 +495,8 @@ func writePrivateError(w http.ResponseWriter, r *http.Request, err error) {
 		writeAPIError(w, r, http.StatusBadRequest, "VALIDATION_ERROR", "The Private category is invalid for this Pair.")
 	case errors.Is(err, privatedomain.ErrNotFound), errors.Is(err, privatedomain.ErrPairNotReady):
 		writeAPIError(w, r, http.StatusNotFound, "NOT_FOUND", "Not found.")
+	case errors.Is(err, privatedomain.ErrHistoryCursor):
+		writeAPIError(w, r, http.StatusBadRequest, "VALIDATION_ERROR", "The Private history cursor is invalid.")
 	case errors.Is(err, privatedomain.ErrCandidate):
 		writeAPIError(w, r, http.StatusBadRequest, "QUESTION_UNAVAILABLE", "This Private question is no longer available.")
 	case errors.Is(err, privatedomain.ErrRoundOpen):

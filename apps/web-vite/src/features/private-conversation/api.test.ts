@@ -4,6 +4,7 @@ import {
   askPrivateCandidate,
   declinePrivateRound,
   getPrivateRound,
+  getPrivateHistory,
   likePrivateCandidate,
   privateReplySchema,
   progressPrivateRound,
@@ -165,6 +166,18 @@ describe("Private answer and reveal commands", () => {
 });
 
 describe("Private post-reveal interactions", () => {
+  test("history refresh parses only the public projection and carries an opaque cursor", async () => {
+    let url = "";
+    globalThis.fetch = (async (input) => {
+      url = String(input);
+      return Response.json({ rounds: [], nextCursor: "cursor-token" });
+    }) as typeof fetch;
+
+    const page = await getPrivateHistory("pair/1", "opaque cursor");
+    expect(url).toContain("/pairs/pair%2F1/private-history?cursor=opaque%20cursor");
+    expect(page.nextCursor).toBe("cursor-token");
+  });
+
   test("reactions can be set or removed by explicit commands", async () => {
     const calls: Array<{ url: string; method: string; body?: unknown }> = [];
     globalThis.fetch = (async (input, init) => {

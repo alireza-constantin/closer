@@ -84,6 +84,7 @@ type Querier interface {
 	GetPrivateCandidateForUpdate(ctx context.Context, arg GetPrivateCandidateForUpdateParams) (GetPrivateCandidateForUpdateRow, error)
 	GetPrivateConversation(ctx context.Context, arg GetPrivateConversationParams) (GetPrivateConversationRow, error)
 	GetPrivateConversationByKey(ctx context.Context, arg GetPrivateConversationByKeyParams) (PrivateConversation, error)
+	GetPrivateHistoryAccess(ctx context.Context, arg GetPrivateHistoryAccessParams) (pgtype.UUID, error)
 	GetPrivatePairAccess(ctx context.Context, arg GetPrivatePairAccessParams) (GetPrivatePairAccessRow, error)
 	GetPrivateRoundByCandidate(ctx context.Context, arg GetPrivateRoundByCandidateParams) (GetPrivateRoundByCandidateRow, error)
 	GetPrivateRoundForParticipant(ctx context.Context, arg GetPrivateRoundForParticipantParams) (GetPrivateRoundForParticipantRow, error)
@@ -109,6 +110,12 @@ type Querier interface {
 	ListEligiblePrivateQuestions(ctx context.Context, arg ListEligiblePrivateQuestionsParams) ([]ListEligiblePrivateQuestionsRow, error)
 	ListParticipantSpaces(ctx context.Context, participantID pgtype.UUID) ([]ListParticipantSpacesRow, error)
 	ListPrivateAnswers(ctx context.Context, arg ListPrivateAnswersParams) ([]PrivateAnswer, error)
+	ListPrivateHistoryAnswers(ctx context.Context, arg ListPrivateHistoryAnswersParams) ([]ListPrivateHistoryAnswersRow, error)
+	ListPrivateHistoryReactions(ctx context.Context, arg ListPrivateHistoryReactionsParams) ([]ListPrivateHistoryReactionsRow, error)
+	ListPrivateHistoryReplies(ctx context.Context, arg ListPrivateHistoryRepliesParams) ([]ListPrivateHistoryRepliesRow, error)
+	// A participant can read only rounds from membership eras in which that exact
+	// participant took part. Open and retired rounds are not paired history.
+	ListPrivateHistoryRounds(ctx context.Context, arg ListPrivateHistoryRoundsParams) ([]ListPrivateHistoryRoundsRow, error)
 	ListPrivateReactions(ctx context.Context, arg ListPrivateReactionsParams) ([]ListPrivateReactionsRow, error)
 	ListPrivateReplies(ctx context.Context, arg ListPrivateRepliesParams) ([]ListPrivateRepliesRow, error)
 	ListPrivateRevealViews(ctx context.Context, arg ListPrivateRevealViewsParams) ([]PrivateRevealView, error)

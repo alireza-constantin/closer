@@ -437,6 +437,82 @@ func (s *Store) GetRound(ctx context.Context, input domain.RoundInput) (domain.R
 	return result, err
 }
 
+func (s *Store) History(ctx context.Context, input domain.HistoryInput) (domain.HistoryPage, error) {
+	pairID, err := parseUUID(input.PairID)
+	if err != nil {
+		return domain.HistoryPage{}, domain.ErrNotFound
+	}
+	participantID, err := parseUUID(input.ParticipantID)
+	if err != nil {
+		return domain.HistoryPage{}, domain.ErrNotFound
+	}
+	beforeAt := pgtype.Timestamptz{}
+	beforeID := pgtype.UUID{}
+	if input.BeforeAskedAt != "" || input.BeforeRoundID != "" {
+		if input.BeforeAskedAt == "" || input.BeforeRoundID == "" {
+			return domain.HistoryPage{}, domain.ErrHistoryCursor
+		}
+		parsedAt, parseErr := time.Parse(time.RFC3339Nano, input.BeforeAskedAt)
+		if parseErr != nil {
+			return domain.HistoryPage{}, domain.ErrHistoryCursor
+		}
+		beforeAt = pgtype.Timestamptz{Time: parsedAt, Valid: true}
+		beforeID, err = parseUUID(input.BeforeRoundID)
+		if err != nil {
+			return domain.HistoryPage{}, domain.ErrHistoryCursor
+		}
+	}
+	var result domain.HistoryPage
+	err = s.pool.WithinTx(ctx, func(db postgres.QueryDB) error {
+		if _, err := db.Exec(ctx, "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"); err != nil {
+			return err
+		}
+		q := sqlc.New(db)
+		if _, err := q.GetPrivateHistoryAccess(ctx, sqlc.GetPrivateHistoryAccessParams{ParticipantID: participantID, PairID: pairID}); errors.Is(err, pgx.ErrNoRows) {
+			return domain.ErrNotFound
+		} else if err != nil {
+			return err
+		}
+		rows, err := q.ListPrivateHistoryRounds(ctx, sqlc.ListPrivateHistoryRoundsParams{
+			ParticipantID: participantID, PairID: pairID, BeforeAskedAt: beforeAt, BeforeRoundID: beforeID, PageLimit: input.Limit + 1,
+		})
+		if err != nil {
+			return err
+		}
+		result.Rounds = make([]domain.HistoryRound, 0, len(rows))
+		for _, row := range rows {
+			item := domain.HistoryRound{ID: row.ID.String(), AskedAt: timestampString(row.AskedAt), Text: row.Text, Category: row.Category, Intensity: row.Intensity, RoundNumber: row.RoundNumber}
+			answers, err := q.ListPrivateHistoryAnswers(ctx, sqlc.ListPrivateHistoryAnswersParams{RoundID: row.ID, MembershipEraID: row.MembershipEraID})
+			if err != nil {
+				return err
+			}
+			item.Answers = make([]domain.HistoryAnswer, 0, len(answers))
+			for _, answer := range answers {
+				item.Answers = append(item.Answers, domain.HistoryAnswer{DisplayName: answer.DisplayName, Body: answer.Body})
+			}
+			reactions, err := q.ListPrivateHistoryReactions(ctx, sqlc.ListPrivateHistoryReactionsParams{RoundID: row.ID, MembershipEraID: row.MembershipEraID})
+			if err != nil {
+				return err
+			}
+			item.Reactions = make([]domain.HistoryReaction, 0, len(reactions))
+			for _, reaction := range reactions {
+				item.Reactions = append(item.Reactions, domain.HistoryReaction{DisplayName: reaction.DisplayName, Value: string(reaction.Value)})
+			}
+			replies, err := q.ListPrivateHistoryReplies(ctx, sqlc.ListPrivateHistoryRepliesParams{RoundID: row.ID, MembershipEraID: row.MembershipEraID})
+			if err != nil {
+				return err
+			}
+			item.Replies = make([]domain.HistoryReply, 0, len(replies))
+			for _, reply := range replies {
+				item.Replies = append(item.Replies, domain.HistoryReply{DisplayName: reply.DisplayName, Body: reply.Body})
+			}
+			result.Rounds = append(result.Rounds, item)
+		}
+		return nil
+	})
+	return result, err
+}
+
 func (s *Store) Answer(ctx context.Context, input domain.AnswerInput) (domain.Round, error) {
 	body := strings.TrimSpace(input.Body)
 	if body == "" || utf8.RuneCountInString(body) > 2000 {

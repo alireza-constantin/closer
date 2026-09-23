@@ -659,6 +659,26 @@ func (q *Queries) GetPrivateConversationByKey(ctx context.Context, arg GetPrivat
 	return i, err
 }
 
+const getPrivateHistoryAccess = `-- name: GetPrivateHistoryAccess :one
+SELECT pair.id
+FROM pair
+JOIN pair_membership AS membership ON membership.pair_id = pair.id
+WHERE pair.id = $1 AND membership.participant_id = $2
+LIMIT 1
+`
+
+type GetPrivateHistoryAccessParams struct {
+	PairID        pgtype.UUID `json:"pair_id"`
+	ParticipantID pgtype.UUID `json:"participant_id"`
+}
+
+func (q *Queries) GetPrivateHistoryAccess(ctx context.Context, arg GetPrivateHistoryAccessParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getPrivateHistoryAccess, arg.PairID, arg.ParticipantID)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const getPrivatePairAccess = `-- name: GetPrivatePairAccess :one
 SELECT
     p.id AS pair_id,
@@ -1048,6 +1068,203 @@ func (q *Queries) ListPrivateAnswers(ctx context.Context, arg ListPrivateAnswers
 			&i.ParticipantID,
 			&i.Body,
 			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPrivateHistoryAnswers = `-- name: ListPrivateHistoryAnswers :many
+SELECT answer.body, COALESCE(membership.ended_display_name, participant.display_name) AS display_name
+FROM private_answer AS answer
+JOIN pair_membership AS membership ON membership.id = answer.membership_id
+JOIN participant ON participant.id = answer.participant_id
+WHERE answer.round_id = $1 AND answer.membership_era_id = $2
+ORDER BY answer.created_at, answer.id
+`
+
+type ListPrivateHistoryAnswersParams struct {
+	RoundID         pgtype.UUID `json:"round_id"`
+	MembershipEraID pgtype.UUID `json:"membership_era_id"`
+}
+
+type ListPrivateHistoryAnswersRow struct {
+	Body        string `json:"body"`
+	DisplayName string `json:"display_name"`
+}
+
+func (q *Queries) ListPrivateHistoryAnswers(ctx context.Context, arg ListPrivateHistoryAnswersParams) ([]ListPrivateHistoryAnswersRow, error) {
+	rows, err := q.db.Query(ctx, listPrivateHistoryAnswers, arg.RoundID, arg.MembershipEraID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPrivateHistoryAnswersRow
+	for rows.Next() {
+		var i ListPrivateHistoryAnswersRow
+		if err := rows.Scan(&i.Body, &i.DisplayName); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPrivateHistoryReactions = `-- name: ListPrivateHistoryReactions :many
+SELECT reaction.value, COALESCE(membership.ended_display_name, participant.display_name) AS display_name
+FROM private_reaction AS reaction
+JOIN pair_membership AS membership ON membership.id = reaction.membership_id
+JOIN participant ON participant.id = reaction.participant_id
+WHERE reaction.round_id = $1 AND reaction.membership_era_id = $2
+ORDER BY reaction.membership_id
+`
+
+type ListPrivateHistoryReactionsParams struct {
+	RoundID         pgtype.UUID `json:"round_id"`
+	MembershipEraID pgtype.UUID `json:"membership_era_id"`
+}
+
+type ListPrivateHistoryReactionsRow struct {
+	Value       PrivateReactionValue `json:"value"`
+	DisplayName string               `json:"display_name"`
+}
+
+func (q *Queries) ListPrivateHistoryReactions(ctx context.Context, arg ListPrivateHistoryReactionsParams) ([]ListPrivateHistoryReactionsRow, error) {
+	rows, err := q.db.Query(ctx, listPrivateHistoryReactions, arg.RoundID, arg.MembershipEraID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPrivateHistoryReactionsRow
+	for rows.Next() {
+		var i ListPrivateHistoryReactionsRow
+		if err := rows.Scan(&i.Value, &i.DisplayName); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPrivateHistoryReplies = `-- name: ListPrivateHistoryReplies :many
+SELECT reply.body, COALESCE(membership.ended_display_name, participant.display_name) AS display_name
+FROM private_reply AS reply
+JOIN pair_membership AS membership ON membership.id = reply.membership_id
+JOIN participant ON participant.id = reply.participant_id
+WHERE reply.round_id = $1 AND reply.membership_era_id = $2
+ORDER BY reply.created_at, reply.membership_id
+`
+
+type ListPrivateHistoryRepliesParams struct {
+	RoundID         pgtype.UUID `json:"round_id"`
+	MembershipEraID pgtype.UUID `json:"membership_era_id"`
+}
+
+type ListPrivateHistoryRepliesRow struct {
+	Body        string `json:"body"`
+	DisplayName string `json:"display_name"`
+}
+
+func (q *Queries) ListPrivateHistoryReplies(ctx context.Context, arg ListPrivateHistoryRepliesParams) ([]ListPrivateHistoryRepliesRow, error) {
+	rows, err := q.db.Query(ctx, listPrivateHistoryReplies, arg.RoundID, arg.MembershipEraID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPrivateHistoryRepliesRow
+	for rows.Next() {
+		var i ListPrivateHistoryRepliesRow
+		if err := rows.Scan(&i.Body, &i.DisplayName); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPrivateHistoryRounds = `-- name: ListPrivateHistoryRounds :many
+SELECT round.id, round.membership_era_id, round.round_number, round.asked_at,
+       revision.text, revision.category, revision.intensity,
+       viewer_membership.id AS viewer_membership_id
+FROM private_round AS round
+JOIN pair_membership_era AS era
+  ON era.id = round.membership_era_id AND era.pair_id = round.pair_id
+JOIN question_revision AS revision ON revision.id = round.question_revision_id
+JOIN pair_membership AS viewer_membership
+  ON viewer_membership.participant_id = $1
+ AND (viewer_membership.id = era.first_membership_id OR viewer_membership.id = era.second_membership_id)
+WHERE round.pair_id = $2
+  AND round.status = 'completed'
+  AND (SELECT count(*) FROM private_answer AS answer
+       WHERE answer.round_id = round.id AND answer.membership_era_id = round.membership_era_id) = 2
+  AND (SELECT count(*) FROM private_reveal_view AS reveal
+       WHERE reveal.round_id = round.id AND reveal.membership_era_id = round.membership_era_id) = 2
+  AND ($3::timestamptz IS NULL
+       OR round.asked_at < $3
+       OR (round.asked_at = $3 AND round.id < $4))
+ORDER BY round.asked_at DESC, round.id DESC
+LIMIT $5
+`
+
+type ListPrivateHistoryRoundsParams struct {
+	ParticipantID pgtype.UUID        `json:"participant_id"`
+	PairID        pgtype.UUID        `json:"pair_id"`
+	BeforeAskedAt pgtype.Timestamptz `json:"before_asked_at"`
+	BeforeRoundID pgtype.UUID        `json:"before_round_id"`
+	PageLimit     int32              `json:"page_limit"`
+}
+
+type ListPrivateHistoryRoundsRow struct {
+	ID                 pgtype.UUID        `json:"id"`
+	MembershipEraID    pgtype.UUID        `json:"membership_era_id"`
+	RoundNumber        int32              `json:"round_number"`
+	AskedAt            pgtype.Timestamptz `json:"asked_at"`
+	Text               string             `json:"text"`
+	Category           string             `json:"category"`
+	Intensity          string             `json:"intensity"`
+	ViewerMembershipID pgtype.UUID        `json:"viewer_membership_id"`
+}
+
+// A participant can read only rounds from membership eras in which that exact
+// participant took part. Open and retired rounds are not paired history.
+func (q *Queries) ListPrivateHistoryRounds(ctx context.Context, arg ListPrivateHistoryRoundsParams) ([]ListPrivateHistoryRoundsRow, error) {
+	rows, err := q.db.Query(ctx, listPrivateHistoryRounds,
+		arg.ParticipantID,
+		arg.PairID,
+		arg.BeforeAskedAt,
+		arg.BeforeRoundID,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPrivateHistoryRoundsRow
+	for rows.Next() {
+		var i ListPrivateHistoryRoundsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.MembershipEraID,
+			&i.RoundNumber,
+			&i.AskedAt,
+			&i.Text,
+			&i.Category,
+			&i.Intensity,
+			&i.ViewerMembershipID,
 		); err != nil {
 			return nil, err
 		}

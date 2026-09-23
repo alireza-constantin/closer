@@ -12,4 +12,8 @@ export function createQueryClient() {
   });
 }
 
+export function clearConsumerQueryCache(client: QueryClient) {
+  client.clear();
+}
+
 export const queryClient = createQueryClient();

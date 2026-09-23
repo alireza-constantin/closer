@@ -79,8 +79,30 @@ export const privateConversationSchema = z.object({
   candidate: candidateSchema.optional(),
   round: roundSchema.optional(),
 });
+
+export const privateHistorySchema = z.object({
+  rounds: z.array(
+    z.object({
+      roundNumber: z.number().int().positive(),
+      askedAt: z.string(),
+      question: z.object({ text: z.string(), category: z.string(), intensity: z.string() }),
+      answers: z.array(z.object({ displayName: z.string(), body: z.string() })),
+      reactions: z.array(z.object({ displayName: z.string(), value: z.string() })),
+      replies: z.array(z.object({ displayName: z.string(), body: z.string() })),
+    }),
+  ),
+  nextCursor: z.string().optional(),
+});
+export type PrivateHistory = z.infer<typeof privateHistorySchema>;
 export type PrivateConversation = z.infer<typeof privateConversationSchema>;
 export type PrivateRound = z.infer<typeof roundSchema>;
+
+export async function getPrivateHistory(pairId: string, cursor?: string) {
+  const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
+  return privateHistorySchema.parse(
+    await requestJson(`/pairs/${encodeURIComponent(pairId)}/private-history${query}`),
+  );
+}
 
 export const privateAnswerSchema = z.object({
   body: z
