@@ -23,11 +23,14 @@ func registerRealtimeRoutes(router chi.Router, authService *auth.Service, partic
 		}
 		pairID := chi.URLParam(r, "pairID")
 		if _, err := pairService.GetAccess(r.Context(), participantView.ID, pairID); err != nil {
-			if errors.Is(err, pair.ErrPairNotFound) {
-				writeAPIError(w, r, http.StatusNotFound, "NOT_FOUND", "Not found.")
-			} else {
+			if !errors.Is(err, pair.ErrPairNotFound) {
 				writeAuthInternalError(w, r)
+				return
 			}
+			if writeTerminatedPairEvent(w, r, pairService, participantView.ID, pairID) {
+				return
+			}
+			writeAPIError(w, r, http.StatusNotFound, "NOT_FOUND", "Not found.")
 			return
 		}
 		subscription, err := registry.Subscribe(pairID)
@@ -36,6 +39,19 @@ func registerRealtimeRoutes(router chi.Router, authService *auth.Service, partic
 			return
 		}
 		defer subscription.Close()
+		// Subscribe before rechecking active access. A termination before the
+		// subscription is detected here; a later one is delivered by the registry.
+		if _, err := pairService.GetAccess(r.Context(), participantView.ID, pairID); err != nil {
+			if !errors.Is(err, pair.ErrPairNotFound) {
+				writeAuthInternalError(w, r)
+				return
+			}
+			if writeTerminatedPairEvent(w, r, pairService, participantView.ID, pairID) {
+				return
+			}
+			writeAPIError(w, r, http.StatusNotFound, "NOT_FOUND", "Not found.")
+			return
+		}
 		flusher, ok := w.(http.Flusher)
 		if !ok {
 			writeAuthInternalError(w, r)
@@ -61,13 +77,40 @@ func registerRealtimeRoutes(router chi.Router, authService *auth.Service, partic
 				if !open {
 					return
 				}
-				payload, _ := json.Marshal(event)
-				_, _ = writer.WriteString("data: ")
-				_, _ = writer.Write(payload)
-				_, _ = writer.WriteString("\n\n")
+				writeRealtimeEvent(writer, event)
 				_ = writer.Flush()
 				flusher.Flush()
 			}
 		}
 	})
+}
+
+func writeTerminatedPairEvent(w http.ResponseWriter, r *http.Request, pairService *pair.Service, participantID, pairID string) bool {
+	entry, err := pairService.GetEntry(r.Context(), participantID, pairID)
+	if err != nil || entry.State != "terminated" {
+		return false
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeAuthInternalError(w, r)
+		return true
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache, no-store")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+	writer := bufio.NewWriter(w)
+	writeRealtimeEvent(writer, realtime.Event{Version: realtime.Version, PairID: pairID, Type: realtime.PairTerminated})
+	_ = writer.Flush()
+	flusher.Flush()
+	return true
+}
+
+func writeRealtimeEvent(writer *bufio.Writer, event realtime.Event) {
+	payload, _ := json.Marshal(event)
+	_, _ = writer.WriteString("event: ")
+	_, _ = writer.WriteString(string(event.Type))
+	_, _ = writer.WriteString("\ndata: ")
+	_, _ = writer.Write(payload)
+	_, _ = writer.WriteString("\n\n")
 }

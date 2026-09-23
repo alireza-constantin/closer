@@ -6,7 +6,10 @@ import { useForm } from "react-hook-form";
 import { Link, useNavigate, useParams } from "react-router";
 
 import { PageShell } from "@/app/page-shell";
+import { EndedPairPage } from "@/features/pair/components";
+import { connectPairRealtime, pairQueryKey } from "@/features/pair/realtime";
 import { ApiError } from "@/lib/api-client";
+import { getPair } from "@/features/consumer/api";
 import {
   askPrivateCandidate,
   declinePrivateRound,
@@ -35,7 +38,6 @@ import {
   type PrivateHistory,
 } from "@/features/private-conversation/api";
 import {
-  connectPrivateRealtime,
   privateConversationKey,
   privateHistoryKey,
   privateRoundKey,
@@ -59,6 +61,19 @@ const categorySurfaceClass: Record<string, string> = {
 
 export function PrivateCategoryPage() {
   const { pairId = "" } = useParams();
+  const queryClient = useQueryClient();
+  const pair = useQuery({
+    queryKey: pairQueryKey(pairId),
+    queryFn: () => getPair(pairId),
+    enabled: Boolean(pairId),
+    retry: false,
+    refetchOnMount: "always",
+  });
+  React.useEffect(() => {
+    if (!pairId || !pair.data || pair.data.state === "terminated") return;
+    return connectPairRealtime(pairId, queryClient);
+  }, [pair.data?.state, pairId, queryClient]);
+  if (pair.data?.state === "terminated") return <EndedPairPage pairId={pairId} />;
   return (
     <PageShell>
       <section className="flex flex-1 flex-col py-8">
@@ -69,26 +84,32 @@ export function PrivateCategoryPage() {
         <h1 className="text-closer-navy mt-2 text-4xl font-extrabold tracking-[-.05em]">
           Choose a conversation lane.
         </h1>
-        <Link
-          className="text-closer-navy mt-4 self-start text-sm font-bold underline underline-offset-4"
-          to={`/pair/${pairId}/private/history`}
-        >
-          Look back at shared moments
-        </Link>
-        <div className="mt-8 grid gap-3">
-          {privateCategories.map((category) => (
+        {!pair.isSuccess || pair.isFetching ? (
+          <p className="text-closer-muted mt-8">Checking your space…</p>
+        ) : (
+          <>
             <Link
-              className="bg-closer-surface border-closer-line rounded-3xl border p-5 transition hover:-translate-y-0.5"
-              key={category}
-              to={`/pair/${pairId}/private/${category}`}
+              className="text-closer-navy mt-4 self-start text-sm font-bold underline underline-offset-4"
+              to={`/pair/${pairId}/private/history`}
             >
-              <span className="text-closer-navy font-extrabold">{categoryLabel[category]}</span>
-              <span className="text-closer-muted mt-1 block text-sm">
-                Open or resume this lane.
-              </span>
+              Look back at shared moments
             </Link>
-          ))}
-        </div>
+            <div className="mt-8 grid gap-3">
+              {privateCategories.map((category) => (
+                <Link
+                  className="bg-closer-surface border-closer-line rounded-3xl border p-5 transition hover:-translate-y-0.5"
+                  key={category}
+                  to={`/pair/${pairId}/private/${category}`}
+                >
+                  <span className="text-closer-navy font-extrabold">{categoryLabel[category]}</span>
+                  <span className="text-closer-muted mt-1 block text-sm">
+                    Open or resume this lane.
+                  </span>
+                </Link>
+              ))}
+            </div>
+          </>
+        )}
       </section>
     </PageShell>
   );
@@ -98,6 +119,14 @@ export function PrivateConversationPage() {
   const { pairId = "", category = "" } = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const pair = useQuery({
+    queryKey: pairQueryKey(pairId),
+    queryFn: () => getPair(pairId),
+    enabled: Boolean(pairId),
+    retry: false,
+    refetchOnMount: "always",
+  });
+  const activePair = pair.isSuccess && !pair.isFetching && pair.data.state !== "terminated";
   const start = useMutation({
     mutationFn: () => startPrivateConversation(pairId, category),
     onSuccess: (view) => {
@@ -107,24 +136,25 @@ export function PrivateConversationPage() {
   const conversation = useQuery({
     queryKey: privateConversationKey(pairId, category),
     queryFn: () => getPrivateConversation(pairId, start.data?.conversationId ?? ""),
-    enabled: Boolean(start.data?.conversationId),
+    enabled: activePair && Boolean(start.data?.conversationId),
     initialData: start.data,
   });
 
   React.useEffect(() => {
-    if (pairId && category && !start.data && !start.isPending && !start.error) start.mutate();
-  }, [category, pairId, start]);
+    if (activePair && pairId && category && !start.data && !start.isPending && !start.error)
+      start.mutate();
+  }, [activePair, category, pairId, start]);
   React.useEffect(() => {
-    if (!pairId) return undefined;
-    return connectPrivateRealtime(pairId, queryClient);
-  }, [pairId, queryClient]);
+    if (!pairId || !pair.data || pair.data.state === "terminated") return undefined;
+    return connectPairRealtime(pairId, queryClient);
+  }, [pair.data?.state, pairId, queryClient]);
 
   const view = conversation.data ?? start.data;
   const roundId = view?.round?.roundId ?? "";
   const roundQuery = useQuery({
     queryKey: privateRoundKey(pairId, roundId),
     queryFn: () => getPrivateRound(pairId, roundId),
-    enabled: Boolean(roundId),
+    enabled: activePair && Boolean(roundId),
     initialData: view?.round,
   });
   const ask = useMutation({
@@ -172,6 +202,20 @@ export function PrivateConversationPage() {
     },
   });
   const mutationError = ask.error ?? skip.error ?? like.error;
+  if (pair.data?.state === "terminated") return <EndedPairPage pairId={pairId} />;
+  if (!pair.isSuccess || pair.isFetching) {
+    return (
+      <PageShell>
+        <section className="flex flex-1 flex-col py-8">
+          {pair.error ? (
+            <RecoveryPanel error={pair.error} onRetry={() => void pair.refetch()} />
+          ) : (
+            <p className="text-closer-muted mt-8">Checking your space…</p>
+          )}
+        </section>
+      </PageShell>
+    );
+  }
   return (
     <PageShell>
       <section className="flex flex-1 flex-col py-8">
@@ -282,10 +326,17 @@ export function PrivateConversationPage() {
 export function PrivateHistoryPage() {
   const { pairId = "" } = useParams();
   const queryClient = useQueryClient();
+  const pair = useQuery({
+    queryKey: pairQueryKey(pairId),
+    queryFn: () => getPair(pairId),
+    enabled: Boolean(pairId),
+    retry: false,
+    refetchOnMount: "always",
+  });
   React.useEffect(() => {
-    if (!pairId) return undefined;
-    return connectPrivateRealtime(pairId, queryClient);
-  }, [pairId, queryClient]);
+    if (!pairId || !pair.data || pair.data.state === "terminated") return undefined;
+    return connectPairRealtime(pairId, queryClient);
+  }, [pair.data?.state, pairId, queryClient]);
   return (
     <PageShell>
       <section className="flex flex-1 flex-col py-8">

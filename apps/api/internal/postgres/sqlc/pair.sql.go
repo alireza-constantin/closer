@@ -64,6 +64,62 @@ func (q *Queries) CreatePair(ctx context.Context, arg CreatePairParams) (Pair, e
 	return i, err
 }
 
+const endActiveErasForTermination = `-- name: EndActiveErasForTermination :execrows
+UPDATE pair_membership_era
+SET ended_at = p.terminated_at
+FROM pair AS p
+WHERE p.id = $1
+  AND pair_membership_era.pair_id = p.id
+  AND pair_membership_era.ended_at IS NULL
+  AND p.terminated_at IS NOT NULL
+`
+
+func (q *Queries) EndActiveErasForTermination(ctx context.Context, pairID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, endActiveErasForTermination, pairID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const endActiveMembershipsForTermination = `-- name: EndActiveMembershipsForTermination :execrows
+UPDATE pair_membership AS membership
+SET ended_at = p.terminated_at,
+    ended_display_name = participant.display_name
+FROM pair AS p, participant
+WHERE p.id = $1
+  AND membership.pair_id = p.id
+  AND membership.ended_at IS NULL
+  AND participant.id = membership.participant_id
+  AND p.terminated_at IS NOT NULL
+`
+
+func (q *Queries) EndActiveMembershipsForTermination(ctx context.Context, pairID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, endActiveMembershipsForTermination, pairID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const endTogetherSessionsForTermination = `-- name: EndTogetherSessionsForTermination :execrows
+UPDATE together_session
+SET ended_at = p.terminated_at
+FROM pair AS p
+WHERE p.id = $1
+  AND p.terminated_at IS NOT NULL
+  AND together_session.pair_id = p.id
+  AND together_session.ended_at IS NULL
+`
+
+func (q *Queries) EndTogetherSessionsForTermination(ctx context.Context, pairID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, endTogetherSessionsForTermination, pairID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const findFormerTerminatedPair = `-- name: FindFormerTerminatedPair :one
 SELECT p.id
 FROM pair AS p
@@ -197,6 +253,25 @@ func (q *Queries) HasActiveSecondSlot(ctx context.Context, pairID pgtype.UUID) (
 	return column_1, err
 }
 
+const invalidateCandidatesForTermination = `-- name: InvalidateCandidatesForTermination :execrows
+UPDATE private_question_candidate AS candidate
+SET state = 'invalidated', resolved_at = p.terminated_at
+FROM private_conversation AS conversation, pair AS p
+WHERE p.id = $1
+  AND p.terminated_at IS NOT NULL
+  AND conversation.pair_id = p.id
+  AND candidate.conversation_id = conversation.id
+  AND candidate.state = 'unresolved'
+`
+
+func (q *Queries) InvalidateCandidatesForTermination(ctx context.Context, pairID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, invalidateCandidatesForTermination, pairID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const listActivePairMembers = `-- name: ListActivePairMembers :many
 SELECT m.participant_id, m.slot, p.display_name
 FROM pair_membership AS m
@@ -309,6 +384,40 @@ func (q *Queries) LockActivePair(ctx context.Context, pairID pgtype.UUID) (pgtyp
 	return id, err
 }
 
+const lockPairForTermination = `-- name: LockPairForTermination :one
+SELECT id, terminated_at
+FROM pair
+WHERE id = $1
+FOR UPDATE
+`
+
+type LockPairForTerminationRow struct {
+	ID           pgtype.UUID        `json:"id"`
+	TerminatedAt pgtype.Timestamptz `json:"terminated_at"`
+}
+
+func (q *Queries) LockPairForTermination(ctx context.Context, pairID pgtype.UUID) (LockPairForTerminationRow, error) {
+	row := q.db.QueryRow(ctx, lockPairForTermination, pairID)
+	var i LockPairForTerminationRow
+	err := row.Scan(&i.ID, &i.TerminatedAt)
+	return i, err
+}
+
+const markPairTerminated = `-- name: MarkPairTerminated :one
+UPDATE pair
+SET terminated_at = clock_timestamp()
+WHERE id = $1
+  AND terminated_at IS NULL
+RETURNING terminated_at
+`
+
+func (q *Queries) MarkPairTerminated(ctx context.Context, pairID pgtype.UUID) (pgtype.Timestamptz, error) {
+	row := q.db.QueryRow(ctx, markPairTerminated, pairID)
+	var terminated_at pgtype.Timestamptz
+	err := row.Scan(&terminated_at)
+	return terminated_at, err
+}
+
 const participantExists = `-- name: ParticipantExists :one
 SELECT EXISTS (SELECT 1 FROM participant WHERE id = $1)::boolean
 `
@@ -339,6 +448,76 @@ func (q *Queries) ParticipantHasActiveMembership(ctx context.Context, arg Partic
 	var column_1 bool
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const participantMembershipState = `-- name: ParticipantMembershipState :one
+SELECT
+    EXISTS (
+        SELECT 1 FROM pair_membership AS membership
+        WHERE membership.pair_id = $1
+          AND membership.participant_id = $2
+    )::boolean AS has_membership,
+    EXISTS (
+        SELECT 1 FROM pair_membership AS membership
+        WHERE membership.pair_id = $1
+          AND membership.participant_id = $2
+          AND membership.ended_at IS NULL
+    )::boolean AS has_active_membership
+`
+
+type ParticipantMembershipStateParams struct {
+	PairID        pgtype.UUID `json:"pair_id"`
+	ParticipantID pgtype.UUID `json:"participant_id"`
+}
+
+type ParticipantMembershipStateRow struct {
+	HasMembership       bool `json:"has_membership"`
+	HasActiveMembership bool `json:"has_active_membership"`
+}
+
+func (q *Queries) ParticipantMembershipState(ctx context.Context, arg ParticipantMembershipStateParams) (ParticipantMembershipStateRow, error) {
+	row := q.db.QueryRow(ctx, participantMembershipState, arg.PairID, arg.ParticipantID)
+	var i ParticipantMembershipStateRow
+	err := row.Scan(&i.HasMembership, &i.HasActiveMembership)
+	return i, err
+}
+
+const revokeInitialInvitesForTermination = `-- name: RevokeInitialInvitesForTermination :execrows
+UPDATE initial_invite
+SET revoked_at = p.terminated_at
+FROM pair AS p
+WHERE p.id = $1
+  AND p.terminated_at IS NOT NULL
+  AND initial_invite.pair_id = p.id
+  AND initial_invite.revoked_at IS NULL
+  AND initial_invite.redeemed_at IS NULL
+`
+
+func (q *Queries) RevokeInitialInvitesForTermination(ctx context.Context, pairID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeInitialInvitesForTermination, pairID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const revokeRejoinInvitesForTermination = `-- name: RevokeRejoinInvitesForTermination :execrows
+UPDATE rejoin_invite
+SET revoked_at = p.terminated_at
+FROM pair AS p
+WHERE p.id = $1
+  AND p.terminated_at IS NOT NULL
+  AND rejoin_invite.pair_id = p.id
+  AND rejoin_invite.revoked_at IS NULL
+  AND rejoin_invite.redeemed_at IS NULL
+`
+
+func (q *Queries) RevokeRejoinInvitesForTermination(ctx context.Context, pairID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeRejoinInvitesForTermination, pairID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updateIntendedPersonName = `-- name: UpdateIntendedPersonName :one

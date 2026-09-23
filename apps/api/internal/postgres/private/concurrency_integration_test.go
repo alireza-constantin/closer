@@ -12,13 +12,17 @@ import (
 	"time"
 
 	domaininvite "github.com/alireza-constantin/closer/apps/api/internal/invite"
+	domainpair "github.com/alireza-constantin/closer/apps/api/internal/pair"
 	"github.com/alireza-constantin/closer/apps/api/internal/postgres"
 	postgresinvite "github.com/alireza-constantin/closer/apps/api/internal/postgres/invite"
+	postgrespair "github.com/alireza-constantin/closer/apps/api/internal/postgres/pair"
 	postgresprivate "github.com/alireza-constantin/closer/apps/api/internal/postgres/private"
 	postgresquestion "github.com/alireza-constantin/closer/apps/api/internal/postgres/question"
 	"github.com/alireza-constantin/closer/apps/api/internal/postgres/testdb"
+	postgrestogether "github.com/alireza-constantin/closer/apps/api/internal/postgres/together"
 	domain "github.com/alireza-constantin/closer/apps/api/internal/private"
 	"github.com/alireza-constantin/closer/apps/api/internal/question"
+	domaintogether "github.com/alireza-constantin/closer/apps/api/internal/together"
 )
 
 func testUUID(t *testing.T, pool *postgres.Pool) string {
@@ -75,6 +79,102 @@ func createMutuallyRevealedRound(t *testing.T, f fixture) (domain.Round, domain.
 		}
 	}
 	return round, a, b
+}
+
+func createActiveTogetherQuestion(t *testing.T, f fixture, text string) string {
+	t.Helper()
+	created, err := f.questions.Create(context.Background(), question.RevisionFields{
+		Text: text, Category: "fun", RelationshipFit: "both", ModeFit: "together", Intensity: "light",
+	}, f.adminID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.questions.SetActivity(context.Background(), created.ID, "activate", f.adminID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+			_, _ = db.Exec(context.Background(), "UPDATE question SET current_revision_id = NULL WHERE id = $1", created.ID)
+			_, _ = db.Exec(context.Background(), "DELETE FROM question_revision WHERE question_id = $1", created.ID)
+			_, _ = db.Exec(context.Background(), "DELETE FROM question WHERE id = $1", created.ID)
+			return nil
+		})
+	})
+	return created.ID
+}
+
+func racePairMutationWithTermination(t *testing.T, f fixture, participantID string, notFound error, mutate func() error) error {
+	t.Helper()
+	terminationService := domainpair.NewService(postgrespair.NewStore(f.pool))
+	start := make(chan struct{})
+	ready := make(chan struct{}, 2)
+	type outcome struct {
+		operation string
+		err       error
+	}
+	results := make(chan outcome, 2)
+	var wait sync.WaitGroup
+	wait.Add(2)
+	go func() {
+		defer wait.Done()
+		ready <- struct{}{}
+		<-start
+		results <- outcome{operation: "mutation", err: mutate()}
+	}()
+	go func() {
+		defer wait.Done()
+		ready <- struct{}{}
+		<-start
+		_, err := terminationService.Terminate(context.Background(), participantID, f.pairID)
+		results <- outcome{operation: "termination", err: err}
+	}()
+	<-ready
+	<-ready
+	close(start)
+	wait.Wait()
+	close(results)
+	var mutationErr error
+	for result := range results {
+		if result.operation == "mutation" {
+			mutationErr = result.err
+		} else if result.err != nil {
+			t.Fatalf("termination race command failed: %v", result.err)
+		}
+	}
+	if mutationErr != nil && !errors.Is(mutationErr, notFound) {
+		t.Fatalf("racing mutation failed with unexpected error: %v", mutationErr)
+	}
+	var terminated bool
+	var activeMemberships, activeEras, activeSessions, unresolvedCandidates, usableInitialInvites, usableRejoinInvites int
+	if err := f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		if err := db.QueryRow(context.Background(), "SELECT terminated_at IS NOT NULL FROM pair WHERE id=$1", f.pairID).Scan(&terminated); err != nil {
+			return err
+		}
+		if err := db.QueryRow(context.Background(), "SELECT count(*) FROM pair_membership WHERE pair_id=$1 AND ended_at IS NULL", f.pairID).Scan(&activeMemberships); err != nil {
+			return err
+		}
+		if err := db.QueryRow(context.Background(), "SELECT count(*) FROM pair_membership_era WHERE pair_id=$1 AND ended_at IS NULL", f.pairID).Scan(&activeEras); err != nil {
+			return err
+		}
+		if err := db.QueryRow(context.Background(), "SELECT count(*) FROM together_session WHERE pair_id=$1 AND ended_at IS NULL", f.pairID).Scan(&activeSessions); err != nil {
+			return err
+		}
+		if err := db.QueryRow(context.Background(), `SELECT count(*) FROM private_question_candidate candidate
+			JOIN private_conversation conversation ON conversation.id=candidate.conversation_id
+			WHERE conversation.pair_id=$1 AND candidate.state='unresolved'`, f.pairID).Scan(&unresolvedCandidates); err != nil {
+			return err
+		}
+		if err := db.QueryRow(context.Background(), "SELECT count(*) FROM initial_invite WHERE pair_id=$1 AND revoked_at IS NULL AND redeemed_at IS NULL", f.pairID).Scan(&usableInitialInvites); err != nil {
+			return err
+		}
+		return db.QueryRow(context.Background(), "SELECT count(*) FROM rejoin_invite WHERE pair_id=$1 AND revoked_at IS NULL AND redeemed_at IS NULL", f.pairID).Scan(&usableRejoinInvites)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !terminated || activeMemberships != 0 || activeEras != 0 || activeSessions != 0 || unresolvedCandidates != 0 || usableInitialInvites != 0 || usableRejoinInvites != 0 {
+		t.Fatalf("race ended in partial state: terminated=%v memberships=%d eras=%d sessions=%d candidates=%d initialInvites=%d rejoinInvites=%d", terminated, activeMemberships, activeEras, activeSessions, unresolvedCandidates, usableInitialInvites, usableRejoinInvites)
+	}
+	return mutationErr
 }
 
 func createReplacementParticipant(t *testing.T, f fixture) string {
@@ -1888,6 +1988,7 @@ func TestGuestRejoinClosesEraAndReplacementCannotAccessOldPrivateOrTogetherState
 func TestGuestRejoinSerializesWithPairTermination(t *testing.T) {
 	f := openFixture(t)
 	rejoinService := domaininvite.NewService(postgresinvite.NewStore(f.pool))
+	terminationService := domainpair.NewService(postgrespair.NewStore(f.pool))
 	issued, err := rejoinService.IssueRejoin(context.Background(), f.secondID, f.pairID)
 	if err != nil {
 		t.Fatalf("issue replacement credential: %v", err)
@@ -1929,26 +2030,7 @@ func TestGuestRejoinSerializesWithPairTermination(t *testing.T) {
 	go func() {
 		defer wait.Done()
 		<-start
-		err := f.pool.WithinTx(context.Background(), func(db postgres.QueryDB) error {
-			var lockedPair string
-			if err := db.QueryRow(context.Background(), "SELECT id::text FROM pair WHERE id=$1 FOR UPDATE", f.pairID).Scan(&lockedPair); err != nil {
-				return err
-			}
-			if _, err := db.Exec(context.Background(), "UPDATE pair SET terminated_at=clock_timestamp() WHERE id=$1 AND terminated_at IS NULL", f.pairID); err != nil {
-				return err
-			}
-			if _, err := db.Exec(context.Background(), "UPDATE pair_membership_era SET ended_at=COALESCE(ended_at, clock_timestamp()) WHERE pair_id=$1", f.pairID); err != nil {
-				return err
-			}
-			if _, err := db.Exec(context.Background(), `UPDATE pair_membership AS membership
-				SET ended_at=COALESCE(membership.ended_at, clock_timestamp()),
-				    ended_display_name=COALESCE(membership.ended_display_name, participant.display_name)
-				FROM participant WHERE membership.participant_id=participant.id AND membership.pair_id=$1`, f.pairID); err != nil {
-				return err
-			}
-			_, err := db.Exec(context.Background(), "UPDATE rejoin_invite SET revoked_at=clock_timestamp() WHERE pair_id=$1 AND redeemed_at IS NULL AND revoked_at IS NULL", f.pairID)
-			return err
-		})
+		_, err := terminationService.Terminate(context.Background(), f.secondID, f.pairID)
 		results <- result{operation: "terminate", err: err}
 	}()
 	close(start)
@@ -1995,4 +2077,368 @@ func TestGuestRejoinSerializesWithPairTermination(t *testing.T) {
 	if !terminated || activeMemberships != 0 || activeEras != 0 || memberships != wantMemberships || eras != wantEras {
 		t.Fatalf("termination/rejoin final state: terminated=%v active=%d/%d totals=%d/%d want=%d/%d", terminated, activeMemberships, activeEras, memberships, eras, wantMemberships, wantEras)
 	}
+}
+
+func TestFormerReplacementEraParticipantCannotTerminateActivePair(t *testing.T) {
+	f := openFixture(t)
+	rejoinService := domaininvite.NewService(postgresinvite.NewStore(f.pool))
+	issued, err := rejoinService.IssueRejoin(context.Background(), f.secondID, f.pairID)
+	if err != nil {
+		t.Fatalf("issue replacement credential: %v", err)
+	}
+	var replacementAuthID string
+	if err := f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		return db.QueryRow(context.Background(), "INSERT INTO auth_user(id, kind, created_at) VALUES (gen_random_uuid(), 'anonymous', now()) RETURNING id::text").Scan(&replacementAuthID)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rejoined, err := rejoinService.Rejoin(context.Background(), issued.Token, replacementAuthID, "Replacement")
+	if err != nil {
+		t.Fatalf("replace former member: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+			_, _ = db.Exec(context.Background(), "DELETE FROM pair WHERE id=$1", f.pairID)
+			_, _ = db.Exec(context.Background(), "DELETE FROM participant WHERE id=$1", rejoined.ParticipantID)
+			_, _ = db.Exec(context.Background(), "DELETE FROM auth_user WHERE id=$1", replacementAuthID)
+			return nil
+		})
+	})
+
+	terminationService := domainpair.NewService(postgrespair.NewStore(f.pool))
+	if _, err := terminationService.Terminate(context.Background(), f.firstID, f.pairID); !errors.Is(err, domainpair.ErrPairNotFound) {
+		t.Fatalf("former replacement-era member termination error = %v, want Pair not found", err)
+	}
+	if _, err := terminationService.Terminate(context.Background(), f.secondID, f.pairID); err != nil {
+		t.Fatalf("current member termination: %v", err)
+	}
+}
+
+func TestPairTerminationInvalidatesCandidateAndPreservesFormerPrivateHistory(t *testing.T) {
+	f := openFixture(t)
+	createActiveQuestion(t, f, "deep", "Unresolved Deep candidate")
+	unresolved, err := f.service.StartOrResume(context.Background(), domain.StartInput{
+		ParticipantID: f.firstID, PairID: f.pairID, Category: "deep",
+	})
+	if err != nil || unresolved.Candidate == nil {
+		t.Fatalf("start unresolved conversation = %+v err=%v", unresolved, err)
+	}
+	asked, err := f.service.StartOrResume(context.Background(), domain.StartInput{
+		ParticipantID: f.firstID, PairID: f.pairID, Category: "fun",
+	})
+	if err != nil || asked.Candidate == nil {
+		t.Fatalf("start asked conversation = %+v err=%v", asked, err)
+	}
+	round, err := f.service.Ask(context.Background(), domain.AskInput{
+		ParticipantID: f.firstID, PairID: f.pairID,
+		ConversationID: asked.ConversationID, CandidateID: asked.Candidate.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.service.Answer(context.Background(), domain.AnswerInput{
+		RoundInput: domain.RoundInput{ParticipantID: f.firstID, PairID: f.pairID, RoundID: round.ID},
+		Body:       "Only the author can see this after ending",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	terminationService := domainpair.NewService(postgrespair.NewStore(f.pool))
+	if _, err := terminationService.Terminate(context.Background(), f.firstID, f.pairID); err != nil {
+		t.Fatalf("terminate Pair: %v", err)
+	}
+	var candidateState string
+	var revisionStillPinned bool
+	if err := f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		if err := db.QueryRow(context.Background(), "SELECT state::text FROM private_question_candidate WHERE id=$1", unresolved.Candidate.ID).Scan(&candidateState); err != nil {
+			return err
+		}
+		return db.QueryRow(context.Background(), "SELECT question_revision_id=$2 FROM private_round WHERE id=$1", round.ID, round.QuestionRevisionID).Scan(&revisionStillPinned)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if candidateState != "invalidated" || !revisionStillPinned {
+		t.Fatalf("termination candidate/revision state = %q/%v", candidateState, revisionStillPinned)
+	}
+	if _, err := f.service.StartOrResume(context.Background(), domain.StartInput{
+		ParticipantID: f.firstID, PairID: f.pairID, Category: "memories",
+	}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("post-termination Private start error=%v, want not found", err)
+	}
+	if _, err := f.service.Answer(context.Background(), domain.AnswerInput{
+		RoundInput: domain.RoundInput{ParticipantID: f.secondID, PairID: f.pairID, RoundID: round.ID},
+		Body:       "Must be rejected",
+	}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("post-termination answer error=%v, want not found", err)
+	}
+
+	firstHistory, err := f.service.History(context.Background(), domain.HistoryInput{ParticipantID: f.firstID, PairID: f.pairID, Limit: 20})
+	if err != nil {
+		t.Fatalf("former first-member history: %v", err)
+	}
+	secondHistory, err := f.service.History(context.Background(), domain.HistoryInput{ParticipantID: f.secondID, PairID: f.pairID, Limit: 20})
+	if err != nil {
+		t.Fatalf("former second-member history: %v", err)
+	}
+	findRound := func(page domain.HistoryPage) *domain.HistoryRound {
+		for index := range page.Rounds {
+			if page.Rounds[index].ID == round.ID {
+				return &page.Rounds[index]
+			}
+		}
+		return nil
+	}
+	firstRound, secondRound := findRound(firstHistory), findRound(secondHistory)
+	if firstRound == nil || len(firstRound.Answers) != 1 || firstRound.Answers[0].DisplayName != "First" || firstRound.Answers[0].Body != "Only the author can see this after ending" {
+		t.Fatalf("former author's answer history = %+v", firstRound)
+	}
+	if secondRound == nil || len(secondRound.Answers) != 0 {
+		t.Fatalf("former other member received an unanswered response: %+v", secondRound)
+	}
+}
+
+func TestConcurrentPairTerminationCommandsAreIdempotent(t *testing.T) {
+	f := openFixture(t)
+	service := domainpair.NewService(postgrespair.NewStore(f.pool))
+	start := make(chan struct{})
+	type result struct {
+		termination domainpair.Termination
+		err         error
+	}
+	results := make(chan result, 2)
+	var wait sync.WaitGroup
+	for _, participantID := range []string{f.firstID, f.secondID} {
+		wait.Add(1)
+		go func(participantID string) {
+			defer wait.Done()
+			<-start
+			termination, err := service.Terminate(context.Background(), participantID, f.pairID)
+			results <- result{termination: termination, err: err}
+		}(participantID)
+	}
+	close(start)
+	wait.Wait()
+	close(results)
+	var first *domainpair.Termination
+	changed := 0
+	for outcome := range results {
+		if outcome.err != nil {
+			t.Fatalf("concurrent termination: %v", outcome.err)
+		}
+		if outcome.termination.Changed {
+			changed++
+		}
+		if first == nil {
+			copy := outcome.termination
+			first = &copy
+		} else if !first.TerminatedAt.Equal(outcome.termination.TerminatedAt) {
+			t.Fatalf("concurrent commands returned different terminal timestamps: %v vs %v", first.TerminatedAt, outcome.termination.TerminatedAt)
+		}
+	}
+	if changed != 1 || first == nil || first.State != "terminated" {
+		t.Fatalf("termination winners=%d projection=%+v", changed, first)
+	}
+}
+
+func TestTerminationSerializesWithPrivateCandidateAndAsk(t *testing.T) {
+	t.Run("candidate creation", func(t *testing.T) {
+		f := openFixture(t)
+		createActiveQuestion(t, f, "deep", "Candidate versus termination")
+		var created domain.View
+		err := racePairMutationWithTermination(t, f, f.firstID, domain.ErrNotFound, func() error {
+			var err error
+			created, err = f.service.StartOrResume(context.Background(), domain.StartInput{
+				ParticipantID: f.firstID, PairID: f.pairID, Category: "deep",
+			})
+			return err
+		})
+		if err == nil && created.Candidate == nil {
+			t.Fatalf("committed candidate creation returned no candidate: %+v", created)
+		}
+		var unresolved int
+		if dbErr := f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+			return db.QueryRow(context.Background(), `SELECT count(*) FROM private_question_candidate candidate
+				JOIN private_conversation conversation ON conversation.id=candidate.conversation_id
+				WHERE conversation.pair_id=$1 AND candidate.state='unresolved'`, f.pairID).Scan(&unresolved)
+		}); dbErr != nil {
+			t.Fatal(dbErr)
+		}
+		if unresolved != 0 {
+			t.Fatalf("termination left %d unresolved candidates", unresolved)
+		}
+	})
+
+	t.Run("Ask", func(t *testing.T) {
+		f := openFixture(t)
+		view, err := f.service.StartOrResume(context.Background(), domain.StartInput{
+			ParticipantID: f.firstID, PairID: f.pairID, Category: "fun",
+		})
+		if err != nil || view.Candidate == nil {
+			t.Fatalf("start conversation: %+v %v", view, err)
+		}
+		var round domain.Round
+		err = racePairMutationWithTermination(t, f, f.firstID, domain.ErrNotFound, func() error {
+			var askErr error
+			round, askErr = f.service.Ask(context.Background(), domain.AskInput{
+				ParticipantID: f.firstID, PairID: f.pairID,
+				ConversationID: view.ConversationID, CandidateID: view.Candidate.ID,
+			})
+			return askErr
+		})
+		if err == nil && round.ID == "" {
+			t.Fatal("Ask committed without a Round ID")
+		}
+	})
+}
+
+func TestTerminationSerializesWithPrivateAnswerRevealReactionReplyAndAskAnother(t *testing.T) {
+	t.Run("answer", func(t *testing.T) {
+		f := openFixture(t)
+		view, err := f.service.StartOrResume(context.Background(), domain.StartInput{ParticipantID: f.firstID, PairID: f.pairID, Category: "fun"})
+		if err != nil || view.Candidate == nil {
+			t.Fatalf("start: %+v %v", view, err)
+		}
+		round, err := f.service.Ask(context.Background(), domain.AskInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: view.ConversationID, CandidateID: view.Candidate.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		answerInput := domain.AnswerInput{RoundInput: domain.RoundInput{ParticipantID: f.secondID, PairID: f.pairID, RoundID: round.ID}, Body: "race answer"}
+		_ = racePairMutationWithTermination(t, f, f.firstID, domain.ErrNotFound, func() error {
+			_, mutateErr := f.service.Answer(context.Background(), answerInput)
+			return mutateErr
+		})
+	})
+
+	t.Run("reveal", func(t *testing.T) {
+		f := openFixture(t)
+		_, a, _ := createMutuallyAnsweredRound(t, f)
+		_ = racePairMutationWithTermination(t, f, f.firstID, domain.ErrNotFound, func() error {
+			_, mutateErr := f.service.Reveal(context.Background(), a)
+			return mutateErr
+		})
+	})
+
+	for _, command := range []string{"reaction", "reply"} {
+		t.Run(command, func(t *testing.T) {
+			f := openFixture(t)
+			_, a, _ := createMutuallyRevealedRound(t, f)
+			_ = racePairMutationWithTermination(t, f, f.firstID, domain.ErrNotFound, func() error {
+				if command == "reaction" {
+					_, err := f.service.SetReaction(context.Background(), domain.ReactionInput{RoundInput: a, Value: "heart"})
+					return err
+				}
+				_, err := f.service.SetReply(context.Background(), domain.ReplyInput{RoundInput: a, Body: "race reply"})
+				return err
+			})
+		})
+	}
+
+	t.Run("Ask another", func(t *testing.T) {
+		f := openFixture(t)
+		createActiveQuestion(t, f, "fun", "Next candidate after completed Round")
+		_, a, _ := createMutuallyRevealedRound(t, f)
+		_ = racePairMutationWithTermination(t, f, f.firstID, domain.ErrNotFound, func() error {
+			_, err := f.service.Progress(context.Background(), domain.ProgressInput{
+				RoundInput: a, ClientRequestID: testUUID(t, f.pool), Action: "ask_another", Category: "fun",
+			})
+			return err
+		})
+	})
+}
+
+func createMutuallyAnsweredRound(t *testing.T, f fixture) (domain.Round, domain.RoundInput, domain.RoundInput) {
+	t.Helper()
+	started, err := f.service.StartOrResume(context.Background(), domain.StartInput{ParticipantID: f.firstID, PairID: f.pairID, Category: "fun"})
+	if err != nil || started.Candidate == nil {
+		t.Fatalf("start: %+v %v", started, err)
+	}
+	round, err := f.service.Ask(context.Background(), domain.AskInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: started.ConversationID, CandidateID: started.Candidate.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := domain.RoundInput{ParticipantID: f.firstID, PairID: f.pairID, RoundID: round.ID}
+	b := domain.RoundInput{ParticipantID: f.secondID, PairID: f.pairID, RoundID: round.ID}
+	for _, input := range []domain.RoundInput{a, b} {
+		if _, err := f.service.Answer(context.Background(), domain.AnswerInput{RoundInput: input, Body: "complete"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return round, a, b
+}
+
+func TestTerminationSerializesWithTogetherStartAndAdvance(t *testing.T) {
+	t.Run("Start", func(t *testing.T) {
+		f := openFixture(t)
+		createActiveTogetherQuestion(t, f, "Together start race first")
+		service := domaintogether.NewService(postgrestogether.NewStore(f.pool))
+		var started domaintogether.StartResult
+		err := racePairMutationWithTermination(t, f, f.firstID, domaintogether.ErrPairNotFound, func() error {
+			var mutateErr error
+			started, mutateErr = service.Start(context.Background(), domaintogether.StartInput{
+				ParticipantID: f.firstID, PairID: f.pairID, Category: "fun",
+				ClientRequestID: testUUID(t, f.pool), SelectionSeed: "termination-start-race",
+			})
+			return mutateErr
+		})
+		if err == nil && started.SessionID == "" {
+			t.Fatal("Together Start committed without a Session ID")
+		}
+	})
+
+	t.Run("Advance", func(t *testing.T) {
+		f := openFixture(t)
+		createActiveTogetherQuestion(t, f, "Together advance race first")
+		createActiveTogetherQuestion(t, f, "Together advance race second")
+		service := domaintogether.NewService(postgrestogether.NewStore(f.pool))
+		started, err := service.Start(context.Background(), domaintogether.StartInput{
+			ParticipantID: f.firstID, PairID: f.pairID, Category: "fun", SelectionSeed: "termination-advance-race",
+		})
+		if err != nil {
+			t.Fatalf("start Together before race: %v", err)
+		}
+		_ = racePairMutationWithTermination(t, f, f.firstID, domaintogether.ErrPairNotFound, func() error {
+			_, err := service.Advance(context.Background(), domaintogether.AdvanceInput{
+				PlaybackInput: domaintogether.PlaybackInput{ParticipantID: f.firstID, PairID: f.pairID, SessionID: started.SessionID},
+				Action:        "next", ClientRequestID: testUUID(t, f.pool), CurrentQuestionID: started.QuestionID,
+			})
+			return err
+		})
+	})
+}
+
+func TestTerminationSerializesWithInitialInviteRedemption(t *testing.T) {
+	f := openFixture(t)
+	pairService := domainpair.NewService(postgrespair.NewStore(f.pool))
+	created, err := pairService.Create(context.Background(), domainpair.CreateInput{
+		ParticipantID: f.firstID, IntendedPersonName: "Claim race", RelationshipType: "partner", ClientRequestID: testUUID(t, f.pool),
+	})
+	if err != nil {
+		t.Fatalf("create unclaimed Pair: %v", err)
+	}
+	claimantID := createReplacementParticipant(t, f)
+	var claimantAuthID string
+	if err := f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		return db.QueryRow(context.Background(), "SELECT auth_user_id::text FROM participant WHERE id=$1", claimantID).Scan(&claimantAuthID)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+			_, _ = db.Exec(context.Background(), "DELETE FROM pair WHERE id=$1", created.ID)
+			_, _ = db.Exec(context.Background(), "DELETE FROM participant WHERE id=$1", claimantID)
+			_, _ = db.Exec(context.Background(), "DELETE FROM auth_user WHERE id=$1", claimantAuthID)
+			return nil
+		})
+	})
+	inviteService := domaininvite.NewService(postgresinvite.NewStore(f.pool))
+	issued, err := inviteService.Issue(context.Background(), f.firstID, created.ID)
+	if err != nil {
+		t.Fatalf("issue initial invite: %v", err)
+	}
+	racedFixture := f
+	racedFixture.pairID = created.ID
+	_ = racePairMutationWithTermination(t, racedFixture, f.firstID, domaininvite.ErrUnavailable, func() error {
+		_, err := inviteService.Claim(context.Background(), issued.Token, claimantID)
+		return err
+	})
 }

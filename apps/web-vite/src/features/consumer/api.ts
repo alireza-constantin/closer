@@ -66,6 +66,15 @@ export async function createPair(input: {
 export async function getPair(pairId: string) {
   return pairEntrySchema.parse(await requestJson(`/pairs/${encodeURIComponent(pairId)}`));
 }
+export async function terminatePair(pairId: string) {
+  return z
+    .object({ pairId: z.string(), state: z.literal("terminated"), terminatedAt: z.string() })
+    .parse(
+      await requestJson(`/pairs/${encodeURIComponent(pairId)}/terminate`, {
+        method: "POST",
+      }),
+    );
+}
 export const inviteStateSchema = z.object({
   state: z.string(),
   token: z.string().optional(),
