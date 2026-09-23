@@ -294,7 +294,7 @@ func (s *Store) RevokeRejoin(ctx context.Context, participantID, pairID string) 
 	})
 }
 
-func (s *Store) Rejoin(ctx context.Context, tokenHash [32]byte, authUserID, _ string) (domain.Rejoined, error) {
+func (s *Store) Rejoin(ctx context.Context, tokenHash [32]byte, authUserID, displayName string) (domain.Rejoined, error) {
 	var result domain.Rejoined
 	authUUID, err := parseUUID(authUserID)
 	if err != nil {
@@ -334,6 +334,13 @@ func (s *Store) Rejoin(ctx context.Context, tokenHash [32]byte, authUserID, _ st
 		if err != nil {
 			return err
 		}
+		active, err := queries.HasActiveAuthSessionForRejoinTarget(ctx, target.AuthUserID)
+		if err != nil {
+			return err
+		}
+		if active {
+			return domain.ErrRejoinUnavailable
+		}
 		era, err := queries.GetCurrentMembershipEraForRejoin(ctx, invite.PairID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.ErrRejoinUnavailable
@@ -356,14 +363,27 @@ func (s *Store) Rejoin(ctx context.Context, tokenHash [32]byte, authUserID, _ st
 		} else if !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
-		if count, err := queries.RebindParticipantAuthUserForRejoin(ctx, sqlc.RebindParticipantAuthUserForRejoinParams{
-			ParticipantID: target.ParticipantID,
-			OldAuthUserID: target.AuthUserID,
-			NewAuthUserID: authUUID,
+		if count, err := queries.EndTargetMembershipForRejoin(ctx, sqlc.EndTargetMembershipForRejoinParams{
+			MembershipID:     target.ID,
+			EndedDisplayName: pgtype.Text{String: target.DisplayName, Valid: true},
 		}); err != nil {
 			return err
 		} else if count != 1 {
 			return domain.ErrRejoinUnavailable
+		}
+		if count, err := queries.EndMembershipEraForRejoin(ctx, era.ID); err != nil {
+			return err
+		} else if count != 1 {
+			return domain.ErrRejoinUnavailable
+		}
+		if err := queries.InvalidatePrivateCandidatesForRejoinEra(ctx, era.ID); err != nil {
+			return err
+		}
+		if err := queries.CloseTogetherSessionsForRejoinEra(ctx, sqlc.CloseTogetherSessionsForRejoinEraParams{
+			PairID: invite.PairID,
+			EraID:  era.ID,
+		}); err != nil {
+			return err
 		}
 		if _, err := queries.RevokeAuthSessionsForUser(ctx, sqlc.RevokeAuthSessionsForUserParams{
 			AuthUserID: target.AuthUserID,
@@ -371,7 +391,36 @@ func (s *Store) Rejoin(ctx context.Context, tokenHash [32]byte, authUserID, _ st
 		}); err != nil {
 			return err
 		}
-		if count, err := queries.RedeemRejoinInvite(ctx, sqlc.RedeemRejoinInviteParams{ID: invite.ID, ParticipantID: target.ParticipantID}); err != nil {
+		replacementParticipantID, err := queries.CreateReplacementParticipantForRejoin(ctx, sqlc.CreateReplacementParticipantForRejoinParams{
+			AuthUserID:  authUUID,
+			DisplayName: displayName,
+		})
+		if err != nil {
+			return err
+		}
+		replacementMembershipID, err := queries.CreateReplacementMembershipForRejoin(ctx, sqlc.CreateReplacementMembershipForRejoinParams{
+			PairID:        invite.PairID,
+			ParticipantID: replacementParticipantID,
+			Slot:          invite.TargetSlot,
+		})
+		if err != nil {
+			return err
+		}
+		firstMembershipID, secondMembershipID := era.FirstMembershipID, era.SecondMembershipID
+		if invite.TargetSlot == sqlc.PairSlotFirst {
+			firstMembershipID = replacementMembershipID
+		} else {
+			secondMembershipID = replacementMembershipID
+		}
+		replacementEraID, err := queries.CreateReplacementMembershipEraForRejoin(ctx, sqlc.CreateReplacementMembershipEraForRejoinParams{
+			PairID:             invite.PairID,
+			FirstMembershipID:  firstMembershipID,
+			SecondMembershipID: secondMembershipID,
+		})
+		if err != nil {
+			return err
+		}
+		if count, err := queries.RedeemRejoinInvite(ctx, sqlc.RedeemRejoinInviteParams{ID: invite.ID, ParticipantID: replacementParticipantID}); err != nil {
 			return err
 		} else if count != 1 {
 			return domain.ErrRejoinUnavailable
@@ -379,7 +428,7 @@ func (s *Store) Rejoin(ctx context.Context, tokenHash [32]byte, authUserID, _ st
 		if err := queries.RevokeActiveRejoinInvitesForTarget(ctx, sqlc.RevokeActiveRejoinInvitesForTargetParams{PairID: invite.PairID, TargetSlot: invite.TargetSlot, TargetParticipantID: invite.TargetParticipantID}); err != nil {
 			return err
 		}
-		result = domain.Rejoined{PairID: invite.PairID.String(), MembershipEraID: era.ID.String(), ParticipantID: target.ParticipantID.String()}
+		result = domain.Rejoined{PairID: invite.PairID.String(), MembershipEraID: replacementEraID.String(), ParticipantID: replacementParticipantID.String()}
 		return nil
 	})
 	if err != nil {

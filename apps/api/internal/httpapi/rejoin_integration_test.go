@@ -12,7 +12,7 @@ import (
 	"github.com/alireza-constantin/closer/apps/api/internal/postgres"
 )
 
-func TestRejoinRebindsExistingParticipantAndPreservesMembershipEra(t *testing.T) {
+func TestRejoinReplacesGuestWithNewParticipantMembershipAndEra(t *testing.T) {
 	pool := openParticipantPairTestPool(t)
 	router, authService := newParticipantPairRouter(pool)
 	creator := createOnboardedTestActor(t, router, "Creator")
@@ -29,9 +29,9 @@ func TestRejoinRebindsExistingParticipantAndPreservesMembershipEra(t *testing.T)
 		t.Fatalf("old actor projection status=%d body=%s", beforeMe.Code, beforeMe.Body.String())
 	}
 	oldAuthUserID := oldActor.Actor.AuthUserID
-	participantID := guest.participantID
-	membershipID := currentMembershipID(t, pool, pairID, participantID)
-	eraID := currentEraID(t, pool, pairID)
+	oldParticipantID := guest.participantID
+	oldMembershipID := currentMembershipID(t, pool, pairID, oldParticipantID)
+	oldEraID := currentEraID(t, pool, pairID)
 	participantsBefore := countAll(t, pool, "participant")
 	membershipsBefore := countForPair(t, pool, "pair_membership", pairID)
 	erasBefore := countForPair(t, pool, "pair_membership_era", pairID)
@@ -49,12 +49,12 @@ func TestRejoinRebindsExistingParticipantAndPreservesMembershipEra(t *testing.T)
 	}
 
 	freshAuth := createAnonymousTestCookie(t, router)
-	redeem := performDomainRequest(router, http.MethodPost, "/api/v1/rejoin/"+credential.Token+"/redeem", map[string]string{"displayName": "Ignored recovery label"}, freshAuth)
+	redeem := performDomainRequest(router, http.MethodPost, "/api/v1/rejoin/"+credential.Token+"/redeem", map[string]string{"displayName": "Replacement Guest"}, freshAuth)
 	if redeem.Code != http.StatusOK {
 		t.Fatalf("redeem rejoin status=%d body=%s", redeem.Code, redeem.Body.String())
 	}
 	var result rejoinResponse
-	if err := json.Unmarshal(redeem.Body.Bytes(), &result); err != nil || result.PairID != pairID || result.ParticipantID != participantID || result.MembershipEraID != eraID {
+	if err := json.Unmarshal(redeem.Body.Bytes(), &result); err != nil || result.PairID != pairID || result.ParticipantID == oldParticipantID || result.MembershipEraID == oldEraID {
 		t.Fatalf("rejoin response=%s err=%v", redeem.Body.String(), err)
 	}
 
@@ -63,14 +63,45 @@ func TestRejoinRebindsExistingParticipantAndPreservesMembershipEra(t *testing.T)
 	if afterMe.Code != http.StatusOK || json.Unmarshal(afterMe.Body.Bytes(), &newActor) != nil || newActor.Actor == nil || newActor.Actor.Participant == nil {
 		t.Fatalf("new actor projection status=%d body=%s", afterMe.Code, afterMe.Body.String())
 	}
-	if newActor.Actor.AuthUserID == oldAuthUserID || newActor.Actor.Participant.ParticipantID != participantID {
-		t.Fatalf("rejoin did not rebind the existing participant: old=%s new=%s participant=%s", oldAuthUserID, newActor.Actor.AuthUserID, newActor.Actor.Participant.ParticipantID)
+	if newActor.Actor.AuthUserID == oldAuthUserID || newActor.Actor.Participant.ParticipantID != result.ParticipantID {
+		t.Fatalf("new auth did not resolve the replacement participant: old auth=%s new auth=%s participant=%s result=%s", oldAuthUserID, newActor.Actor.AuthUserID, newActor.Actor.Participant.ParticipantID, result.ParticipantID)
 	}
-	if currentMembershipID(t, pool, pairID, participantID) != membershipID || currentEraID(t, pool, pairID) != eraID {
-		t.Fatal("rejoin changed membership or era identity")
+	newMembershipID := currentMembershipID(t, pool, pairID, result.ParticipantID)
+	newEraID := currentEraID(t, pool, pairID)
+	if newMembershipID == oldMembershipID || newEraID == oldEraID {
+		t.Fatalf("replacement reused old membership or era: old=%s/%s new=%s/%s", oldMembershipID, oldEraID, newMembershipID, newEraID)
 	}
-	if countAll(t, pool, "participant") != participantsBefore || countForPair(t, pool, "pair_membership", pairID) != membershipsBefore || countForPair(t, pool, "pair_membership_era", pairID) != erasBefore {
-		t.Fatal("rejoin created a participant, membership, or era")
+	if countAll(t, pool, "participant") != participantsBefore+1 || countForPair(t, pool, "pair_membership", pairID) != membershipsBefore+1 || countForPair(t, pool, "pair_membership_era", pairID) != erasBefore+1 {
+		t.Fatal("rejoin did not create exactly one participant, membership, and era")
+	}
+	var oldMembershipEnded bool
+	var oldEraEnded bool
+	var oldDisplayName string
+	var oldAuthOwner string
+	var replacementDisplayName string
+	var newSlot string
+	if err := pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		if err := db.QueryRow(context.Background(), "SELECT ended_at IS NOT NULL, ended_display_name FROM pair_membership WHERE id=$1", oldMembershipID).Scan(&oldMembershipEnded, &oldDisplayName); err != nil {
+			return err
+		}
+		if err := db.QueryRow(context.Background(), "SELECT ended_at IS NOT NULL FROM pair_membership_era WHERE id=$1", oldEraID).Scan(&oldEraEnded); err != nil {
+			return err
+		}
+		if err := db.QueryRow(context.Background(), "SELECT slot::text FROM pair_membership WHERE id=$1", newMembershipID).Scan(&newSlot); err != nil {
+			return err
+		}
+		if err := db.QueryRow(context.Background(), "SELECT auth_user_id::text FROM participant WHERE id=$1", oldParticipantID).Scan(&oldAuthOwner); err != nil {
+			return err
+		}
+		return db.QueryRow(context.Background(), "SELECT display_name FROM participant WHERE id=$1", result.ParticipantID).Scan(&replacementDisplayName)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !oldMembershipEnded || !oldEraEnded || oldDisplayName != "Guest" || newSlot != "second" || replacementDisplayName != "Replacement Guest" {
+		t.Fatalf("replacement transition ended=%v/%v oldName=%q slot=%q newName=%q", oldMembershipEnded, oldEraEnded, oldDisplayName, newSlot, replacementDisplayName)
+	}
+	if oldAuthOwner != oldAuthUserID {
+		t.Fatalf("rejoin transferred former Participant ownership: auth owner=%s want=%s", oldAuthOwner, oldAuthUserID)
 	}
 	if _, err := authService.ResolveSession(context.Background(), guest.cookie.Value); !errors.Is(err, auth.ErrUnauthenticated) {
 		t.Fatalf("old auth session still resolves after rejoin: %v", err)
@@ -192,8 +223,71 @@ func TestRejoinCredentialIsSingleUseUnderConcurrentRedemption(t *testing.T) {
 	if wins != 1 || conflicts != 1 {
 		t.Fatalf("rejoin race wins/conflicts=%d/%d", wins, conflicts)
 	}
-	if countForPair(t, pool, "pair_membership", pairID) != 2 || countForPair(t, pool, "pair_membership_era", pairID) != 1 {
-		t.Fatal("rejoin race produced duplicate membership or era")
+	if countForPair(t, pool, "pair_membership", pairID) != 3 || countForPair(t, pool, "pair_membership_era", pairID) != 2 {
+		t.Fatal("rejoin race did not produce exactly one replacement membership and era")
+	}
+}
+
+func TestRejoinRedemptionSerializesWithCredentialReplacement(t *testing.T) {
+	pool := openParticipantPairTestPool(t)
+	router, authService := newParticipantPairRouter(pool)
+	creator := createOnboardedTestActor(t, router, "Rotation creator")
+	guest := createOnboardedTestActor(t, router, "Rotation guest")
+	pairID, initialToken := issueInviteForTest(t, router, creator, "Rotation guest")
+	if response := performDomainRequest(router, http.MethodPost, "/api/v1/invites/"+initialToken+"/redeem", nil, guest.cookie); response.Code != http.StatusOK {
+		t.Fatalf("claim status=%d body=%s", response.Code, response.Body.String())
+	}
+	if err := authService.RevokeSession(context.Background(), guest.cookie.Value); err != nil {
+		t.Fatal(err)
+	}
+	issued := performDomainRequest(router, http.MethodPost, "/api/v1/pairs/"+pairID+"/rejoin", nil, creator.cookie)
+	var original rejoinIssueResponse
+	if issued.Code != http.StatusCreated || json.Unmarshal(issued.Body.Bytes(), &original) != nil {
+		t.Fatalf("issue rejoin status=%d body=%s", issued.Code, issued.Body.String())
+	}
+	freshAuth := createAnonymousTestCookie(t, router)
+	start := make(chan struct{})
+	type raceResponse struct {
+		operation string
+		status    int
+	}
+	responses := make(chan raceResponse, 2)
+	var wait sync.WaitGroup
+	wait.Add(2)
+	go func() {
+		defer wait.Done()
+		<-start
+		responses <- raceResponse{operation: "redeem", status: performDomainRequest(router, http.MethodPost, "/api/v1/rejoin/"+original.Token+"/redeem", map[string]string{"displayName": "Rotation winner"}, freshAuth).Code}
+	}()
+	go func() {
+		defer wait.Done()
+		<-start
+		responses <- raceResponse{operation: "rotate", status: performDomainRequest(router, http.MethodPost, "/api/v1/pairs/"+pairID+"/rejoin", nil, creator.cookie).Code}
+	}()
+	close(start)
+	wait.Wait()
+	close(responses)
+	redeemStatus, rotateStatus := 0, 0
+	for response := range responses {
+		switch response.operation {
+		case "redeem":
+			redeemStatus = response.status
+		case "rotate":
+			rotateStatus = response.status
+		default:
+			t.Fatalf("unexpected race operation=%q status=%d", response.operation, response.status)
+		}
+	}
+	if !((redeemStatus == http.StatusOK && rotateStatus == http.StatusConflict) || (redeemStatus == http.StatusConflict && rotateStatus == http.StatusCreated)) {
+		t.Fatalf("rejoin/credential-rotation race statuses=%d/%d", redeemStatus, rotateStatus)
+	}
+	wantMemberships, wantEras := 2, 1
+	if redeemStatus == http.StatusOK {
+		wantMemberships++
+		wantEras++
+	}
+	if countForPair(t, pool, "pair_membership", pairID) != wantMemberships || countForPair(t, pool, "pair_membership_era", pairID) != wantEras {
+		t.Fatal("credential-rotation race left an inconsistent membership era")
 	}
 }
 

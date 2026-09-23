@@ -14,6 +14,7 @@ type Querier interface {
 	AddQuestionLifecycleEvent(ctx context.Context, arg AddQuestionLifecycleEventParams) error
 	ClearIntendedPersonName(ctx context.Context, pairID pgtype.UUID) error
 	ClosePreclaimTogetherSessions(ctx context.Context, pairID pgtype.UUID) error
+	CloseTogetherSessionsForRejoinEra(ctx context.Context, arg CloseTogetherSessionsForRejoinEraParams) error
 	CompletePrivateRound(ctx context.Context, arg CompletePrivateRoundParams) (int64, error)
 	CountMutuallyCompletedPrivateRounds(ctx context.Context, conversationID pgtype.UUID) (int32, error)
 	CountPrivateRoundsForConversation(ctx context.Context, conversationID pgtype.UUID) (int32, error)
@@ -38,6 +39,9 @@ type Querier interface {
 	CreateQuestionRevision(ctx context.Context, arg CreateQuestionRevisionParams) (QuestionRevision, error)
 	CreateRegisteredAuthUser(ctx context.Context, arg CreateRegisteredAuthUserParams) (AuthUser, error)
 	CreateRejoinInvite(ctx context.Context, arg CreateRejoinInviteParams) (CreateRejoinInviteRow, error)
+	CreateReplacementMembershipEraForRejoin(ctx context.Context, arg CreateReplacementMembershipEraForRejoinParams) (pgtype.UUID, error)
+	CreateReplacementMembershipForRejoin(ctx context.Context, arg CreateReplacementMembershipForRejoinParams) (pgtype.UUID, error)
+	CreateReplacementParticipantForRejoin(ctx context.Context, arg CreateReplacementParticipantForRejoinParams) (pgtype.UUID, error)
 	CreateTogetherSession(ctx context.Context, arg CreateTogetherSessionParams) (TogetherSession, error)
 	CreateTogetherSessionQuestion(ctx context.Context, arg CreateTogetherSessionQuestionParams) (TogetherSessionQuestion, error)
 	// Infrastructure-only query used by the test-database guard and transaction
@@ -47,6 +51,8 @@ type Querier interface {
 	DeleteOldAuthRateLimits(ctx context.Context, dollar_1 interface{}) (int64, error)
 	DeletePrivateReaction(ctx context.Context, arg DeletePrivateReactionParams) error
 	DeletePrivateReply(ctx context.Context, arg DeletePrivateReplyParams) error
+	EndMembershipEraForRejoin(ctx context.Context, eraID pgtype.UUID) (int64, error)
+	EndTargetMembershipForRejoin(ctx context.Context, arg EndTargetMembershipForRejoinParams) (int64, error)
 	FindFormerTerminatedPair(ctx context.Context, arg FindFormerTerminatedPairParams) (pgtype.UUID, error)
 	FindInitialInviteForIssue(ctx context.Context, pairID pgtype.UUID) (FindInitialInviteForIssueRow, error)
 	FindQuestionDuplicates(ctx context.Context, arg FindQuestionDuplicatesParams) ([]FindQuestionDuplicatesRow, error)
@@ -94,6 +100,7 @@ type Querier interface {
 	HasAuthSession(ctx context.Context, tokenHash []byte) (bool, error)
 	HasDuplicateActiveParticipantPair(ctx context.Context, arg HasDuplicateActiveParticipantPairParams) (bool, error)
 	InvalidatePrivateCandidate(ctx context.Context, candidateID pgtype.UUID) error
+	InvalidatePrivateCandidatesForRejoinEra(ctx context.Context, eraID pgtype.UUID) error
 	InvalidatePrivateCandidatesForRevision(ctx context.Context, questionRevisionID pgtype.UUID) error
 	IsAdminAuthUser(ctx context.Context, id pgtype.UUID) (bool, error)
 	ListActivePairMembers(ctx context.Context, pairID pgtype.UUID) ([]ListActivePairMembersRow, error)
@@ -124,7 +131,6 @@ type Querier interface {
 	NextQuestionRevisionNumber(ctx context.Context, questionID pgtype.UUID) (int32, error)
 	ParticipantExists(ctx context.Context, participantID pgtype.UUID) (bool, error)
 	ParticipantHasActiveMembership(ctx context.Context, arg ParticipantHasActiveMembershipParams) (bool, error)
-	RebindParticipantAuthUserForRejoin(ctx context.Context, arg RebindParticipantAuthUserForRejoinParams) (int64, error)
 	RedeemInitialInvite(ctx context.Context, arg RedeemInitialInviteParams) (int64, error)
 	RedeemRejoinInvite(ctx context.Context, arg RedeemRejoinInviteParams) (int64, error)
 	RenewAuthSession(ctx context.Context, arg RenewAuthSessionParams) (pgtype.Timestamptz, error)

@@ -47,6 +47,12 @@ actor-relative visibility and the browser never chooses an owner.
 | `POST /api/rejoin/:token/redeem`    | signed-in user with no existing Participant                                          | `{displayName}`                                          | `{pairId,membershipEraId,participantId}`; `pair.changed`                                         |
 | `POST /api/pairs/:pairId/terminate` | active member                                                                        | none                                                     | `{pairId,state:"terminated",terminatedAt}`; `pair.terminated`                                    |
 
+Successful guest rejoin uses replacement semantics: the response and resolved
+session identify a new Participant and membership era in the same Pair slot.
+The former Participant, membership, era, and their Private/Together history
+remain associated with the old identity; the replacement receives none of that
+history.
+
 The current public invite/rejoin landing projections are Server Component calls
 to `getInitialInviteLanding` and `getRejoinInviteLanding` from
 `apps/web/src/server/modules/invites/invite.service.ts`; they are not current
