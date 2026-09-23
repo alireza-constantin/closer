@@ -31,15 +31,18 @@ current implementation. `MUST PORT` means it blocks making Go authoritative.
       non-self, non-duplicate-Pair, and serializes with termination.
 - [ ] MUST PORT: successful claim clears intended name, creates first era, ends
       pre-claim Together, and grants no pre-claim history.
-- [ ] MUST PASS BEFORE CUTOVER: rejoin is distinct from initial claim, targets
-      only an anonymous member without an active session, and rebinds a fresh
-      auth identity to the existing Participant.
-- [ ] MUST PASS BEFORE CUTOVER: successful rejoin preserves the exact
-      Participant ID, membership ID, logical slot, current era, and Pair; it
-      creates no Participant, membership, or era and revokes obsolete sessions.
-- [ ] MUST PORT: replacement remains a separate lifecycle: it ends the old
-      membership/era, freezes display name, invalidates candidates, ends
-      Together, and creates a new Participant and era when authorized.
+- [ ] MUST PASS BEFORE CUTOVER: guest rejoin is distinct from initial claim
+      and uses replacement semantics. It targets an eligible anonymous guest
+      without an active session, creates a new Participant/membership/era in
+      the same Pair slot, ends the former membership/era, freezes the former
+      display name, invalidates unresolved candidates, closes old-era Together,
+      and revokes obsolete sessions and credentials.
+- [ ] MUST PASS BEFORE CUTOVER: the replacement receives no former-era
+      Private or Together history or authority; the former Participant and
+      historical rows remain attached to their original membership/era.
+- [ ] MUST PASS BEFORE CUTOVER: the continuing member keeps only history they
+      were already authorized to access, and future Private work creates a new
+      Conversation with a new creator in the replacement era.
 - [ ] MUST PORT: termination is irreversible, idempotent, Pair-locked, and
       closes active authority without deleting historical rows.
 

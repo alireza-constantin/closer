@@ -212,8 +212,42 @@ WHERE id = sqlc.arg(id)
   AND revoked_at IS NULL AND redeemed_at IS NULL
   AND expires_at > clock_timestamp();
 
--- name: RebindParticipantAuthUserForRejoin :execrows
-UPDATE participant
-SET auth_user_id = sqlc.arg(new_auth_user_id), updated_at = clock_timestamp()
-WHERE id = sqlc.arg(participant_id)
-  AND auth_user_id = sqlc.arg(old_auth_user_id);
+-- name: EndMembershipEraForRejoin :execrows
+UPDATE pair_membership_era
+SET ended_at = clock_timestamp()
+WHERE id = sqlc.arg(era_id) AND ended_at IS NULL;
+
+-- name: EndTargetMembershipForRejoin :execrows
+UPDATE pair_membership
+SET ended_at = clock_timestamp(), ended_display_name = sqlc.arg(ended_display_name)
+WHERE id = sqlc.arg(membership_id) AND ended_at IS NULL;
+
+-- name: CreateReplacementParticipantForRejoin :one
+INSERT INTO participant (auth_user_id, display_name)
+VALUES (sqlc.arg(auth_user_id), sqlc.arg(display_name))
+RETURNING id;
+
+-- name: CreateReplacementMembershipForRejoin :one
+INSERT INTO pair_membership (pair_id, participant_id, slot)
+VALUES (sqlc.arg(pair_id), sqlc.arg(participant_id), sqlc.arg(slot))
+RETURNING id;
+
+-- name: CreateReplacementMembershipEraForRejoin :one
+INSERT INTO pair_membership_era (pair_id, first_membership_id, second_membership_id)
+VALUES (sqlc.arg(pair_id), sqlc.arg(first_membership_id), sqlc.arg(second_membership_id))
+RETURNING id;
+
+-- name: InvalidatePrivateCandidatesForRejoinEra :exec
+UPDATE private_question_candidate AS candidate
+SET state = 'invalidated', resolved_at = COALESCE(candidate.resolved_at, clock_timestamp())
+FROM private_conversation AS conversation
+WHERE candidate.conversation_id = conversation.id
+  AND conversation.membership_era_id = sqlc.arg(era_id)
+  AND candidate.state = 'unresolved';
+
+-- name: CloseTogetherSessionsForRejoinEra :exec
+UPDATE together_session
+SET ended_at = COALESCE(ended_at, clock_timestamp())
+WHERE pair_id = sqlc.arg(pair_id)
+  AND membership_era_id = sqlc.arg(era_id)
+  AND ended_at IS NULL;
