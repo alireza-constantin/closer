@@ -139,11 +139,56 @@ func (ns NullPrivateQuestionCandidateState) Value() (driver.Value, error) {
 	return string(ns.PrivateQuestionCandidateState), nil
 }
 
+type PrivateReactionValue string
+
+const (
+	PrivateReactionValueHeart     PrivateReactionValue = "heart"
+	PrivateReactionValueLaugh     PrivateReactionValue = "laugh"
+	PrivateReactionValueTender    PrivateReactionValue = "tender"
+	PrivateReactionValueSurprised PrivateReactionValue = "surprised"
+)
+
+func (e *PrivateReactionValue) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = PrivateReactionValue(s)
+	case string:
+		*e = PrivateReactionValue(s)
+	default:
+		return fmt.Errorf("unsupported scan type for PrivateReactionValue: %T", src)
+	}
+	return nil
+}
+
+type NullPrivateReactionValue struct {
+	PrivateReactionValue PrivateReactionValue `json:"private_reaction_value"`
+	Valid                bool                 `json:"valid"` // Valid is true if PrivateReactionValue is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullPrivateReactionValue) Scan(value interface{}) error {
+	if value == nil {
+		ns.PrivateReactionValue, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.PrivateReactionValue.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullPrivateReactionValue) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.PrivateReactionValue), nil
+}
+
 type PrivateRoundStatus string
 
 const (
-	PrivateRoundStatusOpen    PrivateRoundStatus = "open"
-	PrivateRoundStatusRetired PrivateRoundStatus = "retired"
+	PrivateRoundStatusOpen      PrivateRoundStatus = "open"
+	PrivateRoundStatusRetired   PrivateRoundStatus = "retired"
+	PrivateRoundStatusCompleted PrivateRoundStatus = "completed"
 )
 
 func (e *PrivateRoundStatus) Scan(src interface{}) error {
@@ -301,6 +346,27 @@ type PrivateQuestionCandidate struct {
 	SkipResultCandidateID pgtype.UUID                   `json:"skip_result_candidate_id"`
 }
 
+type PrivateReaction struct {
+	ID              pgtype.UUID          `json:"id"`
+	RoundID         pgtype.UUID          `json:"round_id"`
+	MembershipEraID pgtype.UUID          `json:"membership_era_id"`
+	MembershipID    pgtype.UUID          `json:"membership_id"`
+	ParticipantID   pgtype.UUID          `json:"participant_id"`
+	Value           PrivateReactionValue `json:"value"`
+	UpdatedAt       pgtype.Timestamptz   `json:"updated_at"`
+}
+
+type PrivateReply struct {
+	ID              pgtype.UUID        `json:"id"`
+	RoundID         pgtype.UUID        `json:"round_id"`
+	MembershipEraID pgtype.UUID        `json:"membership_era_id"`
+	MembershipID    pgtype.UUID        `json:"membership_id"`
+	ParticipantID   pgtype.UUID        `json:"participant_id"`
+	Body            string             `json:"body"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
 type PrivateRevealView struct {
 	ID              pgtype.UUID        `json:"id"`
 	RoundID         pgtype.UUID        `json:"round_id"`
@@ -311,19 +377,26 @@ type PrivateRevealView struct {
 }
 
 type PrivateRound struct {
-	ID                     pgtype.UUID        `json:"id"`
-	PairID                 pgtype.UUID        `json:"pair_id"`
-	ConversationID         pgtype.UUID        `json:"conversation_id"`
-	MembershipEraID        pgtype.UUID        `json:"membership_era_id"`
-	CandidateID            pgtype.UUID        `json:"candidate_id"`
-	QuestionID             pgtype.UUID        `json:"question_id"`
-	QuestionRevisionID     pgtype.UUID        `json:"question_revision_id"`
-	RoundNumber            int32              `json:"round_number"`
-	Status                 PrivateRoundStatus `json:"status"`
-	DeclinedByMembershipID pgtype.UUID        `json:"declined_by_membership_id"`
-	DeclinedAt             pgtype.Timestamptz `json:"declined_at"`
-	AskedAt                pgtype.Timestamptz `json:"asked_at"`
-	ClientRequestID        pgtype.UUID        `json:"client_request_id"`
+	ID                        pgtype.UUID        `json:"id"`
+	PairID                    pgtype.UUID        `json:"pair_id"`
+	ConversationID            pgtype.UUID        `json:"conversation_id"`
+	MembershipEraID           pgtype.UUID        `json:"membership_era_id"`
+	CandidateID               pgtype.UUID        `json:"candidate_id"`
+	QuestionID                pgtype.UUID        `json:"question_id"`
+	QuestionRevisionID        pgtype.UUID        `json:"question_revision_id"`
+	RoundNumber               int32              `json:"round_number"`
+	Status                    PrivateRoundStatus `json:"status"`
+	DeclinedByMembershipID    pgtype.UUID        `json:"declined_by_membership_id"`
+	DeclinedAt                pgtype.Timestamptz `json:"declined_at"`
+	AskedAt                   pgtype.Timestamptz `json:"asked_at"`
+	ClientRequestID           pgtype.UUID        `json:"client_request_id"`
+	ProgressionRequestID      pgtype.UUID        `json:"progression_request_id"`
+	ProgressionAction         pgtype.Text        `json:"progression_action"`
+	ProgressionCategory       pgtype.Text        `json:"progression_category"`
+	ProgressionConversationID pgtype.UUID        `json:"progression_conversation_id"`
+	ProgressionCandidateID    pgtype.UUID        `json:"progression_candidate_id"`
+	ProgressionExhausted      bool               `json:"progression_exhausted"`
+	ProgressionWaiting        bool               `json:"progression_waiting"`
 }
 
 type Question struct {

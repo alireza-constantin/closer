@@ -143,6 +143,13 @@ AND non-creator Reveal View persisted
 
 Only after all three conditions hold may the creator begin another candidate. The reveals need not be simultaneous. If the creator revealed first, they wait while the other Participant continues to see Reveal ready. Foreground polling may refresh eligibility when the second view commits.
 
+When the second Reveal View is committed, the Round's persisted progression status
+becomes `completed` in that same transaction. This status releases the
+Pair-wide open-Round guard; it is valid only alongside both answers and both
+Reveal Views, and is not a substitute for any of those facts or a global Reveal
+acknowledgement. The creator's later progression command persists its request
+ID and result atomically with candidate selection or exhaustion.
+
 There is no timeout, reminder completion, override, bypass, creator privilege, or non-creator progression path. Other category Conversations remain usable while a Conversation waits.
 
 After a Participant records a Reveal View, the authorized reveal projection returns both answers. Reactions and optional replies are post-reveal mutations owned by their Participant. Each Participant may have at most one reaction and one reply per Round; the reaction is shown on the other Participant's answer.

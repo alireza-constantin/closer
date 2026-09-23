@@ -11,6 +11,53 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const completePrivateRound = `-- name: CompletePrivateRound :execrows
+UPDATE private_round
+SET status = 'completed'
+WHERE id = $1
+  AND pair_id = $2
+  AND membership_era_id = $3
+  AND status = 'open'
+`
+
+type CompletePrivateRoundParams struct {
+	RoundID         pgtype.UUID `json:"round_id"`
+	PairID          pgtype.UUID `json:"pair_id"`
+	MembershipEraID pgtype.UUID `json:"membership_era_id"`
+}
+
+func (q *Queries) CompletePrivateRound(ctx context.Context, arg CompletePrivateRoundParams) (int64, error) {
+	result, err := q.db.Exec(ctx, completePrivateRound, arg.RoundID, arg.PairID, arg.MembershipEraID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const countMutuallyCompletedPrivateRounds = `-- name: CountMutuallyCompletedPrivateRounds :one
+SELECT COUNT(*)::integer FROM private_round
+WHERE conversation_id = $1 AND status = 'completed'
+`
+
+func (q *Queries) CountMutuallyCompletedPrivateRounds(ctx context.Context, conversationID pgtype.UUID) (int32, error) {
+	row := q.db.QueryRow(ctx, countMutuallyCompletedPrivateRounds, conversationID)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const countPrivateRoundsForConversation = `-- name: CountPrivateRoundsForConversation :one
+SELECT COUNT(*)::integer FROM private_round
+WHERE conversation_id = $1
+`
+
+func (q *Queries) CountPrivateRoundsForConversation(ctx context.Context, conversationID pgtype.UUID) (int32, error) {
+	row := q.db.QueryRow(ctx, countPrivateRoundsForConversation, conversationID)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const createPrivateAnswer = `-- name: CreatePrivateAnswer :one
 INSERT INTO private_answer (round_id, membership_era_id, membership_id, participant_id, body)
 VALUES ($1, $2, $3, $4, $5)
@@ -218,6 +265,42 @@ func (q *Queries) CreatePrivateRound(ctx context.Context, arg CreatePrivateRound
 	return i, err
 }
 
+const deletePrivateReaction = `-- name: DeletePrivateReaction :exec
+DELETE FROM private_reaction
+WHERE round_id = $1
+  AND membership_era_id = $2
+  AND membership_id = $3
+`
+
+type DeletePrivateReactionParams struct {
+	RoundID         pgtype.UUID `json:"round_id"`
+	MembershipEraID pgtype.UUID `json:"membership_era_id"`
+	MembershipID    pgtype.UUID `json:"membership_id"`
+}
+
+func (q *Queries) DeletePrivateReaction(ctx context.Context, arg DeletePrivateReactionParams) error {
+	_, err := q.db.Exec(ctx, deletePrivateReaction, arg.RoundID, arg.MembershipEraID, arg.MembershipID)
+	return err
+}
+
+const deletePrivateReply = `-- name: DeletePrivateReply :exec
+DELETE FROM private_reply
+WHERE round_id = $1
+  AND membership_era_id = $2
+  AND membership_id = $3
+`
+
+type DeletePrivateReplyParams struct {
+	RoundID         pgtype.UUID `json:"round_id"`
+	MembershipEraID pgtype.UUID `json:"membership_era_id"`
+	MembershipID    pgtype.UUID `json:"membership_id"`
+}
+
+func (q *Queries) DeletePrivateReply(ctx context.Context, arg DeletePrivateReplyParams) error {
+	_, err := q.db.Exec(ctx, deletePrivateReply, arg.RoundID, arg.MembershipEraID, arg.MembershipID)
+	return err
+}
+
 const getActivePrivateRoundForPair = `-- name: GetActivePrivateRoundForPair :one
 SELECT id, pair_id, conversation_id, membership_era_id, candidate_id, question_id,
        question_revision_id, round_number, status, asked_at, client_request_id
@@ -294,6 +377,70 @@ func (q *Queries) GetCreatorUnresolvedPrivateCandidate(ctx context.Context, arg 
 	row := q.db.QueryRow(ctx, getCreatorUnresolvedPrivateCandidate, arg.PairID, arg.MembershipEraID, arg.ParticipantID)
 	var i GetCreatorUnresolvedPrivateCandidateRow
 	err := row.Scan(&i.ID, &i.ConversationID, &i.Category)
+	return i, err
+}
+
+const getLatestCompletedPrivateRoundForConversation = `-- name: GetLatestCompletedPrivateRoundForConversation :one
+SELECT round.id, round.pair_id, round.conversation_id, round.membership_era_id, round.candidate_id, round.question_id,
+       round.question_revision_id, round.round_number, round.status, round.asked_at, round.client_request_id,
+       round.progression_exhausted, round.progression_waiting,
+       r.text, r.category, r.intensity
+FROM private_round AS round
+JOIN question_revision AS r ON r.id = round.question_revision_id
+WHERE round.pair_id = $1
+  AND round.conversation_id = $2
+  AND round.membership_era_id = $3
+  AND round.status IN ('completed', 'retired')
+ORDER BY round.round_number DESC
+LIMIT 1
+`
+
+type GetLatestCompletedPrivateRoundForConversationParams struct {
+	PairID          pgtype.UUID `json:"pair_id"`
+	ConversationID  pgtype.UUID `json:"conversation_id"`
+	MembershipEraID pgtype.UUID `json:"membership_era_id"`
+}
+
+type GetLatestCompletedPrivateRoundForConversationRow struct {
+	ID                   pgtype.UUID        `json:"id"`
+	PairID               pgtype.UUID        `json:"pair_id"`
+	ConversationID       pgtype.UUID        `json:"conversation_id"`
+	MembershipEraID      pgtype.UUID        `json:"membership_era_id"`
+	CandidateID          pgtype.UUID        `json:"candidate_id"`
+	QuestionID           pgtype.UUID        `json:"question_id"`
+	QuestionRevisionID   pgtype.UUID        `json:"question_revision_id"`
+	RoundNumber          int32              `json:"round_number"`
+	Status               PrivateRoundStatus `json:"status"`
+	AskedAt              pgtype.Timestamptz `json:"asked_at"`
+	ClientRequestID      pgtype.UUID        `json:"client_request_id"`
+	ProgressionExhausted bool               `json:"progression_exhausted"`
+	ProgressionWaiting   bool               `json:"progression_waiting"`
+	Text                 string             `json:"text"`
+	Category             string             `json:"category"`
+	Intensity            string             `json:"intensity"`
+}
+
+func (q *Queries) GetLatestCompletedPrivateRoundForConversation(ctx context.Context, arg GetLatestCompletedPrivateRoundForConversationParams) (GetLatestCompletedPrivateRoundForConversationRow, error) {
+	row := q.db.QueryRow(ctx, getLatestCompletedPrivateRoundForConversation, arg.PairID, arg.ConversationID, arg.MembershipEraID)
+	var i GetLatestCompletedPrivateRoundForConversationRow
+	err := row.Scan(
+		&i.ID,
+		&i.PairID,
+		&i.ConversationID,
+		&i.MembershipEraID,
+		&i.CandidateID,
+		&i.QuestionID,
+		&i.QuestionRevisionID,
+		&i.RoundNumber,
+		&i.Status,
+		&i.AskedAt,
+		&i.ClientRequestID,
+		&i.ProgressionExhausted,
+		&i.ProgressionWaiting,
+		&i.Text,
+		&i.Category,
+		&i.Intensity,
+	)
 	return i, err
 }
 
@@ -626,7 +773,10 @@ const getPrivateRoundForParticipant = `-- name: GetPrivateRoundForParticipant :o
 SELECT round.id, round.pair_id, round.conversation_id, round.membership_era_id,
        round.candidate_id, round.question_id, round.question_revision_id,
        round.round_number, round.status, round.asked_at, round.client_request_id,
-       round.declined_by_membership_id, round.declined_at,
+       round.declined_by_membership_id, round.declined_at, round.progression_request_id,
+       round.progression_action, round.progression_category, round.progression_conversation_id,
+       round.progression_candidate_id, round.progression_exhausted,
+       round.progression_waiting,
        r.text, r.category, r.intensity
 FROM private_round AS round
 JOIN question_revision AS r ON r.id = round.question_revision_id
@@ -642,22 +792,29 @@ type GetPrivateRoundForParticipantParams struct {
 }
 
 type GetPrivateRoundForParticipantRow struct {
-	ID                     pgtype.UUID        `json:"id"`
-	PairID                 pgtype.UUID        `json:"pair_id"`
-	ConversationID         pgtype.UUID        `json:"conversation_id"`
-	MembershipEraID        pgtype.UUID        `json:"membership_era_id"`
-	CandidateID            pgtype.UUID        `json:"candidate_id"`
-	QuestionID             pgtype.UUID        `json:"question_id"`
-	QuestionRevisionID     pgtype.UUID        `json:"question_revision_id"`
-	RoundNumber            int32              `json:"round_number"`
-	Status                 PrivateRoundStatus `json:"status"`
-	AskedAt                pgtype.Timestamptz `json:"asked_at"`
-	ClientRequestID        pgtype.UUID        `json:"client_request_id"`
-	DeclinedByMembershipID pgtype.UUID        `json:"declined_by_membership_id"`
-	DeclinedAt             pgtype.Timestamptz `json:"declined_at"`
-	Text                   string             `json:"text"`
-	Category               string             `json:"category"`
-	Intensity              string             `json:"intensity"`
+	ID                        pgtype.UUID        `json:"id"`
+	PairID                    pgtype.UUID        `json:"pair_id"`
+	ConversationID            pgtype.UUID        `json:"conversation_id"`
+	MembershipEraID           pgtype.UUID        `json:"membership_era_id"`
+	CandidateID               pgtype.UUID        `json:"candidate_id"`
+	QuestionID                pgtype.UUID        `json:"question_id"`
+	QuestionRevisionID        pgtype.UUID        `json:"question_revision_id"`
+	RoundNumber               int32              `json:"round_number"`
+	Status                    PrivateRoundStatus `json:"status"`
+	AskedAt                   pgtype.Timestamptz `json:"asked_at"`
+	ClientRequestID           pgtype.UUID        `json:"client_request_id"`
+	DeclinedByMembershipID    pgtype.UUID        `json:"declined_by_membership_id"`
+	DeclinedAt                pgtype.Timestamptz `json:"declined_at"`
+	ProgressionRequestID      pgtype.UUID        `json:"progression_request_id"`
+	ProgressionAction         pgtype.Text        `json:"progression_action"`
+	ProgressionCategory       pgtype.Text        `json:"progression_category"`
+	ProgressionConversationID pgtype.UUID        `json:"progression_conversation_id"`
+	ProgressionCandidateID    pgtype.UUID        `json:"progression_candidate_id"`
+	ProgressionExhausted      bool               `json:"progression_exhausted"`
+	ProgressionWaiting        bool               `json:"progression_waiting"`
+	Text                      string             `json:"text"`
+	Category                  string             `json:"category"`
+	Intensity                 string             `json:"intensity"`
 }
 
 func (q *Queries) GetPrivateRoundForParticipant(ctx context.Context, arg GetPrivateRoundForParticipantParams) (GetPrivateRoundForParticipantRow, error) {
@@ -677,6 +834,13 @@ func (q *Queries) GetPrivateRoundForParticipant(ctx context.Context, arg GetPriv
 		&i.ClientRequestID,
 		&i.DeclinedByMembershipID,
 		&i.DeclinedAt,
+		&i.ProgressionRequestID,
+		&i.ProgressionAction,
+		&i.ProgressionCategory,
+		&i.ProgressionConversationID,
+		&i.ProgressionCandidateID,
+		&i.ProgressionExhausted,
+		&i.ProgressionWaiting,
 		&i.Text,
 		&i.Category,
 		&i.Intensity,
@@ -895,6 +1059,106 @@ func (q *Queries) ListPrivateAnswers(ctx context.Context, arg ListPrivateAnswers
 	return items, nil
 }
 
+const listPrivateReactions = `-- name: ListPrivateReactions :many
+SELECT reaction.round_id, reaction.membership_id, reaction.participant_id,
+       participant.display_name, reaction.value
+FROM private_reaction AS reaction
+JOIN pair_membership AS membership ON membership.id = reaction.membership_id
+JOIN participant ON participant.id = reaction.participant_id
+WHERE reaction.round_id = $1
+  AND reaction.membership_era_id = $2
+ORDER BY reaction.id
+`
+
+type ListPrivateReactionsParams struct {
+	RoundID         pgtype.UUID `json:"round_id"`
+	MembershipEraID pgtype.UUID `json:"membership_era_id"`
+}
+
+type ListPrivateReactionsRow struct {
+	RoundID       pgtype.UUID          `json:"round_id"`
+	MembershipID  pgtype.UUID          `json:"membership_id"`
+	ParticipantID pgtype.UUID          `json:"participant_id"`
+	DisplayName   string               `json:"display_name"`
+	Value         PrivateReactionValue `json:"value"`
+}
+
+func (q *Queries) ListPrivateReactions(ctx context.Context, arg ListPrivateReactionsParams) ([]ListPrivateReactionsRow, error) {
+	rows, err := q.db.Query(ctx, listPrivateReactions, arg.RoundID, arg.MembershipEraID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPrivateReactionsRow
+	for rows.Next() {
+		var i ListPrivateReactionsRow
+		if err := rows.Scan(
+			&i.RoundID,
+			&i.MembershipID,
+			&i.ParticipantID,
+			&i.DisplayName,
+			&i.Value,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPrivateReplies = `-- name: ListPrivateReplies :many
+SELECT reply.round_id, reply.membership_id, reply.participant_id,
+       participant.display_name, reply.body
+FROM private_reply AS reply
+JOIN pair_membership AS membership ON membership.id = reply.membership_id
+JOIN participant ON participant.id = reply.participant_id
+WHERE reply.round_id = $1
+  AND reply.membership_era_id = $2
+ORDER BY reply.created_at, reply.id
+`
+
+type ListPrivateRepliesParams struct {
+	RoundID         pgtype.UUID `json:"round_id"`
+	MembershipEraID pgtype.UUID `json:"membership_era_id"`
+}
+
+type ListPrivateRepliesRow struct {
+	RoundID       pgtype.UUID `json:"round_id"`
+	MembershipID  pgtype.UUID `json:"membership_id"`
+	ParticipantID pgtype.UUID `json:"participant_id"`
+	DisplayName   string      `json:"display_name"`
+	Body          string      `json:"body"`
+}
+
+func (q *Queries) ListPrivateReplies(ctx context.Context, arg ListPrivateRepliesParams) ([]ListPrivateRepliesRow, error) {
+	rows, err := q.db.Query(ctx, listPrivateReplies, arg.RoundID, arg.MembershipEraID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPrivateRepliesRow
+	for rows.Next() {
+		var i ListPrivateRepliesRow
+		if err := rows.Scan(
+			&i.RoundID,
+			&i.MembershipID,
+			&i.ParticipantID,
+			&i.DisplayName,
+			&i.Body,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPrivateRevealViews = `-- name: ListPrivateRevealViews :many
 SELECT id, round_id, membership_era_id, membership_id, participant_id, viewed_at
 FROM private_reveal_view
@@ -1068,4 +1332,110 @@ type SetPrivateCandidateSkipResultParams struct {
 func (q *Queries) SetPrivateCandidateSkipResult(ctx context.Context, arg SetPrivateCandidateSkipResultParams) error {
 	_, err := q.db.Exec(ctx, setPrivateCandidateSkipResult, arg.SkipResultCandidateID, arg.CandidateID)
 	return err
+}
+
+const setPrivateRoundProgression = `-- name: SetPrivateRoundProgression :execrows
+UPDATE private_round
+SET progression_request_id = $1,
+    progression_action = $2,
+    progression_category = $3,
+    progression_conversation_id = $4,
+    progression_candidate_id = $5,
+    progression_exhausted = $6,
+    progression_waiting = $7
+WHERE id = $8
+  AND pair_id = $9
+  AND membership_era_id = $10
+  AND status IN ('completed', 'retired')
+  AND progression_request_id IS NULL
+`
+
+type SetPrivateRoundProgressionParams struct {
+	ClientRequestID pgtype.UUID `json:"client_request_id"`
+	Action          pgtype.Text `json:"action"`
+	Category        pgtype.Text `json:"category"`
+	ConversationID  pgtype.UUID `json:"conversation_id"`
+	CandidateID     pgtype.UUID `json:"candidate_id"`
+	Exhausted       bool        `json:"exhausted"`
+	Waiting         bool        `json:"waiting"`
+	RoundID         pgtype.UUID `json:"round_id"`
+	PairID          pgtype.UUID `json:"pair_id"`
+	MembershipEraID pgtype.UUID `json:"membership_era_id"`
+}
+
+func (q *Queries) SetPrivateRoundProgression(ctx context.Context, arg SetPrivateRoundProgressionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setPrivateRoundProgression,
+		arg.ClientRequestID,
+		arg.Action,
+		arg.Category,
+		arg.ConversationID,
+		arg.CandidateID,
+		arg.Exhausted,
+		arg.Waiting,
+		arg.RoundID,
+		arg.PairID,
+		arg.MembershipEraID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const upsertPrivateReaction = `-- name: UpsertPrivateReaction :one
+INSERT INTO private_reaction (round_id, membership_era_id, membership_id, participant_id, value)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (round_id, membership_id) DO UPDATE
+SET value = EXCLUDED.value, updated_at = now()
+RETURNING id
+`
+
+type UpsertPrivateReactionParams struct {
+	RoundID         pgtype.UUID          `json:"round_id"`
+	MembershipEraID pgtype.UUID          `json:"membership_era_id"`
+	MembershipID    pgtype.UUID          `json:"membership_id"`
+	ParticipantID   pgtype.UUID          `json:"participant_id"`
+	Value           PrivateReactionValue `json:"value"`
+}
+
+func (q *Queries) UpsertPrivateReaction(ctx context.Context, arg UpsertPrivateReactionParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, upsertPrivateReaction,
+		arg.RoundID,
+		arg.MembershipEraID,
+		arg.MembershipID,
+		arg.ParticipantID,
+		arg.Value,
+	)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
+const upsertPrivateReply = `-- name: UpsertPrivateReply :one
+INSERT INTO private_reply (round_id, membership_era_id, membership_id, participant_id, body)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (round_id, membership_id) DO UPDATE
+SET body = EXCLUDED.body, updated_at = now()
+RETURNING id
+`
+
+type UpsertPrivateReplyParams struct {
+	RoundID         pgtype.UUID `json:"round_id"`
+	MembershipEraID pgtype.UUID `json:"membership_era_id"`
+	MembershipID    pgtype.UUID `json:"membership_id"`
+	ParticipantID   pgtype.UUID `json:"participant_id"`
+	Body            string      `json:"body"`
+}
+
+func (q *Queries) UpsertPrivateReply(ctx context.Context, arg UpsertPrivateReplyParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, upsertPrivateReply,
+		arg.RoundID,
+		arg.MembershipEraID,
+		arg.MembershipID,
+		arg.ParticipantID,
+		arg.Body,
+	)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
 }

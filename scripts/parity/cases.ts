@@ -1340,6 +1340,88 @@ const cases = [
     ],
   },
   {
+    id: "private.progression-action-race-and-retry",
+    area: "private",
+    gate: "must-pass-before-cutover",
+    title: "Ask another and Something else serialize to one creator progression; retries replay it",
+    preconditions: ["Both answers and both Reveal Views are persisted for the current Round."],
+    actions: [
+      action("ask-another", "creator", "POST progression ask_another", "round-progression"),
+      action("something-else", "creator", "POST progression something_else", "round-progression"),
+      action("retry-winner", "creator", "retry the winning clientRequestId"),
+    ],
+    expected: {
+      actions: [
+        { id: "ask-another" },
+        { id: "something-else", status: 409 },
+        { id: "retry-winner" },
+      ],
+      actionGroups: [
+        {
+          ids: ["ask-another", "something-else"],
+          exactlyOneStatusIn: [200],
+          remainingStatusIn: [409],
+        },
+      ],
+      persistedState: {
+        progressionActionsForRound: 1,
+        nextCandidatesCreated: 1,
+        consumedQuestionsAdvanced: 1,
+      },
+      projections: [
+        { actor: "creator", mustContain: { stableRetryResult: true } },
+        {
+          actor: "non-creator",
+          state: "WAITING_FOR_CREATOR",
+          mustOmit: ["candidateId", "questionId", "questionRevisionId", "question.text"],
+        },
+      ],
+      realtime: [
+        {
+          type: "private.changed",
+          pair: "$pair",
+          afterCommit: true,
+          mustOmit: ["question", "questionText", "candidateId"],
+        },
+      ],
+    },
+    sources: [
+      "docs/adr/003-private-answer-reveal.md — creator-only progression after both Reveal Views",
+      "apps/api/internal/postgres/private/concurrency_integration_test.go — Ask another vs Something else and retry safety",
+    ],
+  },
+  {
+    id: "private.post-reveal-era-ownership",
+    area: "private",
+    gate: "must-pass-before-cutover",
+    title:
+      "Reactions and replies remain owned by their exact membership through replacement and rejoin",
+    preconditions: ["A revealed Round has one reaction and one reply from membership era one."],
+    actions: [
+      action("replace", "pair-owner", "replace the other membership"),
+      action(
+        "replacement-edit",
+        "replacement",
+        "attempt to edit former membership reaction and reply",
+      ),
+      action("rejoin", "former-member", "rejoin the same pair slot"),
+      action("rejoined-read", "former-member", "read own persisted reaction and reply"),
+    ],
+    expected: {
+      actions: [{ id: "replacement-edit", status: 404 }, { id: "rejoined-read" }],
+      persistedState: {
+        reactionRowsForFormerEraUnchanged: true,
+        replyRowsForFormerEraUnchanged: true,
+        duplicateRows: 0,
+      },
+      projections: [{ actor: "replacement", mustOmit: ["formerReaction", "formerReply"] }],
+    },
+    sources: [
+      "docs/adr/003-private-answer-reveal.md — membership-era boundaries",
+      "docs/adr/002-invite-and-rejoin-security.md — rejoin identity preservation",
+    ],
+  },
+  {
     id: "private.ramp-and-exhaustion",
     area: "private",
     gate: "must-pass-before-cutover",

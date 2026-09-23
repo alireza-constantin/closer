@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"unicode/utf8"
 )
 
 var (
@@ -18,6 +19,10 @@ var (
 	ErrAnswerImmutable     = errors.New("private answer is immutable")
 	ErrQuestionUnavailable = errors.New("private question is unavailable")
 	ErrRevealNotReady      = errors.New("private reveal is not ready")
+	ErrReactionInvalid     = errors.New("private reaction is invalid")
+	ErrReplyInvalid        = errors.New("private reply is invalid")
+	ErrProgressionNotReady = errors.New("private progression is not ready")
+	ErrProgressionConflict = errors.New("private progression already started")
 )
 
 type CandidateQuestion struct {
@@ -41,13 +46,27 @@ type Round struct {
 	OtherRevealViewed                           bool
 	CanContinue                                 bool
 	Answers                                     []Answer
+	Reactions                                   []Reaction
+	Replies                                     []Reply
 }
 
-type Answer struct{ ParticipantID, MembershipID, Body, CreatedAt string }
+type Answer struct {
+	ParticipantID, MembershipID, Body, CreatedAt string
+	IsOwner                                      bool
+}
+type Reaction struct {
+	ParticipantID, DisplayName, Value string
+	IsOwner                           bool
+}
+type Reply struct {
+	ParticipantID, DisplayName, Body string
+	IsOwner                          bool
+}
 
 type View struct {
 	PairID, ConversationID, Category         string
 	State                                    string
+	AvailableCategories                      []string
 	CreatorParticipantID, CreatorDisplayName string
 	Candidate                                *Candidate
 	Round                                    *Round
@@ -79,6 +98,18 @@ type AnswerInput struct {
 	RoundInput
 	Body string
 }
+type ReactionInput struct {
+	RoundInput
+	Value string
+}
+type ReplyInput struct {
+	RoundInput
+	Body string
+}
+type ProgressInput struct {
+	RoundInput
+	ClientRequestID, Action, Category string
+}
 
 type Question struct {
 	ID, RevisionID, Text, Category, Intensity string
@@ -102,6 +133,11 @@ type Repository interface {
 	Answer(context.Context, AnswerInput) (Round, error)
 	Decline(context.Context, RoundInput) (Round, error)
 	Reveal(context.Context, RoundInput) (Round, error)
+	SetReaction(context.Context, ReactionInput) (Round, error)
+	RemoveReaction(context.Context, RoundInput) (Round, error)
+	SetReply(context.Context, ReplyInput) (Round, error)
+	RemoveReply(context.Context, RoundInput) (Round, error)
+	Progress(context.Context, ProgressInput) (View, error)
 }
 
 type Service struct{ repository Repository }
@@ -169,6 +205,62 @@ func (s *Service) Reveal(ctx context.Context, input RoundInput) (Round, error) {
 		return Round{}, ErrNotFound
 	}
 	return s.repository.Reveal(ctx, input)
+}
+
+func (s *Service) SetReaction(ctx context.Context, input ReactionInput) (Round, error) {
+	if input.ParticipantID == "" || input.PairID == "" || input.RoundID == "" {
+		return Round{}, ErrNotFound
+	}
+	if !validReaction(input.Value) {
+		return Round{}, ErrReactionInvalid
+	}
+	return s.repository.SetReaction(ctx, input)
+}
+func (s *Service) RemoveReaction(ctx context.Context, input RoundInput) (Round, error) {
+	if input.ParticipantID == "" || input.PairID == "" || input.RoundID == "" {
+		return Round{}, ErrNotFound
+	}
+	return s.repository.RemoveReaction(ctx, input)
+}
+func (s *Service) SetReply(ctx context.Context, input ReplyInput) (Round, error) {
+	if input.ParticipantID == "" || input.PairID == "" || input.RoundID == "" {
+		return Round{}, ErrNotFound
+	}
+	body := strings.TrimSpace(input.Body)
+	if body == "" || utf8.RuneCountInString(body) > 500 {
+		return Round{}, ErrReplyInvalid
+	}
+	input.Body = body
+	return s.repository.SetReply(ctx, input)
+}
+func (s *Service) RemoveReply(ctx context.Context, input RoundInput) (Round, error) {
+	if input.ParticipantID == "" || input.PairID == "" || input.RoundID == "" {
+		return Round{}, ErrNotFound
+	}
+	return s.repository.RemoveReply(ctx, input)
+}
+
+func (s *Service) Progress(ctx context.Context, input ProgressInput) (View, error) {
+	if input.ParticipantID == "" || input.PairID == "" || input.RoundID == "" {
+		return View{}, ErrNotFound
+	}
+	if input.ClientRequestID == "" || (input.Action != "ask_another" && input.Action != "something_else") {
+		return View{}, ErrInvalidInput
+	}
+	if input.Action == "something_else" && !validCategory(input.Category) {
+		return View{}, ErrCategory
+	}
+	input.Category = strings.TrimSpace(input.Category)
+	return s.repository.Progress(ctx, input)
+}
+
+func validReaction(value string) bool {
+	switch value {
+	case "heart", "laugh", "tender", "surprised":
+		return true
+	default:
+		return false
+	}
 }
 
 func validCategory(category string) bool {

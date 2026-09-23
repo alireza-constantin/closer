@@ -88,6 +88,14 @@ func (s *Store) StartOrResume(ctx context.Context, input domain.StartInput) (dom
 		}
 		conversationID = conversation.ID
 		if conversation.CreatedByParticipantID == participantID {
+			roundCount, err := q.CountPrivateRoundsForConversation(ctx, conversation.ID)
+			if err != nil {
+				return err
+			}
+			// Existing Conversations advance only after an explicit creator action.
+			if roundCount > 0 {
+				return nil
+			}
 			_, candidateErr := q.GetUnresolvedPrivateCandidate(ctx, conversation.ID)
 			if errors.Is(candidateErr, pgx.ErrNoRows) {
 				consumed, err := q.ListConsumedPrivateQuestionIDs(ctx, conversation.ID)
@@ -98,7 +106,11 @@ func (s *Store) StartOrResume(ctx context.Context, input domain.StartInput) (dom
 				if err != nil {
 					return err
 				}
-				selected, ok := choose(conversation.SelectionSeed, eligible, consumed)
+				completedCount, err := q.CountMutuallyCompletedPrivateRounds(ctx, conversation.ID)
+				if err != nil {
+					return err
+				}
+				selected, ok := choose(conversation.SelectionSeed, eligible, consumed, int(completedCount))
 				if ok {
 					_, err = q.CreatePrivateQuestionCandidate(ctx, sqlc.CreatePrivateQuestionCandidateParams{ConversationID: conversation.ID, QuestionID: selected.ID, QuestionRevisionID: selected.QuestionRevisionID})
 					if err != nil && !errors.Is(err, pgx.ErrNoRows) {
@@ -151,7 +163,7 @@ func (s *Store) Read(ctx context.Context, input domain.ReadInput) (domain.View, 
 		if err != nil {
 			return err
 		}
-		result = domain.View{PairID: input.PairID, ConversationID: input.ConversationID, Category: conversation.Category, CreatorParticipantID: conversation.CreatedByParticipantID.String(), CreatorDisplayName: conversation.CreatorDisplayName}
+		result = domain.View{PairID: input.PairID, ConversationID: input.ConversationID, Category: conversation.Category, CreatorParticipantID: conversation.CreatedByParticipantID.String(), CreatorDisplayName: conversation.CreatorDisplayName, AvailableCategories: availablePrivateCategories(string(access.RelationshipType))}
 		if round, err := q.GetOpenPrivateRoundForConversation(ctx, sqlc.GetOpenPrivateRoundForConversationParams{PairID: pairID, ConversationID: conversationID, MembershipEraID: access.MembershipEraID}); err == nil {
 			result.State = "CURRENT_ROUND"
 			result.Round = roundView(round)
@@ -159,24 +171,51 @@ func (s *Store) Read(ctx context.Context, input domain.ReadInput) (domain.View, 
 		} else if !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
+		completedRound, completedErr := q.GetLatestCompletedPrivateRoundForConversation(ctx, sqlc.GetLatestCompletedPrivateRoundForConversationParams{PairID: pairID, ConversationID: conversationID, MembershipEraID: access.MembershipEraID})
+		if completedErr != nil && !errors.Is(completedErr, pgx.ErrNoRows) {
+			return completedErr
+		}
+		if conversation.CreatedByParticipantID == participantID {
+			candidate, candidateErr := q.GetUnresolvedPrivateCandidate(ctx, conversationID)
+			if candidateErr == nil {
+				if candidate.WithdrawnAt.Valid {
+					result.State = "EXHAUSTED"
+					return nil
+				}
+				result.State = "CANDIDATE"
+				result.Candidate = &domain.Candidate{ID: candidate.ID.String(), Liked: candidate.LikedAt.Valid, Question: domain.CandidateQuestion{ID: candidate.QuestionID.String(), RevisionID: candidate.QuestionRevisionID.String(), Text: candidate.Text, Category: candidate.Category, Intensity: candidate.Intensity}}
+				return nil
+			} else if !errors.Is(candidateErr, pgx.ErrNoRows) {
+				return candidateErr
+			}
+		} else {
+			_, candidateErr := q.GetCreatorUnresolvedPrivateCandidate(ctx, sqlc.GetCreatorUnresolvedPrivateCandidateParams{PairID: pairID, MembershipEraID: access.MembershipEraID, ParticipantID: conversation.CreatedByParticipantID})
+			if candidateErr == nil {
+				result.State = "WAITING_FOR_CREATOR"
+				return nil
+			}
+			if !errors.Is(candidateErr, pgx.ErrNoRows) {
+				return candidateErr
+			}
+		}
+		if completedErr == nil && completedRound.ProgressionExhausted {
+			result.State = "EXHAUSTED"
+			return nil
+		}
+		if completedErr == nil {
+			result.State = "CURRENT_ROUND"
+			projected, err := s.roundProjection(ctx, q, domain.RoundInput{ParticipantID: participantID.String(), PairID: input.PairID, RoundID: completedRound.ID.String()}, completedRound.ID, pairID, access)
+			if err != nil {
+				return err
+			}
+			result.Round = &projected
+			return nil
+		}
 		if conversation.CreatedByParticipantID != participantID {
 			result.State = "WAITING_FOR_CREATOR"
 			return nil
 		}
-		candidate, err := q.GetUnresolvedPrivateCandidate(ctx, conversationID)
-		if errors.Is(err, pgx.ErrNoRows) {
-			result.State = "EXHAUSTED"
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if candidate.WithdrawnAt.Valid {
-			result.State = "EXHAUSTED"
-			return nil
-		}
-		result.State = "CANDIDATE"
-		result.Candidate = &domain.Candidate{ID: candidate.ID.String(), Liked: candidate.LikedAt.Valid, Question: domain.CandidateQuestion{ID: candidate.QuestionID.String(), RevisionID: candidate.QuestionRevisionID.String(), Text: candidate.Text, Category: candidate.Category, Intensity: candidate.Intensity}}
+		result.State = "EXHAUSTED"
 		return nil
 	})
 	return result, err
@@ -313,7 +352,11 @@ func (s *Store) Skip(ctx context.Context, input domain.SkipInput) (domain.View, 
 		if err != nil {
 			return err
 		}
-		selected, ok := choose(conversation.SelectionSeed, eligible, consumed)
+		completedCount, err := q.CountMutuallyCompletedPrivateRounds(ctx, conversation.ID)
+		if err != nil {
+			return err
+		}
+		selected, ok := choose(conversation.SelectionSeed, eligible, consumed, int(completedCount))
 		resultID := pgtype.UUID{}
 		if ok {
 			created, err := q.CreatePrivateQuestionCandidate(ctx, sqlc.CreatePrivateQuestionCandidateParams{ConversationID: conversation.ID, QuestionID: selected.ID, QuestionRevisionID: selected.QuestionRevisionID})
@@ -508,7 +551,7 @@ func (s *Store) Reveal(ctx context.Context, input domain.RoundInput) (domain.Rou
 		if err != nil {
 			return err
 		}
-		if round.Status != sqlc.PrivateRoundStatusOpen {
+		if round.Status != sqlc.PrivateRoundStatusOpen && round.Status != sqlc.PrivateRoundStatusCompleted {
 			return domain.ErrRevealNotReady
 		}
 		answers, err := q.ListPrivateAnswers(ctx, sqlc.ListPrivateAnswersParams{RoundID: roundID, MembershipEraID: access.MembershipEraID})
@@ -525,12 +568,301 @@ func (s *Store) Reveal(ctx context.Context, input domain.RoundInput) (domain.Rou
 		if err != nil {
 			return err
 		}
+		reveals, err := q.ListPrivateRevealViews(ctx, sqlc.ListPrivateRevealViewsParams{RoundID: roundID, MembershipEraID: access.MembershipEraID})
+		if err != nil {
+			return err
+		}
+		if len(reveals) == 2 && round.Status == sqlc.PrivateRoundStatusOpen {
+			if _, err := q.CompletePrivateRound(ctx, sqlc.CompletePrivateRoundParams{RoundID: roundID, PairID: pairID, MembershipEraID: access.MembershipEraID}); err != nil {
+				return err
+			}
+		}
 		return postgres.NewTransactionalRealtimePublisher(db).Publish(ctx, realtimeEvent(input.PairID))
 	})
 	if err != nil {
 		return domain.Round{}, err
 	}
 	return s.GetRound(ctx, input)
+}
+
+func (s *Store) SetReaction(ctx context.Context, input domain.ReactionInput) (domain.Round, error) {
+	pairID, participantID, roundID, err := parseRoundIDs(input.RoundInput)
+	if err != nil {
+		return domain.Round{}, domain.ErrNotFound
+	}
+	err = s.pool.WithinTx(ctx, func(db postgres.QueryDB) error {
+		q := sqlc.New(db)
+		access, err := s.lockRoundAccess(ctx, q, pairID, participantID, roundID)
+		if err != nil {
+			return err
+		}
+		if err := requireRoundReveal(ctx, q, roundID, access); err != nil {
+			return err
+		}
+		if _, err := q.UpsertPrivateReaction(ctx, sqlc.UpsertPrivateReactionParams{RoundID: roundID, MembershipEraID: access.MembershipEraID, MembershipID: access.ActorMembershipID, ParticipantID: participantID, Value: sqlc.PrivateReactionValue(input.Value)}); err != nil {
+			return err
+		}
+		return postgres.NewTransactionalRealtimePublisher(db).Publish(ctx, realtimeEvent(input.PairID))
+	})
+	if err != nil {
+		return domain.Round{}, err
+	}
+	return s.GetRound(ctx, input.RoundInput)
+}
+
+func (s *Store) RemoveReaction(ctx context.Context, input domain.RoundInput) (domain.Round, error) {
+	pairID, participantID, roundID, err := parseRoundIDs(input)
+	if err != nil {
+		return domain.Round{}, domain.ErrNotFound
+	}
+	err = s.pool.WithinTx(ctx, func(db postgres.QueryDB) error {
+		q := sqlc.New(db)
+		access, err := s.lockRoundAccess(ctx, q, pairID, participantID, roundID)
+		if err != nil {
+			return err
+		}
+		if err := requireRoundReveal(ctx, q, roundID, access); err != nil {
+			return err
+		}
+		if err := q.DeletePrivateReaction(ctx, sqlc.DeletePrivateReactionParams{RoundID: roundID, MembershipEraID: access.MembershipEraID, MembershipID: access.ActorMembershipID}); err != nil {
+			return err
+		}
+		return postgres.NewTransactionalRealtimePublisher(db).Publish(ctx, realtimeEvent(input.PairID))
+	})
+	if err != nil {
+		return domain.Round{}, err
+	}
+	return s.GetRound(ctx, input)
+}
+
+func (s *Store) SetReply(ctx context.Context, input domain.ReplyInput) (domain.Round, error) {
+	pairID, participantID, roundID, err := parseRoundIDs(input.RoundInput)
+	if err != nil {
+		return domain.Round{}, domain.ErrNotFound
+	}
+	err = s.pool.WithinTx(ctx, func(db postgres.QueryDB) error {
+		q := sqlc.New(db)
+		access, err := s.lockRoundAccess(ctx, q, pairID, participantID, roundID)
+		if err != nil {
+			return err
+		}
+		if err := requireRoundReveal(ctx, q, roundID, access); err != nil {
+			return err
+		}
+		if _, err := q.UpsertPrivateReply(ctx, sqlc.UpsertPrivateReplyParams{RoundID: roundID, MembershipEraID: access.MembershipEraID, MembershipID: access.ActorMembershipID, ParticipantID: participantID, Body: input.Body}); err != nil {
+			return err
+		}
+		return postgres.NewTransactionalRealtimePublisher(db).Publish(ctx, realtimeEvent(input.PairID))
+	})
+	if err != nil {
+		return domain.Round{}, err
+	}
+	return s.GetRound(ctx, input.RoundInput)
+}
+
+func (s *Store) RemoveReply(ctx context.Context, input domain.RoundInput) (domain.Round, error) {
+	pairID, participantID, roundID, err := parseRoundIDs(input)
+	if err != nil {
+		return domain.Round{}, domain.ErrNotFound
+	}
+	err = s.pool.WithinTx(ctx, func(db postgres.QueryDB) error {
+		q := sqlc.New(db)
+		access, err := s.lockRoundAccess(ctx, q, pairID, participantID, roundID)
+		if err != nil {
+			return err
+		}
+		if err := requireRoundReveal(ctx, q, roundID, access); err != nil {
+			return err
+		}
+		if err := q.DeletePrivateReply(ctx, sqlc.DeletePrivateReplyParams{RoundID: roundID, MembershipEraID: access.MembershipEraID, MembershipID: access.ActorMembershipID}); err != nil {
+			return err
+		}
+		return postgres.NewTransactionalRealtimePublisher(db).Publish(ctx, realtimeEvent(input.PairID))
+	})
+	if err != nil {
+		return domain.Round{}, err
+	}
+	return s.GetRound(ctx, input)
+}
+
+func (s *Store) Progress(ctx context.Context, input domain.ProgressInput) (domain.View, error) {
+	pairID, participantID, roundID, err := parseRoundIDs(input.RoundInput)
+	if err != nil {
+		return domain.View{}, domain.ErrNotFound
+	}
+	requestID, err := parseUUID(input.ClientRequestID)
+	if err != nil {
+		return domain.View{}, domain.ErrInvalidInput
+	}
+	var targetConversationID pgtype.UUID
+	var changed bool
+	err = s.pool.WithinTx(ctx, func(db postgres.QueryDB) error {
+		q := sqlc.New(db)
+		access, err := s.lockRoundAccess(ctx, q, pairID, participantID, roundID)
+		if err != nil {
+			return err
+		}
+		round, err := q.GetPrivateRoundForParticipant(ctx, sqlc.GetPrivateRoundForParticipantParams{RoundID: roundID, PairID: pairID, MembershipEraID: access.MembershipEraID})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if round.ProgressionRequestID.Valid {
+			if round.ProgressionRequestID != requestID {
+				return domain.ErrProgressionConflict
+			}
+			targetConversationID = round.ProgressionConversationID
+			return nil
+		}
+		conversation, err := q.GetPrivateConversation(ctx, sqlc.GetPrivateConversationParams{PairID: pairID, ConversationID: round.ConversationID, MembershipEraID: access.MembershipEraID})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if conversation.CreatedByParticipantID != participantID {
+			return domain.ErrNotFound
+		}
+		if round.Status != sqlc.PrivateRoundStatusCompleted && round.Status != sqlc.PrivateRoundStatusRetired {
+			return domain.ErrProgressionNotReady
+		}
+		if round.Status == sqlc.PrivateRoundStatusCompleted {
+			answers, err := q.ListPrivateAnswers(ctx, sqlc.ListPrivateAnswersParams{RoundID: roundID, MembershipEraID: access.MembershipEraID})
+			if err != nil {
+				return err
+			}
+			reveals, err := q.ListPrivateRevealViews(ctx, sqlc.ListPrivateRevealViewsParams{RoundID: roundID, MembershipEraID: access.MembershipEraID})
+			if err != nil {
+				return err
+			}
+			if len(answers) != 2 || len(reveals) != 2 {
+				return domain.ErrProgressionNotReady
+			}
+		}
+		category := conversation.Category
+		if input.Action == "something_else" {
+			category = input.Category
+			if category == conversation.Category || !domain.CategoryAllowed(string(access.RelationshipType), category) {
+				return domain.ErrCategory
+			}
+		}
+		if active, err := q.GetActivePrivateRoundForPair(ctx, sqlc.GetActivePrivateRoundForPairParams{PairID: pairID, MembershipEraID: access.MembershipEraID}); err == nil {
+			if active.ID != roundID {
+				return domain.ErrRoundOpen
+			}
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+
+		targetConversationID = conversation.ID
+		targetSelectionSeed := conversation.SelectionSeed
+		waiting := false
+		if input.Action == "something_else" {
+			targetConversation, err := q.GetPrivateConversationByKey(ctx, sqlc.GetPrivateConversationByKeyParams{PairID: pairID, MembershipEraID: access.MembershipEraID, Category: category})
+			if errors.Is(err, pgx.ErrNoRows) {
+				targetConversation, err = q.CreatePrivateConversation(ctx, sqlc.CreatePrivateConversationParams{PairID: pairID, Category: category, CreatedByParticipantID: participantID, MembershipEraID: access.MembershipEraID})
+				if errors.Is(err, pgx.ErrNoRows) {
+					targetConversation, err = q.GetPrivateConversationByKey(ctx, sqlc.GetPrivateConversationByKeyParams{PairID: pairID, MembershipEraID: access.MembershipEraID, Category: category})
+				}
+			}
+			if err != nil {
+				return err
+			}
+			targetConversationID = targetConversation.ID
+			targetSelectionSeed = targetConversation.SelectionSeed
+			if targetConversation.CreatedByParticipantID != participantID {
+				waiting = true
+			}
+		}
+		var candidateID pgtype.UUID
+		exhausted := false
+		if !waiting {
+			unresolved, unresolvedErr := q.GetCreatorUnresolvedPrivateCandidate(ctx, sqlc.GetCreatorUnresolvedPrivateCandidateParams{PairID: pairID, MembershipEraID: access.MembershipEraID, ParticipantID: participantID})
+			if unresolvedErr == nil && unresolved.ConversationID != targetConversationID {
+				return domain.ErrProgressionConflict
+			}
+			if unresolvedErr != nil && !errors.Is(unresolvedErr, pgx.ErrNoRows) {
+				return unresolvedErr
+			}
+			if candidate, candidateErr := q.GetUnresolvedPrivateCandidate(ctx, targetConversationID); candidateErr == nil {
+				candidateID = candidate.ID
+			} else if !errors.Is(candidateErr, pgx.ErrNoRows) {
+				return candidateErr
+			} else {
+				consumed, err := q.ListConsumedPrivateQuestionIDs(ctx, targetConversationID)
+				if err != nil {
+					return err
+				}
+				eligible, err := q.ListEligiblePrivateQuestions(ctx, sqlc.ListEligiblePrivateQuestionsParams{Category: category, RelationshipType: string(access.RelationshipType)})
+				if err != nil {
+					return err
+				}
+				completedCount, err := q.CountMutuallyCompletedPrivateRounds(ctx, targetConversationID)
+				if err != nil {
+					return err
+				}
+				selected, ok := choose(targetSelectionSeed, eligible, consumed, int(completedCount))
+				if ok {
+					candidate, err := q.CreatePrivateQuestionCandidate(ctx, sqlc.CreatePrivateQuestionCandidateParams{ConversationID: targetConversationID, QuestionID: selected.ID, QuestionRevisionID: selected.QuestionRevisionID})
+					if err != nil {
+						return err
+					}
+					candidateID = candidate.ID
+				} else {
+					exhausted = true
+				}
+			}
+		}
+		rows, err := q.SetPrivateRoundProgression(ctx, sqlc.SetPrivateRoundProgressionParams{ClientRequestID: requestID, Action: pgtype.Text{String: input.Action, Valid: true}, Category: pgtype.Text{String: category, Valid: true}, ConversationID: targetConversationID, CandidateID: candidateID, Exhausted: exhausted, Waiting: waiting, RoundID: roundID, PairID: pairID, MembershipEraID: access.MembershipEraID})
+		if err != nil {
+			return err
+		}
+		if rows != 1 {
+			return domain.ErrProgressionConflict
+		}
+		changed = true
+		return postgres.NewTransactionalRealtimePublisher(db).Publish(ctx, realtimeEvent(input.PairID))
+	})
+	if err != nil {
+		return domain.View{}, err
+	}
+	if changed || targetConversationID.Valid {
+		return s.Read(ctx, domain.ReadInput{ParticipantID: input.ParticipantID, PairID: input.PairID, ConversationID: targetConversationID.String()})
+	}
+	return domain.View{}, domain.ErrNotFound
+}
+
+func requireRoundReveal(ctx context.Context, q *sqlc.Queries, roundID pgtype.UUID, access sqlc.GetPrivatePairAccessRow) error {
+	round, err := q.GetPrivateRoundForParticipant(ctx, sqlc.GetPrivateRoundForParticipantParams{RoundID: roundID, PairID: access.PairID, MembershipEraID: access.MembershipEraID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if round.Status == sqlc.PrivateRoundStatusRetired {
+		return domain.ErrNotFound
+	}
+	answers, err := q.ListPrivateAnswers(ctx, sqlc.ListPrivateAnswersParams{RoundID: roundID, MembershipEraID: access.MembershipEraID})
+	if err != nil {
+		return err
+	}
+	if len(answers) != 2 {
+		return domain.ErrNotFound
+	}
+	reveals, err := q.ListPrivateRevealViews(ctx, sqlc.ListPrivateRevealViewsParams{RoundID: roundID, MembershipEraID: access.MembershipEraID})
+	if err != nil {
+		return err
+	}
+	for _, reveal := range reveals {
+		if reveal.MembershipID == access.ActorMembershipID {
+			return nil
+		}
+	}
+	return domain.ErrNotFound
 }
 
 func parseRoundIDs(input domain.RoundInput) (pgtype.UUID, pgtype.UUID, pgtype.UUID, error) {
@@ -631,11 +963,31 @@ func (s *Store) roundProjection(ctx context.Context, q *sqlc.Queries, input doma
 	} else {
 		result.State = "REVEAL_READY"
 	}
-	result.CanContinue = round.Status == sqlc.PrivateRoundStatusOpen && len(answers) == 2 && viewerRevealed && otherRevealed
+	conversation, err := q.GetPrivateConversation(ctx, sqlc.GetPrivateConversationParams{PairID: pairID, ConversationID: round.ConversationID, MembershipEraID: access.MembershipEraID})
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return domain.Round{}, err
+	}
+	result.CanContinue = !errors.Is(err, pgx.ErrNoRows) && conversation.CreatedByParticipantID == access.ActorParticipantID && (round.Status == sqlc.PrivateRoundStatusRetired || (round.Status == sqlc.PrivateRoundStatusCompleted && len(answers) == 2 && viewerRevealed && otherRevealed))
 	if viewerRevealed && len(answers) == 2 {
 		result.Answers = make([]domain.Answer, 0, len(answers))
 		for _, answer := range answers {
-			result.Answers = append(result.Answers, domain.Answer{ParticipantID: answer.ParticipantID.String(), MembershipID: answer.MembershipID.String(), Body: answer.Body, CreatedAt: timestampString(answer.CreatedAt)})
+			result.Answers = append(result.Answers, domain.Answer{ParticipantID: answer.ParticipantID.String(), MembershipID: answer.MembershipID.String(), Body: answer.Body, CreatedAt: timestampString(answer.CreatedAt), IsOwner: answer.MembershipID == access.ActorMembershipID})
+		}
+		reactions, err := q.ListPrivateReactions(ctx, sqlc.ListPrivateReactionsParams{RoundID: roundID, MembershipEraID: access.MembershipEraID})
+		if err != nil {
+			return domain.Round{}, err
+		}
+		result.Reactions = make([]domain.Reaction, 0, len(reactions))
+		for _, reaction := range reactions {
+			result.Reactions = append(result.Reactions, domain.Reaction{ParticipantID: reaction.ParticipantID.String(), DisplayName: reaction.DisplayName, Value: string(reaction.Value), IsOwner: reaction.MembershipID == access.ActorMembershipID})
+		}
+		replies, err := q.ListPrivateReplies(ctx, sqlc.ListPrivateRepliesParams{RoundID: roundID, MembershipEraID: access.MembershipEraID})
+		if err != nil {
+			return domain.Round{}, err
+		}
+		result.Replies = make([]domain.Reply, 0, len(replies))
+		for _, reply := range replies {
+			result.Replies = append(result.Replies, domain.Reply{ParticipantID: reply.ParticipantID.String(), DisplayName: reply.DisplayName, Body: reply.Body, IsOwner: reply.MembershipID == access.ActorMembershipID})
 		}
 	}
 	return result, nil
@@ -698,12 +1050,12 @@ type eligibleQuestion struct {
 	Text, Category, Intensity string
 }
 
-func choose(seed string, questions []sqlc.ListEligiblePrivateQuestionsRow, consumed []pgtype.UUID) (eligibleQuestion, bool) {
+func choose(seed string, questions []sqlc.ListEligiblePrivateQuestionsRow, consumed []pgtype.UUID, completedRoundCount int) (eligibleQuestion, bool) {
 	used := make(map[string]struct{}, len(consumed))
 	for _, id := range consumed {
 		used[id.String()] = struct{}{}
 	}
-	preferred := domain.PreferredIntensities(0)
+	preferred := domain.PreferredIntensities(completedRoundCount)
 	for _, intensity := range preferred {
 		candidates := make([]eligibleQuestion, 0)
 		for _, question := range questions {
@@ -726,6 +1078,17 @@ func choose(seed string, questions []sqlc.ListEligiblePrivateQuestionsRow, consu
 		return candidates[0], true
 	}
 	return eligibleQuestion{}, false
+}
+
+func availablePrivateCategories(relationshipType string) []string {
+	categories := []string{"fun", "deep", "memories"}
+	if relationshipType == "partner" {
+		return append(categories, "relationship")
+	}
+	if relationshipType == "friend" {
+		return append(categories, "friendship")
+	}
+	return categories
 }
 
 func rank(seed, questionID string) string {
