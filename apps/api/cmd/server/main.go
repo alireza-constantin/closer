@@ -72,7 +72,7 @@ func run(logger *slog.Logger) error {
 	server := httpapi.NewServer(cfg.ListenAddress, router)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	realtimeListener := postgres.NewRealtimeListener(cfg.DatabaseURL, realtimeRegistry, logger)
+	realtimeListener := postgres.NewRealtimeListener(cfg.RealtimeDatabaseURL, realtimeRegistry, logger)
 	go func() {
 		if err := realtimeListener.Run(ctx); err != nil && ctx.Err() == nil {
 			logger.Warn("realtime listener stopped", "error", err)

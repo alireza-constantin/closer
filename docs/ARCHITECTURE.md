@@ -4,7 +4,7 @@
 
 This document defines the canonical V1 domain boundaries, invariants, authorization model, lifecycle behavior, and storage obligations. It intentionally does not prescribe a table-for-every-concept design. User-visible behavior is controlled by [`PRD.md`](./PRD.md); accepted decisions and their reasoning are recorded in [`adr/`](./adr/); canonical vocabulary is maintained in [`../CONTEXT.md`](../CONTEXT.md).
 
-The repository implementation predates parts of this contract. [`IMPLEMENTATION-GAPS.md`](./IMPLEMENTATION-GAPS.md) records the known differences; those differences are not alternative behavior.
+The Go API and Vite client are the active V1 implementation. [`IMPLEMENTATION-GAPS.md`](./IMPLEMENTATION-GAPS.md) is retained as a historical rewrite record and is not an inventory of current runtime gaps.
 
 > **Shared Open amendment (2026-09-20).** ADR 003 and the PRD Shared Open
 > section supersede the creator-owned Private rules and legacy Ask/Skip/Like/
@@ -16,22 +16,21 @@ The repository implementation predates parts of this contract. [`IMPLEMENTATION-
 
 ## 1. Runtime architecture
 
-Closer is a Bun workspace whose Next.js App Router application is the full-stack application and server boundary.
+Closer is a Bun workspace with a Go HTTP API and a React/Vite single-page client. The Go API owns authentication, authorization, domain transitions, and PostgreSQL access. The Vite client calls the same-origin `/api/v1` routes; development uses the Vite proxy and production serves the built client behind an API reverse proxy.
 
-| Concern                | Current choice                |
-| ---------------------- | ----------------------------- |
-| Web application        | Next.js App Router with React |
-| Language               | TypeScript                    |
-| Authentication         | Better Auth                   |
-| Database               | PostgreSQL                    |
-| ORM and schema tooling | Drizzle ORM and Drizzle Kit   |
-| Later deployment       | Vercel                        |
+| Concern                  | Current choice                    |
+| ------------------------ | --------------------------------- |
+| Web application          | React with Vite                   |
+| API                      | Go HTTP server                    |
+| Authentication           | Go-managed session cookies        |
+| Database                 | PostgreSQL                        |
+| Schema and query tooling | Versioned SQL migrations and SQLC |
 
-V1 does not require a separate backend service, microservices, tRPC/oRPC, WebSockets, or a generalized group platform. Route handlers and server-rendered pages are adapters around server/domain behavior; they must not become independent sources of product rules.
+V1 does not require microservices, tRPC/oRPC, WebSockets, or a generalized group platform. HTTP handlers are adapters around server/domain behavior; they must not become independent sources of product rules.
 
 Logical modules inside this application are:
 
-- **Authentication:** verifies a Better Auth session and resolves its domain Participant.
+- **Authentication:** verifies a server-managed session and resolves its domain Participant.
 - **Participant identity:** owns stable Participant identity and current display name.
 - **Pair access:** owns Pair slots, memberships, membership boundaries, relationship type, credentials, and termination.
 - **Question content:** owns logical Questions, immutable revisions, eligibility, deactivation, withdrawal, and intensity metadata.
@@ -43,17 +42,17 @@ Logical modules inside this application are:
 
 ## 2. Identity and authentication
 
-The authenticated Better Auth user is not the domain Participant:
+The authenticated principal is not the domain Participant:
 
 ```text
-participant.id != better_auth.user.id
+participant.id != auth_identity.id
 ```
 
-A Better Auth session proves an auth-user identity. Every product request must resolve that auth user to the current stable Participant on the server. Client-supplied auth-user, Participant, Pair, membership, Conversation, Round, candidate, or Session identifiers are selectors, never proof of authority.
+A session proves an authentication identity. Every product request must resolve that identity to the current stable Participant on the server. Client-supplied auth identity, Participant, Pair, membership, Conversation, Round, candidate, or Session identifiers are selectors, never proof of authority.
 
 Participant onboarding is independent of Pair creation. A Participant may exist with zero active or historical Pairs. The Participant owns one current, non-unique display name, trimmed to 1–40 characters.
 
-Guest-to-registered linking preserves the same `participant.id` even if Better Auth replaces or deletes the anonymous auth user. The auth-user mapping change must be idempotent and transaction-safe; domain ownership is not copied to a second Participant. This boundary is governed by [ADR 001](./adr/001-domain-participant-identity.md).
+Guest-to-registered linking preserves the same `participant.id` even if the underlying authentication identity changes. The auth identity mapping change must be idempotent and transaction-safe; domain ownership is not copied to a second Participant. This boundary is governed by [ADR 001](./adr/001-domain-participant-identity.md).
 
 ## 3. Canonical domain model
 

@@ -1,6 +1,8 @@
 # Closer Go + Vite rewrite architecture
 
-**Status: REWRITE-01 architecture freeze.** The final target is React, Vite,
+> **Archived transition record.** The rewrite and final runtime cutover are complete. This directory preserves the migration decisions, contract drafts, and parity plan for history; older implementation paths and intermediate-state descriptions are not current release instructions. Use the root README and [current architecture](../ARCHITECTURE.md) for the shipped stack.
+
+**Historical status: REWRITE-01 architecture freeze.** The final target is React, Vite,
 TypeScript, React Router, TanStack Query, React Hook Form, Zod, Tailwind, and
 the existing Closer visual system on the frontend; Go, PostgreSQL, HTTP JSON,
 SSE, and PostgreSQL `LISTEN`/`NOTIFY` on the backend. **Purpose-built Closer

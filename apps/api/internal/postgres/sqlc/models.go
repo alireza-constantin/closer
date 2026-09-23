@@ -187,8 +187,8 @@ type PrivateRoundStatus string
 
 const (
 	PrivateRoundStatusOpen      PrivateRoundStatus = "open"
-	PrivateRoundStatusRetired   PrivateRoundStatus = "retired"
 	PrivateRoundStatusCompleted PrivateRoundStatus = "completed"
+	PrivateRoundStatusRetired   PrivateRoundStatus = "retired"
 )
 
 func (e *PrivateRoundStatus) Scan(src interface{}) error {

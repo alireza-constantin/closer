@@ -1,6 +1,8 @@
 # Closer Admin V1 specification
 
-**Status:** Locked for mockup and implementation planning
+> **Historical product and design reference.** Its Admin behavior decisions remain useful, but its legacy Next.js paths, Better Auth implementation notes, and setup guidance do not describe the shipped Go + Vite runtime. Use [the current Admin operator runbook](./ADMIN-RUNBOOK.md) and [analytics specification](./ADMIN-ANALYTICS.md) for release operations and current analytics privacy behavior.
+
+**Historical status:** Admin V1 behavior and design were locked; legacy runtime details are superseded.
 
 This is the canonical specification for Closer Admin V1 and the `PRIVATE-01`
 consumer-domain dependency it requires. It records settled product and

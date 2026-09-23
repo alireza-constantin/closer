@@ -292,7 +292,43 @@ func TestQuestionAnalyticsAggregatesPinnedRevisionsAndDistinctPairs(t *testing.T
 	}
 	allPrivate, err := store.PrivateAggregate(ctx, questionID, "", domain.ScopeAll)
 	if err != nil || allPrivate == nil || allPrivate.ValidOffers != 6 {
-		t.Fatalf("all-revisions Private = %+v, err=%v", allPrivate, err)
+		t.Fatalf("all-revisions Private with one qualifying revision = %+v, err=%v", allPrivate, err)
+	}
+	allTogether, err := store.TogetherAggregate(ctx, questionID, "", domain.ScopeAll)
+	if err != nil || allTogether == nil || allTogether.Shown != 5 {
+		t.Fatalf("all-revisions Together with one qualifying revision = %+v, err=%v", allTogether, err)
+	}
+	if err := pool.WithConnection(ctx, func(db postgres.QueryDB) error {
+		for _, pairID := range pairIDs[:4] {
+			var eraID, conversationID, sessionID string
+			if err := db.QueryRow(ctx, "SELECT id::text FROM pair_membership_era WHERE pair_id = $1 AND ended_at IS NULL", pairID).Scan(&eraID); err != nil {
+				return err
+			}
+			if err := db.QueryRow(ctx, "INSERT INTO private_conversation(pair_id, category, created_by_participant_id, membership_era_id) VALUES ($1, 'memories', $2, $3) RETURNING id::text", pairID, participantIDs[0], eraID).Scan(&conversationID); err != nil {
+				return err
+			}
+			if _, err := db.Exec(ctx, "INSERT INTO private_question_candidate(conversation_id, question_id, question_revision_id, state) VALUES ($1, $2, $3, 'unresolved')", conversationID, questionID, revisionTwo); err != nil {
+				return err
+			}
+			if _, err := db.Exec(ctx, "UPDATE together_session SET ended_at = now() WHERE pair_id = $1 AND ended_at IS NULL", pairID); err != nil {
+				return err
+			}
+			if err := db.QueryRow(ctx, "INSERT INTO together_session(pair_id, membership_era_id, category, started_by_participant_id, selection_seed) VALUES ($1, $2, 'fun', $3, 'admin-analytics-sparse-revision') RETURNING id::text", pairID, eraID, participantIDs[0]).Scan(&sessionID); err != nil {
+				return err
+			}
+			if _, err := db.Exec(ctx, "INSERT INTO together_session_question(session_id, question_id, question_revision_id, position) VALUES ($1, $2, $3, 1)", sessionID, questionID, revisionTwo); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed below-threshold second revision: %v", err)
+	}
+	if got, err := store.PrivateAggregate(ctx, questionID, "", domain.ScopeAll); err != nil || got != nil {
+		t.Fatalf("all-revisions Private with a four-Pair revision = %+v, err=%v; want suppressed", got, err)
+	}
+	if got, err := store.TogetherAggregate(ctx, questionID, "", domain.ScopeAll); err != nil || got != nil {
+		t.Fatalf("all-revisions Together with a four-Pair revision = %+v, err=%v; want suppressed", got, err)
 	}
 
 	coverage, err := store.Coverage(ctx)

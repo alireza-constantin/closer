@@ -20,6 +20,11 @@ final candidate Likes can be truthfully produced.
   **All revisions — historical aggregate** is explicitly labelled as historical.
 - **Contributing Pair:** distinct logical Pair joined only inside the aggregate
   query for privacy suppression; Pair identity is never returned.
+- **All revisions suppression:** the historical aggregate is available only
+  when every revision with activity in that mode independently has at least five
+  distinct contributing Pairs. This prevents subtracting the current or a
+  selected revision aggregate from the historical total to recover a smaller
+  revision bucket. Revisions with no activity do not form a displayed bucket.
 - **No date UI:** V1 is All Time. Timestamp columns identify authoritative
   future cohort fields, not a V1 filter.
 

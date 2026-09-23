@@ -22,7 +22,19 @@ JOIN private_conversation pc ON pc.id = c.conversation_id
 WHERE c.question_id = $1
   AND ($2::uuid IS NULL OR c.question_revision_id = $2)
   AND c.state IN ('unresolved', 'asked', 'skipped')
-HAVING count(DISTINCT pc.pair_id) >= sqlc.arg(min_distinct_pairs)::bigint;
+HAVING count(DISTINCT pc.pair_id) >= sqlc.arg(min_distinct_pairs)::bigint
+   AND (
+       $2::uuid IS NOT NULL
+       OR NOT EXISTS (
+           SELECT 1
+           FROM private_question_candidate scoped_c
+           JOIN private_conversation scoped_pc ON scoped_pc.id = scoped_c.conversation_id
+           WHERE scoped_c.question_id = $1
+             AND scoped_c.state IN ('unresolved', 'asked', 'skipped')
+           GROUP BY scoped_c.question_revision_id
+           HAVING count(DISTINCT scoped_pc.pair_id) < sqlc.arg(min_distinct_pairs)::bigint
+       )
+   );
 
 -- name: GetAdminTogetherQuestionAnalytics :one
 SELECT
@@ -35,7 +47,18 @@ FROM together_session_question tsq
 JOIN together_session ts ON ts.id = tsq.session_id
 WHERE tsq.question_id = $1
   AND ($2::uuid IS NULL OR tsq.question_revision_id = $2)
-HAVING count(DISTINCT ts.pair_id) >= sqlc.arg(min_distinct_pairs)::bigint;
+HAVING count(DISTINCT ts.pair_id) >= sqlc.arg(min_distinct_pairs)::bigint
+   AND (
+       $2::uuid IS NOT NULL
+       OR NOT EXISTS (
+           SELECT 1
+           FROM together_session_question scoped_tsq
+           JOIN together_session scoped_ts ON scoped_ts.id = scoped_tsq.session_id
+           WHERE scoped_tsq.question_id = $1
+           GROUP BY scoped_tsq.question_revision_id
+           HAVING count(DISTINCT scoped_ts.pair_id) < sqlc.arg(min_distinct_pairs)::bigint
+       )
+   );
 
 -- name: GetAdminQuestionCoverage :many
 SELECT
