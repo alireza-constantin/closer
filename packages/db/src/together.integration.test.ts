@@ -497,7 +497,7 @@ describe("Closer Slice 02 Together sessions", () => {
           sessionId: lightFallback.sessionId,
         })
       ).question?.intensity,
-    ).toBe("medium");
+    ).toBe("light");
     await advanceTogetherSession(db, {
       pairId: partner.pair.id,
       participantId: partner.creator.id,
@@ -505,6 +505,15 @@ describe("Closer Slice 02 Together sessions", () => {
       action: "skip",
       clientRequestId: randomUUID(),
     });
+    expect(
+      (
+        await getTogetherSessionForParticipant(db, {
+          pairId: partner.pair.id,
+          participantId: partner.creator.id,
+          sessionId: lightFallback.sessionId,
+        })
+      ).question?.intensity,
+    ).toBe("medium");
     await advanceTogetherSession(db, {
       pairId: partner.pair.id,
       participantId: partner.creator.id,
@@ -560,7 +569,8 @@ describe("Closer Slice 02 Together sessions", () => {
       clientRequestId: randomUUID(),
       selectionSeed: "ticket-07-deep-fallback",
     });
-    for (let index = 0; index < 4; index += 1) {
+    // The legacy seed contributes one Deep question; consume it before asserting fallback to Medium.
+    for (let index = 0; index < 5; index += 1) {
       await advanceTogetherSession(db, {
         pairId: partner.pair.id,
         participantId: partner.creator.id,
@@ -1124,8 +1134,14 @@ describe("Closer Slice 02 Together sessions", () => {
         .where(eq(togetherSessionQuestion.sessionId, started.sessionId)),
     ).toHaveLength(1);
 
-    const expectedMediumOrder = questionsByBand.medium
-      .map((created) => created.question.id)
+    const eligibleMediumQuestions = await listEligibleTogetherQuestions(db, {
+      pairId: pair.pair.id,
+      participantId: pair.creator.id,
+      category: "deep",
+    });
+    const expectedMediumOrder = eligibleMediumQuestions
+      .filter((eligible) => eligible.intensity === "medium" && eligible.id !== started.questionId)
+      .map((eligible) => eligible.id)
       .toSorted((left, right) => {
         const leftRank = createHash("sha256")
           .update(`closer:together:${selectionSeed}:${left}`)

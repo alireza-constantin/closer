@@ -65,6 +65,7 @@ function sessionCookie(response: Response) {
 }
 
 afterEach(async () => {
+  await db.delete(schema.rateLimit);
   const userIds = [...createdUserIds];
   if (!userIds.length) return;
 
@@ -235,7 +236,7 @@ test("Admin auth path cannot create users or anonymous consumer sessions", async
 });
 
 test("Admin sign-in applies a durable five-request per-minute IP limit", async () => {
-  const ip = `198.51.100.${Math.floor(Math.random() * 200) + 1}`;
+  const ip = "203.0.113.254";
   const request = (authInstance = adminAuth) =>
     authInstance.handler(
       new Request(`${env.BETTER_AUTH_URL}/api/admin-auth/sign-in/email`, {

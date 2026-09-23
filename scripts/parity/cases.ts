@@ -824,30 +824,87 @@ const cases = [
     ],
   },
   {
-    id: "private.start-race-stable-creator-candidate",
+    id: "private.start-race-stable-shared-candidate",
     area: "private",
     gate: "must-pass-before-cutover",
-    title: "Concurrent category starts converge on one Conversation, creator, and candidate",
-    preconditions: ["Both active members concurrently start the same Pair/era/category."],
+    title: "Concurrent cross-category starts converge on one pair-wide exchange and lane",
+    preconditions: [
+      "Both active members concurrently start different categories for the same Pair and era while no Private exchange is open.",
+    ],
     actions: [
-      action("start-a", "participant-a", "POST Private conversation start", "start"),
-      action("start-b", "participant-b", "POST Private conversation start", "start"),
+      action("start-a", "participant-a", "POST Private start for Fun", "start"),
+      action("start-b", "participant-b", "POST Private start for Deep", "start"),
     ],
     expected: {
       actions: [{ id: "start-a" }, { id: "start-b" }],
       persistedState: {
-        conversationsForCategory: 1,
-        candidatesForConversation: 1,
-        immutableCreator: true,
+        openPrivateExchangesPairWide: 1,
+        unresolvedCandidatesPairWide: 1,
+        unresolvedRoundsPairWide: 0,
+        oneSharedLane: true,
       },
       projections: [
-        { actor: "participant-a", mustContain: { conversationId: "$conversation" } },
-        { actor: "participant-b", mustContain: { conversationId: "$conversation" } },
+        {
+          actor: "participant-a",
+          mustContain: { exchangeId: "$exchange", categoryLane: "$selectedLane" },
+        },
+        {
+          actor: "participant-b",
+          mustContain: { exchangeId: "$exchange", categoryLane: "$selectedLane" },
+        },
       ],
     },
     sources: [
-      "docs/adr/003-private-answer-reveal.md — Conversation identity and creator",
-      "packages/db/src/private.integration.test.ts — category start persists one creator-owned candidate and concurrent starters converge",
+      "docs/PRD.md — one pair-wide Private exchange and sticky shared lane",
+      "apps/api/internal/postgres/private/concurrency_integration_test.go — different category starts converge on one active candidate",
+    ],
+  },
+  {
+    id: "private.sticky-lane-progression",
+    area: "private",
+    gate: "must-pass-before-cutover",
+    title: "A pending exchange locks its shared lane until Something else progression",
+    preconditions: [
+      "One Private exchange is open in the Fun lane and its current Round is awaiting its remaining Reveal View.",
+    ],
+    actions: [
+      action("start-deep-while-pending", "participant-b", "POST Private start for Deep"),
+      action(
+        "try-something-else-early",
+        "participant-a",
+        "request a lane change before both Reveal Views",
+      ),
+      action("reveal-second", "participant-b", "open the current Round's Reveal"),
+      action("something-else", "participant-a", "choose Deep through Something else progression"),
+    ],
+    expected: {
+      actions: [
+        { id: "start-deep-while-pending" },
+        { id: "try-something-else-early" },
+        { id: "reveal-second" },
+        { id: "something-else" },
+      ],
+      persistedState: {
+        openPrivateExchangesPairWide: 1,
+        independentCategoryExchanges: 0,
+        laneRemainsFunWhilePending: true,
+        laneChangesToDeepOnlyAfterSomethingElse: true,
+      },
+      projections: [
+        {
+          actor: "participant-b",
+          mustContain: { exchangeId: "$exchange", categoryLane: "fun" },
+        },
+        {
+          actor: "participant-a",
+          mustContain: { exchangeId: "$exchange", categoryLane: "deep" },
+        },
+      ],
+    },
+    sources: [
+      "docs/PRD.md — sticky Private lane and post-Reveal Something else progression",
+      "apps/api/internal/postgres/private/concurrency_integration_test.go — pair-wide cross-category exchange convergence",
+      "packages/db/src/private.integration.test.ts — completed-lane coverage no longer asserts a separate persistent Conversation ID per category",
     ],
   },
   {
