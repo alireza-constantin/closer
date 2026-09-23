@@ -2,6 +2,7 @@ package private_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"os"
@@ -301,6 +302,11 @@ func TestHistoryKeepsMembershipEraPrivateAfterReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	oldEraCursor := base64.RawURLEncoding.EncodeToString([]byte(f.pairID + "|2099-01-01T00:00:00Z|" + round.ID))
+	oldEraPage, err := f.service.History(context.Background(), domain.HistoryInput{ParticipantID: replacementID, PairID: f.pairID, Cursor: oldEraCursor, Limit: 20})
+	if err != nil || len(oldEraPage.Rounds) != 0 {
+		t.Fatalf("replacement cursor crossed membership eras: %+v, err=%v", oldEraPage, err)
+	}
 	serialized, err := json.Marshal(replacementHistory)
 	if err != nil {
 		t.Fatal(err)
@@ -338,7 +344,10 @@ func TestHistoryKeysetPaginationIsStableAndComplete(t *testing.T) {
 	f := openFixture(t)
 	createActiveQuestion(t, f, "fun", "Second chronological prompt")
 	createActiveQuestion(t, f, "fun", "Third chronological prompt")
-	firstRound, _, _ := createMutuallyRevealedRound(t, f)
+	firstRound, _, firstSecond := createMutuallyRevealedRound(t, f)
+	if _, err := f.service.SetReply(context.Background(), domain.ReplyInput{RoundInput: firstSecond, Body: "B_REPLY_CURSOR_SECRET"}); err != nil {
+		t.Fatal(err)
+	}
 	rounds := []domain.Round{firstRound}
 	previous := firstRound
 	for index := 0; index < 2; index++ {
@@ -376,6 +385,20 @@ func TestHistoryKeysetPaginationIsStableAndComplete(t *testing.T) {
 		paged = append(paged, page.Rounds...)
 		if pageNumber == 0 && page.NextCursor == "" {
 			t.Fatal("first history page did not return a cursor")
+		}
+		if pageNumber == 0 {
+			decodedCursor, err := base64.RawURLEncoding.DecodeString(page.NextCursor)
+			if err != nil {
+				t.Fatalf("decode history cursor: %v", err)
+			}
+			if strings.Contains(string(decodedCursor), "pagination answer") || strings.Contains(string(decodedCursor), "B_REPLY_CURSOR_SECRET") {
+				t.Fatalf("history cursor contains private answer or reply content: %q", decodedCursor)
+			}
+			foreignPairID := testUUID(t, f.pool)
+			_, err = f.service.History(context.Background(), domain.HistoryInput{ParticipantID: f.firstID, PairID: foreignPairID, Cursor: page.NextCursor, Limit: 1})
+			if !errors.Is(err, domain.ErrHistoryCursor) {
+				t.Fatalf("cross-Pair history cursor error = %v, want invalid cursor", err)
+			}
 		}
 		cursor = page.NextCursor
 		if cursor == "" {
