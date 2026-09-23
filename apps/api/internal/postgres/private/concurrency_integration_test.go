@@ -1447,6 +1447,12 @@ func TestGuestRejoinClosesEraAndReplacementCannotAccessOldPrivateOrTogetherState
 	if _, err := f.service.Reveal(context.Background(), secondInput); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := f.service.SetReaction(context.Background(), domain.ReactionInput{RoundInput: secondInput, Value: "heart"}); err != nil {
+		t.Fatalf("former guest reaction: %v", err)
+	}
+	if _, err := f.service.SetReply(context.Background(), domain.ReplyInput{RoundInput: secondInput, Body: "OLD-ERA-REPLY"}); err != nil {
+		t.Fatalf("former guest reply: %v", err)
+	}
 	deepQuestionID := createActiveQuestion(t, f, "deep", "Rejoin candidate invalidation")
 
 	var oldEraID, firstMembershipID, secondMembershipID, togetherSessionID, oldCandidateID string
@@ -1518,6 +1524,8 @@ func TestGuestRejoinClosesEraAndReplacementCannotAccessOldPrivateOrTogetherState
 	var endedAt bool
 	var candidateState string
 	var revealViews, replacementRevealViews int
+	var oldAnswerCount, newAnswerCount, oldReactionCount, newReactionCount, oldReplyCount, newReplyCount int
+	var oldReaction, oldReply string
 	var oldAuthOwner, oldConversationCreator string
 	if err := f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
 		if err := db.QueryRow(context.Background(), "SELECT ended_at IS NOT NULL FROM together_session WHERE id=$1", togetherSessionID).Scan(&endedAt); err != nil {
@@ -1532,6 +1540,24 @@ func TestGuestRejoinClosesEraAndReplacementCannotAccessOldPrivateOrTogetherState
 		if err := db.QueryRow(context.Background(), "SELECT count(*) FROM private_reveal_view WHERE round_id=$1 AND membership_id=$2", round.ID, replacementMembershipID).Scan(&replacementRevealViews); err != nil {
 			return err
 		}
+		if err := db.QueryRow(context.Background(), "SELECT count(*) FROM private_answer WHERE round_id=$1 AND membership_id=$2", round.ID, secondMembershipID).Scan(&oldAnswerCount); err != nil {
+			return err
+		}
+		if err := db.QueryRow(context.Background(), "SELECT count(*) FROM private_answer WHERE round_id=$1 AND membership_id=$2", round.ID, replacementMembershipID).Scan(&newAnswerCount); err != nil {
+			return err
+		}
+		if err := db.QueryRow(context.Background(), "SELECT count(*), COALESCE(max(value::text), '') FROM private_reaction WHERE round_id=$1 AND membership_id=$2", round.ID, secondMembershipID).Scan(&oldReactionCount, &oldReaction); err != nil {
+			return err
+		}
+		if err := db.QueryRow(context.Background(), "SELECT count(*) FROM private_reaction WHERE round_id=$1 AND membership_id=$2", round.ID, replacementMembershipID).Scan(&newReactionCount); err != nil {
+			return err
+		}
+		if err := db.QueryRow(context.Background(), "SELECT count(*), COALESCE(max(body), '') FROM private_reply WHERE round_id=$1 AND membership_id=$2", round.ID, secondMembershipID).Scan(&oldReplyCount, &oldReply); err != nil {
+			return err
+		}
+		if err := db.QueryRow(context.Background(), "SELECT count(*) FROM private_reply WHERE round_id=$1 AND membership_id=$2", round.ID, replacementMembershipID).Scan(&newReplyCount); err != nil {
+			return err
+		}
 		if err := db.QueryRow(context.Background(), "SELECT auth_user_id::text FROM participant WHERE id=$1", f.firstID).Scan(&oldAuthOwner); err != nil {
 			return err
 		}
@@ -1539,8 +1565,8 @@ func TestGuestRejoinClosesEraAndReplacementCannotAccessOldPrivateOrTogetherState
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if !endedAt || candidateState != "invalidated" || revealViews != 2 || replacementRevealViews != 0 || oldAuthOwner != f.firstAuthID || oldConversationCreator != f.firstID {
-		t.Fatalf("replacement state: togetherEnded=%v candidate=%s oldRevealViews=%d newRevealViews=%d oldAuthOwner=%s oldCreator=%s", endedAt, candidateState, revealViews, replacementRevealViews, oldAuthOwner, oldConversationCreator)
+	if replacementParticipantID == f.secondID || replacementMembershipID == secondMembershipID || replacementEraID == oldEraID || !endedAt || candidateState != "invalidated" || revealViews != 2 || replacementRevealViews != 0 || oldAnswerCount != 1 || newAnswerCount != 0 || oldReactionCount != 1 || oldReaction != "heart" || newReactionCount != 0 || oldReplyCount != 1 || oldReply != "OLD-ERA-REPLY" || newReplyCount != 0 || oldAuthOwner != f.firstAuthID || oldConversationCreator != f.firstID {
+		t.Fatalf("replacement state: participant=%s/%s membership=%s/%s era=%s/%s togetherEnded=%v candidate=%s oldRevealViews=%d newRevealViews=%d answers=%d newAnswers=%d reactions=%d/%q newReactions=%d replies=%d/%q newReplies=%d oldAuthOwner=%s oldCreator=%s", replacementParticipantID, f.secondID, replacementMembershipID, secondMembershipID, replacementEraID, oldEraID, endedAt, candidateState, revealViews, replacementRevealViews, oldAnswerCount, newAnswerCount, oldReactionCount, oldReaction, newReactionCount, oldReplyCount, oldReply, newReplyCount, oldAuthOwner, oldConversationCreator)
 	}
 
 	replacementInput := domain.RoundInput{ParticipantID: replacementParticipantID, PairID: f.pairID, RoundID: round.ID}
@@ -1549,6 +1575,15 @@ func TestGuestRejoinClosesEraAndReplacementCannotAccessOldPrivateOrTogetherState
 	}
 	if _, err := f.service.Answer(context.Background(), domain.AnswerInput{RoundInput: replacementInput, Body: "FORBIDDEN"}); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("replacement mutated old Private Round: %v", err)
+	}
+	if _, err := f.service.Reveal(context.Background(), replacementInput); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("replacement revealed old Private Round: %v", err)
+	}
+	if _, err := f.service.SetReaction(context.Background(), domain.ReactionInput{RoundInput: replacementInput, Value: "laugh"}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("replacement mutated former guest reaction: %v", err)
+	}
+	if _, err := f.service.SetReply(context.Background(), domain.ReplyInput{RoundInput: replacementInput, Body: "INHERITED"}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("replacement mutated former guest reply: %v", err)
 	}
 	future, err := f.service.StartOrResume(context.Background(), domain.StartInput{ParticipantID: replacementParticipantID, PairID: f.pairID, Category: "fun"})
 	if err != nil || future.Candidate == nil || future.ConversationID == started.ConversationID || future.CreatorParticipantID != replacementParticipantID {
