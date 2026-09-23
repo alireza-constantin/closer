@@ -26,6 +26,13 @@ import {
   type Revision,
   type RevisionFields,
 } from "@/features/admin/api";
+import {
+  AdminCoverageOverview,
+  invalidateCoverage,
+  invalidateQuestionAnalytics,
+  QuestionAnalyticsPanel,
+} from "@/features/admin/analytics";
+import { adminCategoryLabel } from "@/features/admin/category-presentation";
 import { revisionFieldsSchema, type RevisionFieldsForm } from "@/features/admin/forms";
 import { ApiError } from "@/lib/api-client";
 
@@ -246,28 +253,31 @@ export function AdminLoginPage() {
 
 export function AdminHomePage() {
   return (
-    <section className="grid gap-4 sm:grid-cols-2">
-      <Link
-        className="bg-closer-surface border-closer-line rounded-3xl border p-6 transition hover:-translate-y-0.5"
-        to="/admin/questions"
-      >
-        <p className="text-closer-coral text-sm font-bold uppercase">Catalog</p>
-        <h2 className="mt-2 text-2xl font-extrabold">Review Questions</h2>
-        <p className="text-closer-muted mt-2 leading-6">
-          Search, filter, and open the editorial catalog.
-        </p>
-      </Link>
-      <Link
-        className="bg-closer-peach/50 rounded-3xl p-6 transition hover:-translate-y-0.5"
-        to="/admin/questions/new"
-      >
-        <p className="text-closer-coral text-sm font-bold uppercase">Author</p>
-        <h2 className="mt-2 text-2xl font-extrabold">New Question</h2>
-        <p className="text-closer-muted mt-2 leading-6">
-          Add a new inactive question to the catalog.
-        </p>
-      </Link>
-    </section>
+    <div className="space-y-8">
+      <AdminCoverageOverview />
+      <section aria-label="Question authoring" className="grid gap-4 sm:grid-cols-2">
+        <Link
+          className="bg-closer-surface border-closer-line rounded-3xl border p-6 transition hover:-translate-y-0.5"
+          to="/admin/questions"
+        >
+          <p className="text-closer-coral text-sm font-bold uppercase">Catalog</p>
+          <h2 className="mt-2 text-2xl font-extrabold">Review Questions</h2>
+          <p className="text-closer-muted mt-2 leading-6">
+            Search, filter, and open the editorial catalog.
+          </p>
+        </Link>
+        <Link
+          className="bg-closer-peach/50 rounded-3xl p-6 transition hover:-translate-y-0.5"
+          to="/admin/questions/new"
+        >
+          <p className="text-closer-coral text-sm font-bold uppercase">Author</p>
+          <h2 className="mt-2 text-2xl font-extrabold">New Question</h2>
+          <p className="text-closer-muted mt-2 leading-6">
+            Add a new inactive question to the catalog.
+          </p>
+        </Link>
+      </section>
+    </div>
   );
 }
 
@@ -298,15 +308,7 @@ function SelectField({
 }
 
 function categoryLabel(value: string) {
-  return value === "fun"
-    ? "Fun"
-    : value === "deep"
-      ? "Deep"
-      : value === "memories"
-        ? "Memories"
-        : value === "relationship"
-          ? "Relationship"
-          : "Friendship";
+  return adminCategoryLabel(value);
 }
 function facetLabel(value: string) {
   return value === "both" ? "Both" : value.charAt(0).toUpperCase() + value.slice(1);
@@ -656,6 +658,7 @@ export function AdminNewQuestionPage() {
     mutationFn: createQuestion,
     onSuccess: async (question) => {
       await queryClient.invalidateQueries({ queryKey: questionListKey });
+      await invalidateCoverage(queryClient);
       navigate(`/admin/questions/${question.id}`);
     },
   });
@@ -745,6 +748,8 @@ export function AdminQuestionDetailPage() {
       setStale(false);
       await queryClient.invalidateQueries({ queryKey: questionDetailKey(questionId) });
       await queryClient.invalidateQueries({ queryKey: questionListKey });
+      await invalidateQuestionAnalytics(queryClient, questionId);
+      await invalidateCoverage(queryClient);
     },
     onError: (error) => {
       if (error instanceof ApiError && error.status === 409) setStale(true);
@@ -756,6 +761,7 @@ export function AdminQuestionDetailPage() {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: questionDetailKey(questionId) });
       await queryClient.invalidateQueries({ queryKey: questionListKey });
+      await invalidateCoverage(queryClient);
     },
   });
   const restore = useMutation({
@@ -764,6 +770,8 @@ export function AdminQuestionDetailPage() {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: questionDetailKey(questionId) });
       await queryClient.invalidateQueries({ queryKey: questionListKey });
+      await invalidateQuestionAnalytics(queryClient, questionId);
+      await invalidateCoverage(queryClient);
     },
   });
   const withdraw = useMutation({
@@ -773,6 +781,8 @@ export function AdminQuestionDetailPage() {
       setWithdrawTarget(null);
       await queryClient.invalidateQueries({ queryKey: questionDetailKey(questionId) });
       await queryClient.invalidateQueries({ queryKey: questionListKey });
+      await invalidateQuestionAnalytics(queryClient, questionId);
+      await invalidateCoverage(queryClient);
     },
   });
   if (detail.isPending) return <p className="text-closer-muted">Loading Question…</p>;
@@ -919,6 +929,7 @@ export function AdminQuestionDetailPage() {
           </div>
         )}
       </div>
+      <QuestionAnalyticsPanel question={question} revisions={revisions} />
       {withdrawTarget && (
         <WithdrawalDialog
           current={withdrawTarget}
