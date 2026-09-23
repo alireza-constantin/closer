@@ -20,6 +20,24 @@ func (q *Queries) ClearIntendedPersonName(ctx context.Context, pairID pgtype.UUI
 	return err
 }
 
+const closeTogetherSessionsForRejoinEra = `-- name: CloseTogetherSessionsForRejoinEra :exec
+UPDATE together_session
+SET ended_at = COALESCE(ended_at, clock_timestamp())
+WHERE pair_id = $1
+  AND membership_era_id = $2
+  AND ended_at IS NULL
+`
+
+type CloseTogetherSessionsForRejoinEraParams struct {
+	PairID pgtype.UUID `json:"pair_id"`
+	EraID  pgtype.UUID `json:"era_id"`
+}
+
+func (q *Queries) CloseTogetherSessionsForRejoinEra(ctx context.Context, arg CloseTogetherSessionsForRejoinEraParams) error {
+	_, err := q.db.Exec(ctx, closeTogetherSessionsForRejoinEra, arg.PairID, arg.EraID)
+	return err
+}
+
 const createClaimMembership = `-- name: CreateClaimMembership :one
 INSERT INTO pair_membership (pair_id, participant_id, slot)
 VALUES ($1, $2, 'second')
@@ -117,6 +135,95 @@ func (q *Queries) CreateRejoinInvite(ctx context.Context, arg CreateRejoinInvite
 	var i CreateRejoinInviteRow
 	err := row.Scan(&i.ID, &i.ExpiresAt)
 	return i, err
+}
+
+const createReplacementMembershipEraForRejoin = `-- name: CreateReplacementMembershipEraForRejoin :one
+INSERT INTO pair_membership_era (pair_id, first_membership_id, second_membership_id)
+VALUES ($1, $2, $3)
+RETURNING id
+`
+
+type CreateReplacementMembershipEraForRejoinParams struct {
+	PairID             pgtype.UUID `json:"pair_id"`
+	FirstMembershipID  pgtype.UUID `json:"first_membership_id"`
+	SecondMembershipID pgtype.UUID `json:"second_membership_id"`
+}
+
+func (q *Queries) CreateReplacementMembershipEraForRejoin(ctx context.Context, arg CreateReplacementMembershipEraForRejoinParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, createReplacementMembershipEraForRejoin, arg.PairID, arg.FirstMembershipID, arg.SecondMembershipID)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
+const createReplacementMembershipForRejoin = `-- name: CreateReplacementMembershipForRejoin :one
+INSERT INTO pair_membership (pair_id, participant_id, slot)
+VALUES ($1, $2, $3)
+RETURNING id
+`
+
+type CreateReplacementMembershipForRejoinParams struct {
+	PairID        pgtype.UUID `json:"pair_id"`
+	ParticipantID pgtype.UUID `json:"participant_id"`
+	Slot          PairSlot    `json:"slot"`
+}
+
+func (q *Queries) CreateReplacementMembershipForRejoin(ctx context.Context, arg CreateReplacementMembershipForRejoinParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, createReplacementMembershipForRejoin, arg.PairID, arg.ParticipantID, arg.Slot)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
+const createReplacementParticipantForRejoin = `-- name: CreateReplacementParticipantForRejoin :one
+INSERT INTO participant (auth_user_id, display_name)
+VALUES ($1, $2)
+RETURNING id
+`
+
+type CreateReplacementParticipantForRejoinParams struct {
+	AuthUserID  pgtype.UUID `json:"auth_user_id"`
+	DisplayName string      `json:"display_name"`
+}
+
+func (q *Queries) CreateReplacementParticipantForRejoin(ctx context.Context, arg CreateReplacementParticipantForRejoinParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, createReplacementParticipantForRejoin, arg.AuthUserID, arg.DisplayName)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
+const endMembershipEraForRejoin = `-- name: EndMembershipEraForRejoin :execrows
+UPDATE pair_membership_era
+SET ended_at = clock_timestamp()
+WHERE id = $1 AND ended_at IS NULL
+`
+
+func (q *Queries) EndMembershipEraForRejoin(ctx context.Context, eraID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, endMembershipEraForRejoin, eraID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const endTargetMembershipForRejoin = `-- name: EndTargetMembershipForRejoin :execrows
+UPDATE pair_membership
+SET ended_at = clock_timestamp(), ended_display_name = $1
+WHERE id = $2 AND ended_at IS NULL
+`
+
+type EndTargetMembershipForRejoinParams struct {
+	EndedDisplayName pgtype.Text `json:"ended_display_name"`
+	MembershipID     pgtype.UUID `json:"membership_id"`
+}
+
+func (q *Queries) EndTargetMembershipForRejoin(ctx context.Context, arg EndTargetMembershipForRejoinParams) (int64, error) {
+	result, err := q.db.Exec(ctx, endTargetMembershipForRejoin, arg.EndedDisplayName, arg.MembershipID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const findInitialInviteForIssue = `-- name: FindInitialInviteForIssue :one
@@ -544,6 +651,20 @@ func (q *Queries) HasDuplicateActiveParticipantPair(ctx context.Context, arg Has
 	return column_1, err
 }
 
+const invalidatePrivateCandidatesForRejoinEra = `-- name: InvalidatePrivateCandidatesForRejoinEra :exec
+UPDATE private_question_candidate AS candidate
+SET state = 'invalidated', resolved_at = COALESCE(candidate.resolved_at, clock_timestamp())
+FROM private_conversation AS conversation
+WHERE candidate.conversation_id = conversation.id
+  AND conversation.membership_era_id = $1
+  AND candidate.state = 'unresolved'
+`
+
+func (q *Queries) InvalidatePrivateCandidatesForRejoinEra(ctx context.Context, eraID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, invalidatePrivateCandidatesForRejoinEra, eraID)
+	return err
+}
+
 const lockActivePairForRejoin = `-- name: LockActivePairForRejoin :one
 SELECT id, terminated_at
 FROM pair
@@ -632,27 +753,6 @@ func (q *Queries) LockTargetMembershipForRejoin(ctx context.Context, arg LockTar
 		&i.AuthUserKind,
 	)
 	return i, err
-}
-
-const rebindParticipantAuthUserForRejoin = `-- name: RebindParticipantAuthUserForRejoin :execrows
-UPDATE participant
-SET auth_user_id = $1, updated_at = clock_timestamp()
-WHERE id = $2
-  AND auth_user_id = $3
-`
-
-type RebindParticipantAuthUserForRejoinParams struct {
-	NewAuthUserID pgtype.UUID `json:"new_auth_user_id"`
-	ParticipantID pgtype.UUID `json:"participant_id"`
-	OldAuthUserID pgtype.UUID `json:"old_auth_user_id"`
-}
-
-func (q *Queries) RebindParticipantAuthUserForRejoin(ctx context.Context, arg RebindParticipantAuthUserForRejoinParams) (int64, error) {
-	result, err := q.db.Exec(ctx, rebindParticipantAuthUserForRejoin, arg.NewAuthUserID, arg.ParticipantID, arg.OldAuthUserID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }
 
 const redeemInitialInvite = `-- name: RedeemInitialInvite :execrows
