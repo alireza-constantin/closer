@@ -16,6 +16,7 @@ import { TogetherPickerPage, TogetherSessionPage } from "@/features/together/tog
 import {
   PrivateCategoryPage,
   PrivateConversationPage,
+  PrivateHistoryPage,
 } from "@/features/private-conversation/components";
 import { queryClient } from "@/lib/query-client";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -52,6 +53,7 @@ export const appRoutes: RouteObject[] = [
   { path: "/spaces", Component: SpacesPage },
   { path: "/pair/:pairId", Component: PairPage },
   { path: "/pair/:pairId/private", Component: PrivateCategoryPage },
+  { path: "/pair/:pairId/private/history", Component: PrivateHistoryPage },
   { path: "/pair/:pairId/private/:category", Component: PrivateConversationPage },
   { path: "/pair/:pairId/invite", Component: PairInvitePage },
   { path: "/pair/:pairId/together", Component: TogetherPickerPage },

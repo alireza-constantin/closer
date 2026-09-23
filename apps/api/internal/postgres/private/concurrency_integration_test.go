@@ -2,6 +2,7 @@ package private_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"os"
@@ -260,6 +261,295 @@ func TestConcurrentStartsConvergeAndWaitingProjectionHasNoCandidate(t *testing.T
 	}
 	if strings.Contains(string(encoded), "candidate") || strings.Contains(string(encoded), "P-01 candidate text") {
 		t.Fatalf("waiting projection leaked candidate: %s", encoded)
+	}
+}
+
+func TestHistoryKeepsMembershipEraPrivateAfterReplacement(t *testing.T) {
+	f := openFixture(t)
+	round, _, second := createMutuallyRevealedRound(t, f)
+	if err := f.pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		_, err := db.Exec(context.Background(), `UPDATE private_answer SET body = CASE participant_id WHEN $1 THEN 'A_SECRET_ERA1' ELSE 'B_SECRET_ERA1' END WHERE round_id = $2`, f.firstID, round.ID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.service.SetReaction(context.Background(), domain.ReactionInput{RoundInput: second, Value: "heart"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.service.SetReply(context.Background(), domain.ReplyInput{RoundInput: second, Body: "B_REPLY_ERA1"}); err != nil {
+		t.Fatal(err)
+	}
+	currentQuestion, err := f.questions.Get(context.Background(), f.questionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updatedQuestion, err := f.questions.Edit(context.Background(), f.questionID, question.RevisionFields{Text: "P-05 later wording", Category: "fun", RelationshipFit: "both", ModeFit: "private", Intensity: "light"}, currentQuestion.CurrentRevisionID, f.adminID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.questions.Withdraw(context.Background(), f.questionID, updatedQuestion.CurrentRevisionID, "after it was asked", f.adminID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.service.Progress(context.Background(), domain.ProgressInput{RoundInput: domain.RoundInput{ParticipantID: f.firstID, PairID: f.pairID, RoundID: round.ID}, ClientRequestID: testUUID(t, f.pool), Action: "something_else", Category: "deep"}); err != nil {
+		t.Fatal(err)
+	}
+	replacementID := createReplacementParticipant(t, f)
+	if _, _, err := replaceSecondMembership(context.Background(), f, replacementID); err != nil {
+		t.Fatal(err)
+	}
+
+	replacementHistory, err := f.service.History(context.Background(), domain.HistoryInput{ParticipantID: replacementID, PairID: f.pairID, Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldEraCursor := base64.RawURLEncoding.EncodeToString([]byte(f.pairID + "|2099-01-01T00:00:00Z|" + round.ID))
+	oldEraPage, err := f.service.History(context.Background(), domain.HistoryInput{ParticipantID: replacementID, PairID: f.pairID, Cursor: oldEraCursor, Limit: 20})
+	if err != nil || len(oldEraPage.Rounds) != 0 {
+		t.Fatalf("replacement cursor crossed membership eras: %+v, err=%v", oldEraPage, err)
+	}
+	serialized, err := json.Marshal(replacementHistory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"A_SECRET_ERA1", "B_SECRET_ERA1", "B_REPLY_ERA1", "heart"} {
+		if strings.Contains(string(serialized), secret) {
+			t.Fatalf("replacement history leaked %q: %s", secret, serialized)
+		}
+	}
+	if len(replacementHistory.Rounds) != 0 {
+		t.Fatalf("replacement inherited historical rounds: %+v", replacementHistory)
+	}
+
+	continuingHistory, err := f.service.History(context.Background(), domain.HistoryInput{ParticipantID: f.firstID, PairID: f.pairID, Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	continuingJSON, _ := json.Marshal(continuingHistory)
+	if !strings.Contains(string(continuingJSON), "B_SECRET_ERA1") || !strings.Contains(string(continuingJSON), "B_REPLY_ERA1") || !strings.Contains(string(continuingJSON), "Second") {
+		t.Fatalf("continuing member history lost the exact era projection or old display name: %s", continuingJSON)
+	}
+	if len(continuingHistory.Rounds) != 1 || continuingHistory.Rounds[0].Text != "P-01 candidate text" || continuingHistory.Rounds[0].Category != "fun" {
+		t.Fatalf("historical Round changed with a later edit, withdrawal, or lane change: %+v", continuingHistory.Rounds)
+	}
+	if _, err := f.service.SetReply(context.Background(), domain.ReplyInput{RoundInput: domain.RoundInput{ParticipantID: replacementID, PairID: f.pairID, RoundID: round.ID}, Body: "cannot mutate old era"}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("replacement mutation error = %v, want not found", err)
+	}
+	formerHistory, err := f.service.History(context.Background(), domain.HistoryInput{ParticipantID: f.secondID, PairID: f.pairID, Limit: 20})
+	if err != nil || len(formerHistory.Rounds) != 1 {
+		t.Fatalf("former member read-only history = %+v, err=%v", formerHistory, err)
+	}
+}
+
+func TestHistoryKeysetPaginationIsStableAndComplete(t *testing.T) {
+	f := openFixture(t)
+	createActiveQuestion(t, f, "fun", "Second chronological prompt")
+	createActiveQuestion(t, f, "fun", "Third chronological prompt")
+	firstRound, _, firstSecond := createMutuallyRevealedRound(t, f)
+	if _, err := f.service.SetReply(context.Background(), domain.ReplyInput{RoundInput: firstSecond, Body: "B_REPLY_CURSOR_SECRET"}); err != nil {
+		t.Fatal(err)
+	}
+	rounds := []domain.Round{firstRound}
+	previous := firstRound
+	for index := 0; index < 2; index++ {
+		progressed, err := f.service.Progress(context.Background(), domain.ProgressInput{RoundInput: domain.RoundInput{ParticipantID: f.firstID, PairID: f.pairID, RoundID: previous.ID}, ClientRequestID: testUUID(t, f.pool), Action: "ask_another", Category: "fun"})
+		if err != nil || progressed.Candidate == nil {
+			t.Fatalf("progress to next candidate = %+v, err=%v", progressed, err)
+		}
+		round, err := f.service.Ask(context.Background(), domain.AskInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: progressed.ConversationID, CandidateID: progressed.Candidate.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, participantID := range []string{f.firstID, f.secondID} {
+			input := domain.RoundInput{ParticipantID: participantID, PairID: f.pairID, RoundID: round.ID}
+			if _, err := f.service.Answer(context.Background(), domain.AnswerInput{RoundInput: input, Body: "pagination answer"}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, participantID := range []string{f.firstID, f.secondID} {
+			input := domain.RoundInput{ParticipantID: participantID, PairID: f.pairID, RoundID: round.ID}
+			if _, err := f.service.Reveal(context.Background(), input); err != nil {
+				t.Fatal(err)
+			}
+		}
+		rounds = append(rounds, round)
+		previous = round
+	}
+
+	var paged []domain.HistoryRound
+	cursor := ""
+	for pageNumber := 0; pageNumber < 4; pageNumber++ {
+		page, err := f.service.History(context.Background(), domain.HistoryInput{ParticipantID: f.firstID, PairID: f.pairID, Cursor: cursor, Limit: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		paged = append(paged, page.Rounds...)
+		if pageNumber == 0 && page.NextCursor == "" {
+			t.Fatal("first history page did not return a cursor")
+		}
+		if pageNumber == 0 {
+			decodedCursor, err := base64.RawURLEncoding.DecodeString(page.NextCursor)
+			if err != nil {
+				t.Fatalf("decode history cursor: %v", err)
+			}
+			if strings.Contains(string(decodedCursor), "pagination answer") || strings.Contains(string(decodedCursor), "B_REPLY_CURSOR_SECRET") {
+				t.Fatalf("history cursor contains private answer or reply content: %q", decodedCursor)
+			}
+			foreignPairID := testUUID(t, f.pool)
+			_, err = f.service.History(context.Background(), domain.HistoryInput{ParticipantID: f.firstID, PairID: foreignPairID, Cursor: page.NextCursor, Limit: 1})
+			if !errors.Is(err, domain.ErrHistoryCursor) {
+				t.Fatalf("cross-Pair history cursor error = %v, want invalid cursor", err)
+			}
+		}
+		cursor = page.NextCursor
+		if cursor == "" {
+			break
+		}
+	}
+	if len(paged) != 3 {
+		t.Fatalf("history pagination returned %d rounds, want 3", len(paged))
+	}
+	seen := map[string]bool{}
+	for _, item := range paged {
+		if seen[item.ID] {
+			t.Fatalf("history pagination duplicated Round %s", item.ID)
+		}
+		seen[item.ID] = true
+	}
+	for _, round := range rounds {
+		if !seen[round.ID] {
+			t.Fatalf("history pagination omitted Round %s", round.ID)
+		}
+	}
+	for index := 1; index < len(paged); index++ {
+		if paged[index-1].AskedAt < paged[index].AskedAt {
+			t.Fatalf("history is not newest first: %+v", paged)
+		}
+	}
+}
+
+func TestRetiredRoundDoesNotBecomePairedAnswerHistory(t *testing.T) {
+	f := openFixture(t)
+	started, err := f.service.StartOrResume(context.Background(), domain.StartInput{ParticipantID: f.firstID, PairID: f.pairID, Category: "fun"})
+	if err != nil || started.Candidate == nil {
+		t.Fatalf("start = %+v, err=%v", started, err)
+	}
+	round, err := f.service.Ask(context.Background(), domain.AskInput{ParticipantID: f.firstID, PairID: f.pairID, ConversationID: started.ConversationID, CandidateID: started.Candidate.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.service.Decline(context.Background(), domain.RoundInput{ParticipantID: f.secondID, PairID: f.pairID, RoundID: round.ID}); err != nil {
+		t.Fatal(err)
+	}
+	page, err := f.service.History(context.Background(), domain.HistoryInput{ParticipantID: f.firstID, PairID: f.pairID, Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Rounds) != 0 {
+		t.Fatalf("retired Round appeared as paired history: %+v", page.Rounds)
+	}
+}
+
+func TestHistoryReadsObserveCommittedSnapshotsAcrossMutationReplacementAndCompletion(t *testing.T) {
+	f := openFixture(t)
+	_, _, second := createMutuallyRevealedRound(t, f)
+	start := make(chan struct{})
+	var read domain.HistoryPage
+	var readErr error
+	var mutationErr error
+	var wait sync.WaitGroup
+	wait.Add(2)
+	go func() {
+		defer wait.Done()
+		<-start
+		read, readErr = f.service.History(context.Background(), domain.HistoryInput{ParticipantID: f.firstID, PairID: f.pairID, Limit: 20})
+	}()
+	go func() {
+		defer wait.Done()
+		<-start
+		_, mutationErr = f.service.SetReply(context.Background(), domain.ReplyInput{RoundInput: second, Body: "committed while history reads"})
+	}()
+	close(start)
+	wait.Wait()
+	if readErr != nil || mutationErr != nil {
+		t.Fatalf("history/read and reply race errors: %v / %v", readErr, mutationErr)
+	}
+	if len(read.Rounds) != 1 || len(read.Rounds[0].Answers) != 2 || len(read.Rounds[0].Replies) > 1 {
+		t.Fatalf("history/reply race returned an invalid projection: %+v", read)
+	}
+
+	replacementID := createReplacementParticipant(t, f)
+	start = make(chan struct{})
+	var replacementRead domain.HistoryPage
+	var replacementReadErr, replacementErr error
+	wait.Add(2)
+	go func() {
+		defer wait.Done()
+		<-start
+		replacementRead, replacementReadErr = f.service.History(context.Background(), domain.HistoryInput{ParticipantID: replacementID, PairID: f.pairID, Limit: 20})
+	}()
+	go func() {
+		defer wait.Done()
+		<-start
+		_, _, replacementErr = replaceSecondMembership(context.Background(), f, replacementID)
+	}()
+	close(start)
+	wait.Wait()
+	if replacementErr != nil {
+		t.Fatal(replacementErr)
+	}
+	if replacementReadErr != nil && !errors.Is(replacementReadErr, domain.ErrNotFound) {
+		t.Fatalf("replacement history race error = %v", replacementReadErr)
+	}
+	if len(replacementRead.Rounds) != 0 {
+		t.Fatalf("replacement history race inherited prior-era content: %+v", replacementRead)
+	}
+
+	// Completion and its second Reveal commit atomically with their visibility
+	// transition. A racing history read may see neither Round or the full pair.
+	g := openFixture(t)
+	started, err := g.service.StartOrResume(context.Background(), domain.StartInput{ParticipantID: g.firstID, PairID: g.pairID, Category: "fun"})
+	if err != nil || started.Candidate == nil {
+		t.Fatalf("start next Round = %+v, err=%v", started, err)
+	}
+	openRound, err := g.service.Ask(context.Background(), domain.AskInput{ParticipantID: g.firstID, PairID: g.pairID, ConversationID: started.ConversationID, CandidateID: started.Candidate.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, participantID := range []string{g.firstID, g.secondID} {
+		input := domain.RoundInput{ParticipantID: participantID, PairID: g.pairID, RoundID: openRound.ID}
+		if _, err := g.service.Answer(context.Background(), domain.AnswerInput{RoundInput: input, Body: "concurrent completion"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := g.service.Reveal(context.Background(), domain.RoundInput{ParticipantID: g.firstID, PairID: g.pairID, RoundID: openRound.ID}); err != nil {
+		t.Fatal(err)
+	}
+	start = make(chan struct{})
+	var completionRead domain.HistoryPage
+	var completionReadErr, revealErr error
+	wait.Add(2)
+	go func() {
+		defer wait.Done()
+		<-start
+		completionRead, completionReadErr = g.service.History(context.Background(), domain.HistoryInput{ParticipantID: g.firstID, PairID: g.pairID, Limit: 20})
+	}()
+	go func() {
+		defer wait.Done()
+		<-start
+		_, revealErr = g.service.Reveal(context.Background(), domain.RoundInput{ParticipantID: g.secondID, PairID: g.pairID, RoundID: openRound.ID})
+	}()
+	close(start)
+	wait.Wait()
+	if completionReadErr != nil || revealErr != nil {
+		t.Fatalf("history/read and final Reveal race errors: %v / %v", completionReadErr, revealErr)
+	}
+	if len(completionRead.Rounds) > 1 {
+		t.Fatalf("history/final Reveal race returned %d rounds, want zero or one complete Round", len(completionRead.Rounds))
+	}
+	for _, item := range completionRead.Rounds {
+		if len(item.Answers) != 2 {
+			t.Fatalf("history/final Reveal race returned partial answers: %+v", item)
+		}
 	}
 }
 

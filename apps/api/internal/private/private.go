@@ -3,8 +3,11 @@ package private
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -23,6 +26,7 @@ var (
 	ErrReplyInvalid        = errors.New("private reply is invalid")
 	ErrProgressionNotReady = errors.New("private progression is not ready")
 	ErrProgressionConflict = errors.New("private progression already started")
+	ErrHistoryCursor       = errors.New("private history cursor is invalid")
 )
 
 type CandidateQuestion struct {
@@ -111,6 +115,30 @@ type ProgressInput struct {
 	ClientRequestID, Action, Category string
 }
 
+type HistoryInput struct {
+	ParticipantID, PairID        string
+	Cursor                       string
+	BeforeAskedAt, BeforeRoundID string
+	Limit                        int32
+}
+
+type HistoryRound struct {
+	ID, AskedAt, Text, Category, Intensity string
+	RoundNumber                            int32
+	Answers                                []HistoryAnswer
+	Reactions                              []HistoryReaction
+	Replies                                []HistoryReply
+}
+
+type HistoryAnswer struct{ DisplayName, Body string }
+type HistoryReaction struct{ DisplayName, Value string }
+type HistoryReply struct{ DisplayName, Body string }
+
+type HistoryPage struct {
+	Rounds     []HistoryRound
+	NextCursor string
+}
+
 type Question struct {
 	ID, RevisionID, Text, Category, Intensity string
 }
@@ -138,6 +166,7 @@ type Repository interface {
 	SetReply(context.Context, ReplyInput) (Round, error)
 	RemoveReply(context.Context, RoundInput) (Round, error)
 	Progress(context.Context, ProgressInput) (View, error)
+	History(context.Context, HistoryInput) (HistoryPage, error)
 }
 
 type Service struct{ repository Repository }
@@ -252,6 +281,39 @@ func (s *Service) Progress(ctx context.Context, input ProgressInput) (View, erro
 	}
 	input.Category = strings.TrimSpace(input.Category)
 	return s.repository.Progress(ctx, input)
+}
+
+func (s *Service) History(ctx context.Context, input HistoryInput) (HistoryPage, error) {
+	if input.ParticipantID == "" || input.PairID == "" {
+		return HistoryPage{}, ErrNotFound
+	}
+	if input.Limit < 1 || input.Limit > 50 {
+		input.Limit = 20
+	}
+	if input.Cursor != "" {
+		decoded, err := base64.RawURLEncoding.DecodeString(input.Cursor)
+		if err != nil {
+			return HistoryPage{}, ErrHistoryCursor
+		}
+		parts := strings.Split(string(decoded), "|")
+		if len(parts) != 3 || parts[0] != input.PairID {
+			return HistoryPage{}, ErrHistoryCursor
+		}
+		if _, err := time.Parse(time.RFC3339Nano, parts[1]); err != nil {
+			return HistoryPage{}, ErrHistoryCursor
+		}
+		input.BeforeAskedAt, input.BeforeRoundID = parts[1], parts[2]
+	}
+	page, err := s.repository.History(ctx, input)
+	if err != nil {
+		return HistoryPage{}, err
+	}
+	if int32(len(page.Rounds)) > input.Limit {
+		page.Rounds = page.Rounds[:input.Limit]
+		last := page.Rounds[len(page.Rounds)-1]
+		page.NextCursor = base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf("%s|%s|%s", input.PairID, last.AskedAt, last.ID)))
+	}
+	return page, nil
 }
 
 func validReaction(value string) bool {

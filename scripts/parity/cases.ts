@@ -1504,6 +1504,52 @@ const cases = [
     ],
   },
   {
+    id: "private.history-era-projection-and-pinning",
+    area: "private",
+    gate: "must-pass-before-cutover",
+    title: "Private history keeps Round wording, lane, and member content inside its own era",
+    preconditions: [
+      "A and B reveal a Fun Round pinned to revision R1; Admin later edits the Question to R2 and the shared lane changes to Deep.",
+      "B's era ends and C replaces B in a new membership era.",
+    ],
+    actions: [
+      action("history-continuing", "participant-a", "GET Pair Private history"),
+      action("history-former", "participant-b", "GET Pair Private history"),
+      action("history-replacement", "participant-c", "GET Pair Private history"),
+    ],
+    expected: {
+      actions: [
+        { id: "history-continuing", status: 200 },
+        { id: "history-former", status: 200 },
+        { id: "history-replacement", status: 200 },
+      ],
+      projections: [
+        {
+          actor: "participant-a",
+          mustContain: { rounds: [{ question: { text: "R1 wording", category: "fun" } }] },
+        },
+        {
+          actor: "participant-b",
+          mustContain: { rounds: [{ question: { text: "R1 wording", category: "fun" } }] },
+        },
+        {
+          actor: "participant-c",
+          mustOmit: ["B_SECRET_ERA1", "B_REPLY_ERA1", "B_REACTION_ERA1", "R1 wording"],
+        },
+      ],
+      persistedState: {
+        historyOrderStable: true,
+        skippedAndUnresolvedCandidatesExcluded: true,
+        retiredRoundsExcludedFromPairedAnswerHistory: true,
+      },
+    },
+    sources: [
+      "docs/adr/003-private-answer-reveal.md — Round revision pinning and membership-era boundaries",
+      "docs/adr/005-pair-membership-era-termination-and-history.md — exact-era historical access",
+      "apps/api/internal/postgres/private/concurrency_integration_test.go — replacement cannot inherit previous-era history",
+    ],
+  },
+  {
     id: "admin.inactive-create-and-activity-preserving-revision",
     area: "admin",
     gate: "must-pass-before-cutover",

@@ -1,6 +1,6 @@
 import * as React from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { Link, useNavigate, useParams } from "react-router";
@@ -11,6 +11,7 @@ import {
   askPrivateCandidate,
   declinePrivateRound,
   getPrivateConversation,
+  getPrivateHistory,
   getPrivateRound,
   likePrivateCandidate,
   privateAnswerSchema,
@@ -31,10 +32,12 @@ import {
   type PrivateReactionValue,
   type PrivateConversation,
   type PrivateRound,
+  type PrivateHistory,
 } from "@/features/private-conversation/api";
 import {
   connectPrivateRealtime,
   privateConversationKey,
+  privateHistoryKey,
   privateRoundKey,
 } from "@/features/private-conversation/realtime";
 
@@ -44,6 +47,14 @@ const categoryLabel: Record<string, string> = {
   memories: "Memories",
   relationship: "Relationship",
   friendship: "Friendship",
+};
+
+const categorySurfaceClass: Record<string, string> = {
+  fun: "bg-closer-yellow",
+  deep: "bg-closer-blue",
+  memories: "bg-closer-mint",
+  relationship: "bg-closer-coral-soft",
+  friendship: "bg-closer-friendship",
 };
 
 export function PrivateCategoryPage() {
@@ -58,6 +69,12 @@ export function PrivateCategoryPage() {
         <h1 className="text-closer-navy mt-2 text-4xl font-extrabold tracking-[-.05em]">
           Choose a conversation lane.
         </h1>
+        <Link
+          className="text-closer-navy mt-4 self-start text-sm font-bold underline underline-offset-4"
+          to={`/pair/${pairId}/private/history`}
+        >
+          Look back at shared moments
+        </Link>
         <div className="mt-8 grid gap-3">
           {privateCategories.map((category) => (
             <Link
@@ -245,6 +262,11 @@ export function PrivateConversationPage() {
             </p>
           </div>
         )}
+        <PrivateHistorySection
+          pairId={pairId}
+          activeRound={view?.round}
+          surfaceLoading={start.isPending || conversation.isPending}
+        />
         {conversation.isFetching && !view && <p className="text-closer-muted mt-8">Refreshing…</p>}
         {conversation.error && !start.error && (
           <RecoveryPanel error={conversation.error} onRetry={() => void conversation.refetch()} />
@@ -254,6 +276,168 @@ export function PrivateConversationPage() {
         )}
       </section>
     </PageShell>
+  );
+}
+
+export function PrivateHistoryPage() {
+  const { pairId = "" } = useParams();
+  const queryClient = useQueryClient();
+  React.useEffect(() => {
+    if (!pairId) return undefined;
+    return connectPrivateRealtime(pairId, queryClient);
+  }, [pairId, queryClient]);
+  return (
+    <PageShell>
+      <section className="flex flex-1 flex-col py-8">
+        <Link className="text-closer-muted self-start text-sm font-bold" to={`/pair/${pairId}`}>
+          ← Back to space
+        </Link>
+        <p className="text-closer-coral mt-8 text-sm font-bold uppercase">Private</p>
+        <h1 className="text-closer-navy mt-2 text-4xl font-extrabold tracking-[-.05em]">
+          Moments you’ve shared
+        </h1>
+        <PrivateHistorySection pairId={pairId} />
+      </section>
+    </PageShell>
+  );
+}
+
+export function PrivateHistorySection({
+  pairId,
+  activeRound,
+  surfaceLoading = false,
+}: {
+  pairId: string;
+  activeRound?: PrivateRound;
+  surfaceLoading?: boolean;
+}) {
+  const history = useInfiniteQuery({
+    queryKey: privateHistoryKey(pairId),
+    queryFn: ({ pageParam }) => getPrivateHistory(pairId, pageParam),
+    initialPageParam: "",
+    getNextPageParam: (page) => page.nextCursor,
+    enabled: Boolean(pairId),
+  });
+  const rounds = visiblePrivateHistoryRounds(
+    history.data?.pages.flatMap((page) => page.rounds) ?? [],
+    activeRound,
+  );
+
+  return (
+    <section aria-label="Private history" className="mt-8">
+      <div className="mb-4 flex items-end justify-between gap-3">
+        <div>
+          <p className="text-closer-muted text-xs font-bold tracking-[.12em] uppercase">
+            Looking back
+          </p>
+          <h2 className="text-closer-navy mt-1 text-2xl font-extrabold">Your shared story</h2>
+        </div>
+      </div>
+      {history.isPending && !surfaceLoading && (
+        <p className="text-closer-muted bg-closer-surface rounded-3xl px-5 py-6">
+          Loading your shared moments…
+        </p>
+      )}
+      {history.error && (
+        <RecoveryPanel error={history.error} onRetry={() => void history.refetch()} />
+      )}
+      {history.data && rounds.length === 0 && !history.hasNextPage && (
+        <p className="text-closer-muted border-closer-line bg-closer-surface rounded-3xl border px-5 py-6 text-sm leading-6">
+          Your revealed moments will gather here as you share them.
+        </p>
+      )}
+      <ol className="grid gap-4">
+        {rounds.map((round, index) => (
+          <PrivateHistoryRoundCard
+            key={`${round.askedAt}:${round.roundNumber}:${index}`}
+            round={round}
+          />
+        ))}
+      </ol>
+      {history.hasNextPage && (
+        <button
+          className="border-closer-line text-closer-navy mt-4 w-full rounded-2xl border px-4 py-3 text-sm font-extrabold disabled:opacity-50"
+          disabled={history.isFetchingNextPage}
+          onClick={() => void history.fetchNextPage()}
+        >
+          {history.isFetchingNextPage ? "Finding earlier moments…" : "Load earlier moments"}
+        </button>
+      )}
+    </section>
+  );
+}
+
+export function visiblePrivateHistoryRounds(
+  rounds: PrivateHistory["rounds"],
+  activeRound?: Pick<PrivateRound, "askedAt" | "roundNumber">,
+) {
+  return rounds
+    .filter(
+      (round) =>
+        !activeRound ||
+        round.askedAt !== activeRound.askedAt ||
+        round.roundNumber !== activeRound.roundNumber,
+    )
+    .sort(
+      (a, b) =>
+        b.askedAt.localeCompare(a.askedAt) ||
+        b.roundNumber - a.roundNumber ||
+        a.question.text.localeCompare(b.question.text),
+    );
+}
+
+export function PrivateHistoryRoundCard({ round }: { round: PrivateHistory["rounds"][number] }) {
+  return (
+    <li className="bg-closer-surface border-closer-line rounded-3xl border p-5">
+      <div className="flex items-center justify-between gap-3">
+        <span
+          className={`${categorySurfaceClass[round.question.category] ?? "bg-closer-peach/60"} text-closer-navy rounded-full px-3 py-1 text-xs font-extrabold`}
+        >
+          {categoryLabel[round.question.category] ?? round.question.category}
+        </span>
+        <time className="text-closer-muted text-xs font-semibold" dateTime={round.askedAt}>
+          {new Intl.DateTimeFormat(undefined, {
+            month: "short",
+            day: "numeric",
+            year: "numeric",
+          }).format(new Date(round.askedAt))}
+        </time>
+      </div>
+      <h3 className="text-closer-navy mt-4 text-lg leading-snug font-extrabold">
+        {round.question.text}
+      </h3>
+      <div className="mt-4 grid gap-2">
+        {round.answers.map((answer, index) => (
+          <div
+            className="bg-closer-cream/70 rounded-2xl px-4 py-3"
+            key={`${answer.displayName}-${index}`}
+          >
+            <p className="text-closer-muted text-xs font-bold">{answer.displayName}</p>
+            <p className="text-closer-navy mt-1 text-sm leading-6 whitespace-pre-wrap">
+              {answer.body}
+            </p>
+          </div>
+        ))}
+      </div>
+      {(round.reactions.length > 0 || round.replies.length > 0) && (
+        <div className="border-closer-line mt-4 space-y-2 border-t pt-3">
+          {round.reactions.map((reaction, index) => (
+            <p
+              className="text-closer-muted text-xs font-semibold"
+              key={`${reaction.displayName}-${index}`}
+            >
+              {reaction.displayName} reacted · {reaction.value}
+            </p>
+          ))}
+          {round.replies.map((reply, index) => (
+            <p className="text-closer-navy text-sm leading-6" key={`${reply.displayName}-${index}`}>
+              <span className="font-bold">{reply.displayName}: </span>
+              {reply.body}
+            </p>
+          ))}
+        </div>
+      )}
+    </li>
   );
 }
 
@@ -294,6 +478,7 @@ export function PrivateRoundPanel({
           current ? { ...current, round: next } : current,
       );
       void queryClient.invalidateQueries({ queryKey: privateConversationKey(pairId, category) });
+      void queryClient.invalidateQueries({ queryKey: privateHistoryKey(pairId) });
     },
     [category, pairId, queryClient, round.roundId],
   );

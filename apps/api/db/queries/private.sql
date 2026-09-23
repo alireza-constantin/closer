@@ -22,6 +22,62 @@ JOIN pair_membership_era AS active_era
 WHERE p.id = sqlc.arg(pair_id)
   AND p.terminated_at IS NULL;
 
+-- name: ListPrivateHistoryRounds :many
+-- A participant can read only rounds from membership eras in which that exact
+-- participant took part. Open and retired rounds are not paired history.
+SELECT round.id, round.membership_era_id, round.round_number, round.asked_at,
+       revision.text, revision.category, revision.intensity,
+       viewer_membership.id AS viewer_membership_id
+FROM private_round AS round
+JOIN pair_membership_era AS era
+  ON era.id = round.membership_era_id AND era.pair_id = round.pair_id
+JOIN question_revision AS revision ON revision.id = round.question_revision_id
+JOIN pair_membership AS viewer_membership
+  ON viewer_membership.participant_id = sqlc.arg(participant_id)
+ AND (viewer_membership.id = era.first_membership_id OR viewer_membership.id = era.second_membership_id)
+WHERE round.pair_id = sqlc.arg(pair_id)
+  AND round.status = 'completed'
+  AND (SELECT count(*) FROM private_answer AS answer
+       WHERE answer.round_id = round.id AND answer.membership_era_id = round.membership_era_id) = 2
+  AND (SELECT count(*) FROM private_reveal_view AS reveal
+       WHERE reveal.round_id = round.id AND reveal.membership_era_id = round.membership_era_id) = 2
+  AND (sqlc.narg(before_asked_at)::timestamptz IS NULL
+       OR round.asked_at < sqlc.narg(before_asked_at)
+       OR (round.asked_at = sqlc.narg(before_asked_at) AND round.id < sqlc.narg(before_round_id)))
+ORDER BY round.asked_at DESC, round.id DESC
+LIMIT sqlc.arg(page_limit);
+
+-- name: GetPrivateHistoryAccess :one
+SELECT pair.id
+FROM pair
+JOIN pair_membership AS membership ON membership.pair_id = pair.id
+WHERE pair.id = sqlc.arg(pair_id) AND membership.participant_id = sqlc.arg(participant_id)
+LIMIT 1;
+
+-- name: ListPrivateHistoryAnswers :many
+SELECT answer.body, COALESCE(membership.ended_display_name, participant.display_name) AS display_name
+FROM private_answer AS answer
+JOIN pair_membership AS membership ON membership.id = answer.membership_id
+JOIN participant ON participant.id = answer.participant_id
+WHERE answer.round_id = sqlc.arg(round_id) AND answer.membership_era_id = sqlc.arg(membership_era_id)
+ORDER BY answer.created_at, answer.id;
+
+-- name: ListPrivateHistoryReactions :many
+SELECT reaction.value, COALESCE(membership.ended_display_name, participant.display_name) AS display_name
+FROM private_reaction AS reaction
+JOIN pair_membership AS membership ON membership.id = reaction.membership_id
+JOIN participant ON participant.id = reaction.participant_id
+WHERE reaction.round_id = sqlc.arg(round_id) AND reaction.membership_era_id = sqlc.arg(membership_era_id)
+ORDER BY reaction.membership_id;
+
+-- name: ListPrivateHistoryReplies :many
+SELECT reply.body, COALESCE(membership.ended_display_name, participant.display_name) AS display_name
+FROM private_reply AS reply
+JOIN pair_membership AS membership ON membership.id = reply.membership_id
+JOIN participant ON participant.id = reply.participant_id
+WHERE reply.round_id = sqlc.arg(round_id) AND reply.membership_era_id = sqlc.arg(membership_era_id)
+ORDER BY reply.created_at, reply.membership_id;
+
 -- name: LockPrivatePair :one
 SELECT id FROM pair WHERE id = sqlc.arg(pair_id) AND terminated_at IS NULL FOR UPDATE;
 

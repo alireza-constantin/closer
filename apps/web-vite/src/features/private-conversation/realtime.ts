@@ -8,6 +8,8 @@ export const privateConversationKey = (pairId: string, category: string) =>
 export const privateRoundKey = (pairId: string, roundId: string) =>
   ["private-round", pairId, roundId] as const;
 
+export const privateHistoryKey = (pairId: string) => ["private-history", pairId] as const;
+
 export function connectPrivateRealtime(pairId: string, queryClient: QueryClient): () => void {
   const source = new EventSource(`${API_BASE_PATH}/pairs/${encodeURIComponent(pairId)}/events`, {
     withCredentials: true,
@@ -15,6 +17,7 @@ export function connectPrivateRealtime(pairId: string, queryClient: QueryClient)
   const reconcile = () => {
     void queryClient.invalidateQueries({ queryKey: ["private-conversation", pairId] });
     void queryClient.invalidateQueries({ queryKey: ["private-round", pairId] });
+    void queryClient.invalidateQueries({ queryKey: privateHistoryKey(pairId) });
   };
   source.addEventListener("open", reconcile);
   source.addEventListener("private.changed", reconcile);
