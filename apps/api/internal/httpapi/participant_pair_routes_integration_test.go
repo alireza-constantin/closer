@@ -357,6 +357,74 @@ func TestParticipantPairHTTPFlowAndAuthUpgradePreserveOwnership(t *testing.T) {
 	}
 }
 
+func TestPairTerminationHTTPPersistsStateRevokesInviteAndIsIdempotent(t *testing.T) {
+	pool := openParticipantPairTestPool(t)
+	router, _ := newParticipantPairRouter(pool)
+	owner := createOnboardedTestActor(t, router, "Termination owner")
+	outsider := createOnboardedTestActor(t, router, "Termination outsider")
+	createdResponse := performDomainRequest(router, http.MethodPost, "/api/v1/pairs", map[string]string{
+		"intendedPersonName": "Future person", "relationshipType": "partner",
+	}, owner.cookie)
+	var created createPairResponse
+	if createdResponse.Code != http.StatusOK || json.Unmarshal(createdResponse.Body.Bytes(), &created) != nil {
+		t.Fatalf("create Pair = %d %s", createdResponse.Code, createdResponse.Body.String())
+	}
+	inviteResponse := performDomainRequest(router, http.MethodPost, "/api/v1/pairs/"+created.PairID+"/invite", map[string]any{}, owner.cookie)
+	var issued inviteStateResponse
+	if inviteResponse.Code != http.StatusCreated || json.Unmarshal(inviteResponse.Body.Bytes(), &issued) != nil || issued.Token == "" {
+		t.Fatalf("issue invite = %d %s", inviteResponse.Code, inviteResponse.Body.String())
+	}
+
+	unauthenticated := performDomainRequest(router, http.MethodPost, "/api/v1/pairs/"+created.PairID+"/terminate", nil, nil)
+	if unauthenticated.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated termination status = %d, want 401", unauthenticated.Code)
+	}
+	unauthorized := performDomainRequest(router, http.MethodPost, "/api/v1/pairs/"+created.PairID+"/terminate", nil, outsider.cookie)
+	if unauthorized.Code != http.StatusNotFound {
+		t.Fatalf("outsider termination status = %d, want concealed 404: %s", unauthorized.Code, unauthorized.Body.String())
+	}
+
+	terminatedResponse := performDomainRequest(router, http.MethodPost, "/api/v1/pairs/"+created.PairID+"/terminate", nil, owner.cookie)
+	var terminated pairTerminationResponse
+	if terminatedResponse.Code != http.StatusOK || json.Unmarshal(terminatedResponse.Body.Bytes(), &terminated) != nil {
+		t.Fatalf("terminate Pair = %d %s", terminatedResponse.Code, terminatedResponse.Body.String())
+	}
+	if terminated.State != "terminated" || terminated.PairID != created.PairID || terminated.TerminatedAt.IsZero() {
+		t.Fatalf("termination projection = %+v", terminated)
+	}
+	repeatedResponse := performDomainRequest(router, http.MethodPost, "/api/v1/pairs/"+created.PairID+"/terminate", nil, owner.cookie)
+	var repeated pairTerminationResponse
+	if repeatedResponse.Code != http.StatusOK || json.Unmarshal(repeatedResponse.Body.Bytes(), &repeated) != nil || !repeated.TerminatedAt.Equal(terminated.TerminatedAt) {
+		t.Fatalf("repeated termination = %d %+v body=%s", repeatedResponse.Code, repeated, repeatedResponse.Body.String())
+	}
+
+	entryResponse := performDomainRequest(router, http.MethodGet, "/api/v1/pairs/"+created.PairID, nil, owner.cookie)
+	var entry pairEntryResponse
+	if entryResponse.Code != http.StatusOK || json.Unmarshal(entryResponse.Body.Bytes(), &entry) != nil || entry.State != "terminated" {
+		t.Fatalf("terminated Pair entry = %d %+v body=%s", entryResponse.Code, entry, entryResponse.Body.String())
+	}
+	landing := performDomainRequest(router, http.MethodGet, "/api/v1/invites/"+issued.Token, nil, outsider.cookie)
+	claim := performDomainRequest(router, http.MethodPost, "/api/v1/invites/"+issued.Token+"/redeem", nil, outsider.cookie)
+	if landing.Code != http.StatusNotFound || claim.Code == http.StatusOK {
+		t.Fatalf("terminated Pair invite was usable: landing=%d claim=%d", landing.Code, claim.Code)
+	}
+	if countForPair(t, pool, "pair_membership", created.PairID) != 1 {
+		t.Fatal("termination deleted historical membership rows")
+	}
+	var endedMemberships, revokedInvites int
+	if err := pool.WithConnection(context.Background(), func(db postgres.QueryDB) error {
+		if err := db.QueryRow(context.Background(), "SELECT count(*) FROM pair_membership WHERE pair_id=$1 AND ended_at IS NOT NULL AND ended_display_name IS NOT NULL", created.PairID).Scan(&endedMemberships); err != nil {
+			return err
+		}
+		return db.QueryRow(context.Background(), "SELECT count(*) FROM initial_invite WHERE pair_id=$1 AND revoked_at IS NOT NULL", created.PairID).Scan(&revokedInvites)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if endedMemberships != 1 || revokedInvites != 1 {
+		t.Fatalf("terminal side effects: ended memberships=%d revoked invites=%d", endedMemberships, revokedInvites)
+	}
+}
+
 func TestInitialInviteExplicitClaimCreatesFirstEraAndStoresOnlyHash(t *testing.T) {
 	pool := openParticipantPairTestPool(t)
 	router, _ := newParticipantPairRouter(pool)
@@ -583,6 +651,22 @@ func TestAdminActorNeverResolvesOrCreatesParticipant(t *testing.T) {
 	onboarding := performDomainRequest(router, http.MethodPost, "/api/v1/onboarding", map[string]string{"displayName": "Should Not Exist"}, adminCookie)
 	if onboarding.Code != http.StatusForbidden {
 		t.Fatalf("Admin onboarding status=%d body=%s", onboarding.Code, onboarding.Body.String())
+	}
+	owner := createOnboardedTestActor(t, router, "Pair owner")
+	createdResponse := performDomainRequest(router, http.MethodPost, "/api/v1/pairs", map[string]string{
+		"intendedPersonName": "Their person", "relationshipType": "friend",
+	}, owner.cookie)
+	var created createPairResponse
+	if createdResponse.Code != http.StatusOK || json.Unmarshal(createdResponse.Body.Bytes(), &created) != nil {
+		t.Fatalf("create Pair for Admin check = %d %s", createdResponse.Code, createdResponse.Body.String())
+	}
+	adminTermination := performDomainRequest(router, http.MethodPost, "/api/v1/pairs/"+created.PairID+"/terminate", nil, adminCookie)
+	if adminTermination.Code != http.StatusForbidden {
+		t.Fatalf("Admin termination status=%d body=%s", adminTermination.Code, adminTermination.Body.String())
+	}
+	ownerEntry := performDomainRequest(router, http.MethodGet, "/api/v1/pairs/"+created.PairID, nil, owner.cookie)
+	if ownerEntry.Code != http.StatusOK || !strings.Contains(ownerEntry.Body.String(), `"state":"waiting"`) {
+		t.Fatalf("Admin termination changed Pair state: %d %s", ownerEntry.Code, ownerEntry.Body.String())
 	}
 	if count := participantCountForAuthUser(t, pool, adminUserID); count != 0 {
 		t.Fatalf("Admin actor created %d Participants", count)

@@ -3,6 +3,8 @@ import { Link, useNavigate, useParams } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { PageShell } from "@/app/page-shell";
+import { EndedPairPage } from "@/features/pair/components";
+import { connectPairRealtime, pairQueryKey } from "@/features/pair/realtime";
 import {
   advanceTogetherSession,
   endTogetherSession,
@@ -38,11 +40,18 @@ const categories = [
 export function TogetherPickerPage() {
   const { pairId = "" } = useParams();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const pair = useQuery({
-    queryKey: ["pair", pairId],
+    queryKey: pairQueryKey(pairId),
     queryFn: () => getPair(pairId),
     enabled: Boolean(pairId),
+    retry: false,
+    refetchOnMount: "always",
   });
+  React.useEffect(() => {
+    if (!pairId || !pair.data || pair.data.state === "terminated") return;
+    return connectPairRealtime(pairId, queryClient);
+  }, [pair.data?.state, pairId, queryClient]);
   const start = useMutation({
     mutationFn: (category: string) => startTogetherSession(pairId, category),
     onSuccess: (value) => navigate(`/pair/${pairId}/together/sessions/${value.sessionId}`),
@@ -51,6 +60,7 @@ export function TogetherPickerPage() {
     (category) =>
       !category.relationship || category.relationship === (pair.data?.relationshipType ?? ""),
   );
+  if (pair.data?.state === "terminated") return <EndedPairPage pairId={pairId} />;
   return (
     <PageShell>
       <section className="flex flex-1 flex-col py-8">
@@ -64,21 +74,25 @@ export function TogetherPickerPage() {
         <p className="text-closer-muted mt-4 max-w-sm leading-7">
           Pick a feeling and take turns with one shared question at a time.
         </p>
-        {pair.isPending && <p className="text-closer-muted mt-8">Loading your space…</p>}
+        {(pair.isPending || pair.isFetching) && (
+          <p className="text-closer-muted mt-8">Checking your space…</p>
+        )}
         {pair.error && <ErrorState message="We couldn’t check this space." />}
-        <div className="mt-8 grid gap-3 sm:grid-cols-2">
-          {allowed.map((category) => (
-            <button
-              className={`${category.tone} text-closer-navy rounded-3xl p-5 text-left transition hover:-translate-y-0.5 disabled:opacity-60`}
-              disabled={start.isPending}
-              key={category.id}
-              onClick={() => start.mutate(category.id)}
-            >
-              <span className="block text-lg font-extrabold">{category.label}</span>
-              <span className="text-closer-muted mt-1 block text-sm">Start a shared moment.</span>
-            </button>
-          ))}
-        </div>
+        {pair.isSuccess && !pair.isFetching && (
+          <div className="mt-8 grid gap-3 sm:grid-cols-2">
+            {allowed.map((category) => (
+              <button
+                className={`${category.tone} text-closer-navy rounded-3xl p-5 text-left transition hover:-translate-y-0.5 disabled:opacity-60`}
+                disabled={start.isPending}
+                key={category.id}
+                onClick={() => start.mutate(category.id)}
+              >
+                <span className="block text-lg font-extrabold">{category.label}</span>
+                <span className="text-closer-muted mt-1 block text-sm">Start a shared moment.</span>
+              </button>
+            ))}
+          </div>
+        )}
         {start.isPending && (
           <p className="text-closer-muted mt-5" aria-live="polite">
             Finding the first question…
@@ -93,10 +107,25 @@ export function TogetherPickerPage() {
 export function TogetherSessionPage() {
   const { pairId = "", sessionId = "" } = useParams();
   const queryClient = useQueryClient();
+  const pair = useQuery({
+    queryKey: pairQueryKey(pairId),
+    queryFn: () => getPair(pairId),
+    enabled: Boolean(pairId),
+    retry: false,
+    refetchOnMount: "always",
+  });
+  React.useEffect(() => {
+    if (!pairId || !pair.data || pair.data.state === "terminated") return;
+    return connectPairRealtime(pairId, queryClient);
+  }, [pair.data?.state, pairId, queryClient]);
   const session = useQuery({
     queryKey: ["together", pairId, sessionId],
     queryFn: () => getTogetherPlayback(pairId, sessionId),
-    enabled: Boolean(pairId && sessionId),
+    enabled:
+      Boolean(pairId && sessionId) &&
+      pair.isSuccess &&
+      !pair.isFetching &&
+      pair.data.state !== "terminated",
   });
   const [busy, setBusy] = React.useState(false);
   const reconcile = () =>
@@ -142,6 +171,20 @@ export function TogetherSessionPage() {
   }
 
   const data = session.data as TogetherPlayback | undefined;
+  if (pair.data?.state === "terminated") return <EndedPairPage pairId={pairId} />;
+  if (!pair.isSuccess || pair.isFetching) {
+    return (
+      <PageShell>
+        <section className="flex flex-1 flex-col py-8">
+          {pair.error ? (
+            <ErrorState message="We couldn’t check this space." />
+          ) : (
+            <p className="text-closer-muted mt-8">Checking your space…</p>
+          )}
+        </section>
+      </PageShell>
+    );
+  }
   return (
     <PageShell>
       <section className="flex flex-1 flex-col py-8">

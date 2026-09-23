@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/alireza-constantin/closer/apps/api/internal/auth"
 	"github.com/alireza-constantin/closer/apps/api/internal/pair"
@@ -65,6 +66,12 @@ type memberProjection struct {
 type pairStatusResponse struct {
 	State                       string  `json:"state"`
 	OtherParticipantDisplayName *string `json:"otherParticipantDisplayName,omitempty"`
+}
+
+type pairTerminationResponse struct {
+	PairID       string    `json:"pairId"`
+	State        string    `json:"state"`
+	TerminatedAt time.Time `json:"terminatedAt"`
 }
 
 func registerParticipantPairRoutes(
@@ -204,6 +211,25 @@ func registerParticipantPairRoutes(
 			return
 		}
 		writeJSON(w, http.StatusOK, updatePairResponse{PairID: updated.ID, IntendedPersonName: updated.IntendedPersonName})
+	})
+
+	api.With(authActorMiddleware(authService)).Post("/pairs/{pairID}/terminate", func(w http.ResponseWriter, r *http.Request) {
+		setPrivateNoStore(w)
+		if !requireTrustedMutationOrigin(w, r, security) {
+			return
+		}
+		participantView, ok := requiredActorParticipant(w, r, participantService)
+		if !ok {
+			return
+		}
+		terminated, err := pairService.Terminate(r.Context(), participantView.ID, chi.URLParam(r, "pairID"))
+		if err != nil {
+			writePairError(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, pairTerminationResponse{
+			PairID: terminated.PairID, State: terminated.State, TerminatedAt: terminated.TerminatedAt,
+		})
 	})
 }
 

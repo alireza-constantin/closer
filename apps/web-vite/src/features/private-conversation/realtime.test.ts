@@ -5,7 +5,7 @@ import { connectPrivateRealtime } from "@/features/private-conversation/realtime
 
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
-  readonly listeners = new Map<string, () => void>();
+  readonly listeners = new Map<string, EventListenerOrEventListenerObject>();
   closed = false;
   constructor(
     readonly url: string,
@@ -14,13 +14,16 @@ class FakeEventSource {
     FakeEventSource.instances.push(this);
   }
   addEventListener(type: string, listener: EventListenerOrEventListenerObject) {
-    this.listeners.set(type, listener as () => void);
+    this.listeners.set(type, listener);
   }
   close() {
     this.closed = true;
   }
   emit(type: string) {
-    this.listeners.get(type)?.();
+    const listener = this.listeners.get(type);
+    const event = { data: JSON.stringify({ pairId: "pair-1", type }) } as MessageEvent<string>;
+    if (typeof listener === "function") listener(event);
+    else listener?.handleEvent(event);
   }
 }
 
@@ -48,7 +51,7 @@ describe("Private realtime reconciliation", () => {
     expect(invalidated).toBe(3);
     source.emit("pair.terminated");
     await Promise.resolve();
-    expect(invalidated).toBe(6);
+    expect(invalidated).toBe(5);
     expect(source.closed).toBe(true);
     dispose();
     expect(source.closed).toBe(true);

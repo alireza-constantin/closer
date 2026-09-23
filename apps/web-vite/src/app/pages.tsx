@@ -19,6 +19,7 @@ import {
   redeemInvite,
   redeemRejoin,
   startAnonymous,
+  terminatePair,
 } from "@/features/consumer/api";
 import {
   displayNameSchema,
@@ -28,6 +29,8 @@ import {
 } from "@/features/consumer/forms";
 import { ApiError } from "@/lib/api-client";
 import { clearConsumerQueryCache } from "@/lib/query-client";
+import { EndedPairPage } from "@/features/pair/components";
+import { connectPairRealtime, pairQueryKey } from "@/features/pair/realtime";
 
 const meKey = ["me"] as const;
 const spacesKey = ["spaces"] as const;
@@ -272,20 +275,40 @@ export function SpacesPage() {
 
 export function PairPage() {
   const { pairId = "" } = useParams();
+  const queryClient = useQueryClient();
+  const [confirmingTermination, setConfirmingTermination] = React.useState(false);
   const pair = useQuery({
-    queryKey: ["pair", pairId],
+    queryKey: pairQueryKey(pairId),
     queryFn: () => getPair(pairId),
     enabled: Boolean(pairId),
+    retry: false,
+    refetchOnMount: "always",
   });
+  const termination = useMutation({
+    mutationFn: () => terminatePair(pairId),
+    onSuccess: async () => {
+      queryClient.setQueryData(pairQueryKey(pairId), (current: typeof pair.data) =>
+        current ? { ...current, state: "terminated" } : current,
+      );
+      await queryClient.invalidateQueries({ queryKey: spacesKey });
+    },
+  });
+  React.useEffect(() => {
+    if (!pairId || !pair.data || pair.data.state === "terminated") return;
+    return connectPairRealtime(pairId, queryClient);
+  }, [pair.data?.state, pairId, queryClient]);
+  if (pair.data?.state === "terminated") return <EndedPairPage pairId={pairId} />;
   return (
     <PageShell>
       <section className="flex flex-1 flex-col py-8">
         <Link className="text-closer-muted text-sm font-bold" to="/spaces">
           ← All spaces
         </Link>
-        {pair.isPending && <p className="text-closer-muted mt-8">Loading your space…</p>}
+        {(pair.isPending || pair.isFetching) && (
+          <p className="text-closer-muted mt-8">Checking your space…</p>
+        )}
         {pair.error && <ErrorCopy error={pair.error} />}
-        {pair.data && (
+        {pair.data && pair.isSuccess && !pair.isFetching && (
           <>
             <p className="text-closer-coral mt-10 text-sm font-bold uppercase">
               {pair.data.relationshipType}
@@ -326,6 +349,49 @@ export function PairPage() {
                 </span>
               </div>
             </div>
+            {!confirmingTermination ? (
+              <button
+                className="text-closer-muted mt-10 self-center text-sm font-bold underline underline-offset-4"
+                onClick={() => setConfirmingTermination(true)}
+                type="button"
+              >
+                {pair.data.state === "connected" ? "Unpair" : "End this space"}
+              </button>
+            ) : (
+              <section className="bg-closer-peach/60 border-closer-coral/20 mt-8 rounded-3xl border p-5">
+                <h2 className="text-closer-navy font-extrabold">
+                  {pair.data.state === "connected" ? "Unpair?" : "End this space?"}
+                </h2>
+                <p className="text-closer-muted mt-2 text-sm leading-6">
+                  This is permanent. Conversations become read-only, Together ends, and invite or
+                  rejoin links stop working. Your history stays here; starting again creates a new
+                  space.
+                </p>
+                {termination.error && (
+                  <p className="text-closer-coral mt-3 text-sm font-bold" role="alert">
+                    We couldn’t end this space. Please try again.
+                  </p>
+                )}
+                <div className="mt-4 flex flex-wrap gap-3">
+                  <button
+                    className="bg-closer-coral text-closer-navy rounded-xl px-4 py-3 text-sm font-extrabold disabled:opacity-60"
+                    disabled={termination.isPending}
+                    onClick={() => termination.mutate()}
+                    type="button"
+                  >
+                    {termination.isPending ? "Ending…" : "Confirm and end this space"}
+                  </button>
+                  <button
+                    className="text-closer-muted rounded-xl px-4 py-3 text-sm font-bold"
+                    disabled={termination.isPending}
+                    onClick={() => setConfirmingTermination(false)}
+                    type="button"
+                  >
+                    Keep this space
+                  </button>
+                </div>
+              </section>
+            )}
           </>
         )}
       </section>
@@ -402,15 +468,29 @@ export function InvitePage() {
 
 export function PairInvitePage() {
   const { pairId = "" } = useParams();
+  const queryClient = useQueryClient();
+  const pair = useQuery({
+    queryKey: pairQueryKey(pairId),
+    queryFn: () => getPair(pairId),
+    enabled: Boolean(pairId),
+    retry: false,
+    refetchOnMount: "always",
+  });
   const state = useQuery({
     queryKey: ["pair-invite", pairId],
     queryFn: () => getInviteState(pairId),
-    enabled: Boolean(pairId),
+    enabled:
+      Boolean(pairId) && pair.isSuccess && !pair.isFetching && pair.data.state !== "terminated",
   });
   const issue = useMutation({
     mutationFn: () => issueInvite(pairId),
     onSuccess: () => state.refetch(),
   });
+  React.useEffect(() => {
+    if (!pairId || !pair.data || pair.data.state === "terminated") return;
+    return connectPairRealtime(pairId, queryClient);
+  }, [pair.data?.state, pairId, queryClient]);
+  if (pair.data?.state === "terminated") return <EndedPairPage pairId={pairId} />;
   const token = state.data?.token;
   const shareUrl = token ? `${window.location.origin}/invite/${token}` : "";
   return (
@@ -419,34 +499,44 @@ export function PairInvitePage() {
         <Link className="text-closer-muted text-sm font-bold" to={`/pair/${pairId}`}>
           ← Back to space
         </Link>
-        <p className="text-closer-coral mt-10 text-sm font-bold uppercase">Invite</p>
-        <h1 className="text-closer-navy mt-2 text-4xl font-extrabold tracking-[-.05em]">
-          A gentle way to join.
-        </h1>
-        <p className="text-closer-muted mt-4 leading-7">
-          The preview link is read-only. Your person joins only when they explicitly press Join.
-        </p>
-        {token ? (
-          <div className="bg-closer-peach/50 mt-8 rounded-3xl p-5">
-            <p className="text-closer-navy text-sm font-bold">Share this link</p>
-            <p className="text-closer-navy mt-3 text-sm break-all">{shareUrl}</p>
-            <button
-              className="bg-closer-navy text-closer-cream mt-4 rounded-xl px-4 py-3 text-sm font-bold"
-              onClick={() => navigator.clipboard.writeText(shareUrl)}
-            >
-              Copy link
-            </button>
-          </div>
-        ) : (
-          <button
-            className="bg-closer-coral text-closer-navy mt-8 rounded-2xl px-5 py-4 font-extrabold"
-            disabled={issue.isPending}
-            onClick={() => issue.mutate()}
-          >
-            {issue.isPending ? "Preparing…" : "Create invite link"}
-          </button>
+        {(pair.isPending || pair.isFetching) && (
+          <p className="text-closer-muted mt-8">Checking your space…</p>
         )}
-        {(state.error || issue.error) != null && <ErrorCopy error={state.error ?? issue.error} />}
+        {pair.error && <ErrorCopy error={pair.error} />}
+        {pair.data?.state !== "terminated" && pair.isSuccess && !pair.isFetching && (
+          <>
+            <p className="text-closer-coral mt-10 text-sm font-bold uppercase">Invite</p>
+            <h1 className="text-closer-navy mt-2 text-4xl font-extrabold tracking-[-.05em]">
+              A gentle way to join.
+            </h1>
+            <p className="text-closer-muted mt-4 leading-7">
+              The preview link is read-only. Your person joins only when they explicitly press Join.
+            </p>
+            {token ? (
+              <div className="bg-closer-peach/50 mt-8 rounded-3xl p-5">
+                <p className="text-closer-navy text-sm font-bold">Share this link</p>
+                <p className="text-closer-navy mt-3 text-sm break-all">{shareUrl}</p>
+                <button
+                  className="bg-closer-navy text-closer-cream mt-4 rounded-xl px-4 py-3 text-sm font-bold"
+                  onClick={() => navigator.clipboard.writeText(shareUrl)}
+                >
+                  Copy link
+                </button>
+              </div>
+            ) : (
+              <button
+                className="bg-closer-coral text-closer-navy mt-8 rounded-2xl px-5 py-4 font-extrabold"
+                disabled={issue.isPending}
+                onClick={() => issue.mutate()}
+              >
+                {issue.isPending ? "Preparing…" : "Create invite link"}
+              </button>
+            )}
+            {(state.error || issue.error) != null && (
+              <ErrorCopy error={state.error ?? issue.error} />
+            )}
+          </>
+        )}
       </section>
     </PageShell>
   );

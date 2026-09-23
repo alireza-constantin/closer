@@ -51,8 +51,11 @@ type Querier interface {
 	DeleteOldAuthRateLimits(ctx context.Context, dollar_1 interface{}) (int64, error)
 	DeletePrivateReaction(ctx context.Context, arg DeletePrivateReactionParams) error
 	DeletePrivateReply(ctx context.Context, arg DeletePrivateReplyParams) error
+	EndActiveErasForTermination(ctx context.Context, pairID pgtype.UUID) (int64, error)
+	EndActiveMembershipsForTermination(ctx context.Context, pairID pgtype.UUID) (int64, error)
 	EndMembershipEraForRejoin(ctx context.Context, eraID pgtype.UUID) (int64, error)
 	EndTargetMembershipForRejoin(ctx context.Context, arg EndTargetMembershipForRejoinParams) (int64, error)
+	EndTogetherSessionsForTermination(ctx context.Context, pairID pgtype.UUID) (int64, error)
 	FindFormerTerminatedPair(ctx context.Context, arg FindFormerTerminatedPairParams) (pgtype.UUID, error)
 	FindInitialInviteForIssue(ctx context.Context, pairID pgtype.UUID) (FindInitialInviteForIssueRow, error)
 	FindQuestionDuplicates(ctx context.Context, arg FindQuestionDuplicatesParams) ([]FindQuestionDuplicatesRow, error)
@@ -100,6 +103,7 @@ type Querier interface {
 	HasAdminUser(ctx context.Context, authUserID pgtype.UUID) (bool, error)
 	HasAuthSession(ctx context.Context, tokenHash []byte) (bool, error)
 	HasDuplicateActiveParticipantPair(ctx context.Context, arg HasDuplicateActiveParticipantPairParams) (bool, error)
+	InvalidateCandidatesForTermination(ctx context.Context, pairID pgtype.UUID) (int64, error)
 	InvalidatePrivateCandidate(ctx context.Context, candidateID pgtype.UUID) error
 	InvalidatePrivateCandidatesForRejoinEra(ctx context.Context, eraID pgtype.UUID) error
 	InvalidatePrivateCandidatesForRevision(ctx context.Context, questionRevisionID pgtype.UUID) error
@@ -129,15 +133,18 @@ type Querier interface {
 	LockAuthUserForUpgrade(ctx context.Context, id pgtype.UUID) (AuthUser, error)
 	LockClaimParticipantPair(ctx context.Context, lockKey string) error
 	LockPairForInitialClaim(ctx context.Context, pairID pgtype.UUID) (LockPairForInitialClaimRow, error)
+	LockPairForTermination(ctx context.Context, pairID pgtype.UUID) (LockPairForTerminationRow, error)
 	LockPrivatePair(ctx context.Context, pairID pgtype.UUID) (pgtype.UUID, error)
 	LockQuestion(ctx context.Context, id pgtype.UUID) (Question, error)
 	LockTargetMembershipForRejoin(ctx context.Context, arg LockTargetMembershipForRejoinParams) (LockTargetMembershipForRejoinRow, error)
+	MarkPairTerminated(ctx context.Context, pairID pgtype.UUID) (pgtype.Timestamptz, error)
 	MarkPrivateCandidateAsked(ctx context.Context, arg MarkPrivateCandidateAskedParams) (pgtype.UUID, error)
 	MarkPrivateCandidateSkipped(ctx context.Context, arg MarkPrivateCandidateSkippedParams) (pgtype.UUID, error)
 	NextPrivateRoundNumber(ctx context.Context, conversationID pgtype.UUID) (int32, error)
 	NextQuestionRevisionNumber(ctx context.Context, questionID pgtype.UUID) (int32, error)
 	ParticipantExists(ctx context.Context, participantID pgtype.UUID) (bool, error)
 	ParticipantHasActiveMembership(ctx context.Context, arg ParticipantHasActiveMembershipParams) (bool, error)
+	ParticipantMembershipState(ctx context.Context, arg ParticipantMembershipStateParams) (ParticipantMembershipStateRow, error)
 	RedeemInitialInvite(ctx context.Context, arg RedeemInitialInviteParams) (int64, error)
 	RedeemRejoinInvite(ctx context.Context, arg RedeemRejoinInviteParams) (int64, error)
 	RenewAuthSession(ctx context.Context, arg RenewAuthSessionParams) (pgtype.Timestamptz, error)
@@ -147,7 +154,9 @@ type Querier interface {
 	RevokeAuthSession(ctx context.Context, arg RevokeAuthSessionParams) (int64, error)
 	RevokeAuthSessionByTokenHash(ctx context.Context, arg RevokeAuthSessionByTokenHashParams) (int64, error)
 	RevokeAuthSessionsForUser(ctx context.Context, arg RevokeAuthSessionsForUserParams) (int64, error)
+	RevokeInitialInvitesForTermination(ctx context.Context, pairID pgtype.UUID) (int64, error)
 	RevokeNonterminalInitialInvites(ctx context.Context, pairID pgtype.UUID) error
+	RevokeRejoinInvitesForTermination(ctx context.Context, pairID pgtype.UUID) (int64, error)
 	RevokeUsableInitialInvite(ctx context.Context, pairID pgtype.UUID) (int64, error)
 	SetCurrentQuestionRevision(ctx context.Context, arg SetCurrentQuestionRevisionParams) error
 	SetLocalTestValue(ctx context.Context, value string) (string, error)

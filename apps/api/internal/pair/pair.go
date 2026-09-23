@@ -6,6 +6,7 @@ import (
 	"errors"
 	"regexp"
 	"strings"
+	"time"
 	"unicode/utf16"
 
 	"github.com/alireza-constantin/closer/apps/api/internal/realtime"
@@ -80,6 +81,13 @@ type Entry struct {
 	Members            []Member
 }
 
+type Termination struct {
+	PairID       string
+	State        string
+	TerminatedAt time.Time
+	Changed      bool
+}
+
 type CreateInput struct {
 	ParticipantID      string
 	IntendedPersonName string
@@ -93,6 +101,9 @@ type Tx interface {
 	GetCreatedPairByRequestAndParticipant(context.Context, string, string) (Pair, error)
 	CreateCreatorMembership(context.Context, string, string) error
 	LockActivePair(context.Context, string) (bool, error)
+	LockPairForTermination(context.Context, string) (bool, *time.Time, error)
+	ParticipantMembershipState(context.Context, string, string) (exists, active bool, err error)
+	TerminatePair(context.Context, string) (time.Time, error)
 	ParticipantHasActiveMembership(context.Context, string, string) (bool, error)
 	HasActiveSecondSlot(context.Context, string) (bool, error)
 	UpdateIntendedPersonName(context.Context, string, string) (Pair, error)
@@ -250,6 +261,50 @@ func (s *Service) UpdateIntendedPersonName(ctx context.Context, participantID, p
 			return err
 		}
 		return err
+	})
+	return result, err
+}
+
+// Terminate establishes the irreversible Pair boundary. The Pair row lock is
+// shared by claims and all Pair-scoped mutations, so whichever transaction
+// commits first determines whether its work is retained.
+func (s *Service) Terminate(ctx context.Context, participantID, pairID string) (Termination, error) {
+	if participantID == "" {
+		return Termination{}, ErrParticipantRequired
+	}
+	var result Termination
+	err := s.store.WithinTx(ctx, func(tx Tx) error {
+		locked, terminatedAt, err := tx.LockPairForTermination(ctx, pairID)
+		if err != nil {
+			return err
+		}
+		if !locked {
+			return ErrPairNotFound
+		}
+		exists, active, err := tx.ParticipantMembershipState(ctx, pairID, participantID)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return ErrPairNotFound
+		}
+		if terminatedAt != nil {
+			result = Termination{PairID: pairID, State: "terminated", TerminatedAt: *terminatedAt}
+			return nil
+		}
+		if !active {
+			return ErrPairNotFound
+		}
+
+		endedAt, err := tx.TerminatePair(ctx, pairID)
+		if err != nil {
+			return err
+		}
+		if err := tx.Publish(ctx, realtime.Event{Version: realtime.Version, PairID: pairID, Type: realtime.PairTerminated}); err != nil {
+			return err
+		}
+		result = Termination{PairID: pairID, State: "terminated", TerminatedAt: endedAt, Changed: true}
+		return nil
 	})
 	return result, err
 }

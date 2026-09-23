@@ -634,6 +634,162 @@ const cases = [
     ],
   },
   {
+    id: "pair.terminated-private-mutations-rejected",
+    area: "pair-invite-era",
+    gate: "must-pass-before-cutover",
+    title: "A terminated Pair rejects every later Private mutation",
+    preconditions: ["A Pair has ended while an unresolved candidate and historical Rounds remain."],
+    actions: [
+      action("start", "former-member", "start or resume a Private conversation"),
+      action("ask", "former-member", "Ask an unresolved Private candidate"),
+      action("answer", "former-member", "answer a historical Round"),
+      action("reveal", "former-member", "Reveal a historical Round"),
+      action("reaction", "former-member", "change a historical reaction"),
+      action("reply", "former-member", "change a historical reply"),
+      action("progress", "former-member", "Ask another or change the Private lane"),
+    ],
+    expected: {
+      actions: [
+        { id: "start" },
+        { id: "ask" },
+        { id: "answer" },
+        { id: "reveal" },
+        { id: "reaction" },
+        { id: "reply" },
+        { id: "progress" },
+      ],
+      persistedState: {
+        pairRemainsTerminated: true,
+        historicalRowsUnchanged: true,
+        mutationsCommitted: 0,
+      },
+    },
+    sources: [
+      "docs/adr/005-pair-membership-era-termination-and-history.md — Pair termination",
+      "apps/api/internal/postgres/private/concurrency_integration_test.go — termination serialization tests",
+    ],
+  },
+  {
+    id: "pair.terminated-together-mutations-rejected",
+    area: "pair-invite-era",
+    gate: "must-pass-before-cutover",
+    title: "A terminated Pair cannot start or advance Together",
+    preconditions: ["A Pair has ended with no active Together Session."],
+    actions: [
+      action("start", "former-member", "POST Together Session start"),
+      action("advance", "former-member", "Next or Skip an ended Session"),
+      action("like", "former-member", "Like a question in an ended Session"),
+    ],
+    expected: {
+      actions: [{ id: "start" }, { id: "advance" }, { id: "like" }],
+      persistedState: { pairRemainsTerminated: true, activeSessions: 0, newOccurrences: 0 },
+    },
+    sources: [
+      "docs/adr/005-pair-membership-era-termination-and-history.md — transaction ordering",
+      "apps/api/internal/postgres/private/concurrency_integration_test.go — Together Start and Advance termination races",
+    ],
+  },
+  {
+    id: "pair.terminated-initial-invite-cannot-claim",
+    area: "pair-invite-era",
+    gate: "must-pass-before-cutover",
+    title: "An outstanding initial invite cannot claim or revive a terminated Pair",
+    preconditions: ["A usable invite exists when the Pair termination transaction begins."],
+    actions: [
+      action("terminate", "participant-a", "terminate Pair", "claim-terminate"),
+      action("claim", "participant-b", "redeem initial invite", "claim-terminate"),
+    ],
+    expected: {
+      actions: [{ id: "terminate" }, { id: "claim" }],
+      persistedState: {
+        pairRemainsTerminated: true,
+        activeMemberships: 0,
+        activeEras: 0,
+        inviteUsable: false,
+      },
+    },
+    sources: [
+      "docs/adr/002-invite-and-rejoin-security.md — initial claim",
+      "apps/api/internal/postgres/private/concurrency_integration_test.go — initial invite redemption termination race",
+    ],
+  },
+  {
+    id: "pair.terminated-rejoin-cannot-replace",
+    area: "pair-invite-era",
+    gate: "must-pass-before-cutover",
+    title: "A valid rejoin link cannot replace a member after Pair termination",
+    preconditions: ["A usable guest rejoin link exists when termination and redemption race."],
+    actions: [
+      action("terminate", "participant-a", "terminate Pair", "rejoin-terminate"),
+      action("rejoin", "guest-session", "redeem rejoin link", "rejoin-terminate"),
+    ],
+    expected: {
+      actions: [{ id: "terminate" }, { id: "rejoin" }],
+      persistedState: {
+        pairRemainsTerminated: true,
+        noNewMembershipAfterTermination: true,
+        noNewEraAfterTermination: true,
+      },
+    },
+    sources: [
+      "docs/adr/002-invite-and-rejoin-security.md — guest replacement",
+      "apps/api/internal/postgres/private/concurrency_integration_test.go — TestGuestRejoinSerializesWithPairTermination",
+    ],
+  },
+  {
+    id: "pair.terminated-history-remains-authorized-and-immutable",
+    area: "pair-invite-era",
+    gate: "must-pass-before-cutover",
+    title: "Termination retains exact former-member history without widening visibility",
+    preconditions: ["A Private Round has one persisted answer when Pair termination commits."],
+    actions: [
+      action("owner-history", "answer-author", "read Former-Pair history"),
+      action("other-history", "other-former-member", "read Former-Pair history"),
+      action("outsider-history", "outsider", "read Former-Pair history"),
+    ],
+    expected: {
+      actions: [{ id: "owner-history" }, { id: "other-history" }, { id: "outsider-history" }],
+      persistedState: {
+        pinnedRevisionPreserved: true,
+        endedNamesPreserved: true,
+        formerMemberSeesOwnAnswerOnly: true,
+        outsiderCanRead: false,
+      },
+    },
+    sources: [
+      "docs/adr/005-pair-membership-era-termination-and-history.md — Former-Pair and former-era history",
+      "apps/api/internal/postgres/private/concurrency_integration_test.go — TestPairTerminationInvalidatesCandidateAndPreservesFormerPrivateHistory",
+    ],
+  },
+  {
+    id: "pair.terminated-event-stops-client-stream",
+    area: "realtime",
+    gate: "must-pass-before-cutover",
+    title: "Pair termination publishes metadata after commit and clients stop reconnecting",
+    preconditions: ["A member has a Pair-scoped EventSource open."],
+    actions: [action("terminate", "participant-a", "POST Pair termination")],
+    expected: {
+      actions: [{ id: "terminate" }],
+      realtime: [
+        {
+          type: "pair.terminated",
+          pair: "$pair",
+          afterCommit: true,
+          mustOmit: ["question", "candidate", "answer", "membership"],
+        },
+      ],
+      persistedState: {
+        clientEventSourceClosed: true,
+        pollingStopped: true,
+        reconnectsAfterTermination: 0,
+      },
+    },
+    sources: [
+      "docs/rewrite/API-CONTRACTS.md — metadata-only SSE and Pair termination",
+      "apps/web-vite/src/features/pair/realtime.test.ts — Pair termination cache and stream shutdown",
+    ],
+  },
+  {
     id: "together.category-authorization",
     area: "together",
     gate: "must-pass-before-cutover",

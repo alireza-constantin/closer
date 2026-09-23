@@ -97,6 +97,92 @@ WHERE id = sqlc.arg(pair_id)
   AND terminated_at IS NULL
 FOR UPDATE;
 
+-- name: LockPairForTermination :one
+SELECT id, terminated_at
+FROM pair
+WHERE id = sqlc.arg(pair_id)
+FOR UPDATE;
+
+-- name: ParticipantMembershipState :one
+SELECT
+    EXISTS (
+        SELECT 1 FROM pair_membership AS membership
+        WHERE membership.pair_id = sqlc.arg(pair_id)
+          AND membership.participant_id = sqlc.arg(participant_id)
+    )::boolean AS has_membership,
+    EXISTS (
+        SELECT 1 FROM pair_membership AS membership
+        WHERE membership.pair_id = sqlc.arg(pair_id)
+          AND membership.participant_id = sqlc.arg(participant_id)
+          AND membership.ended_at IS NULL
+    )::boolean AS has_active_membership;
+
+-- name: MarkPairTerminated :one
+UPDATE pair
+SET terminated_at = clock_timestamp()
+WHERE id = sqlc.arg(pair_id)
+  AND terminated_at IS NULL
+RETURNING terminated_at;
+
+-- name: EndActiveMembershipsForTermination :execrows
+UPDATE pair_membership AS membership
+SET ended_at = p.terminated_at,
+    ended_display_name = participant.display_name
+FROM pair AS p, participant
+WHERE p.id = sqlc.arg(pair_id)
+  AND membership.pair_id = p.id
+  AND membership.ended_at IS NULL
+  AND participant.id = membership.participant_id
+  AND p.terminated_at IS NOT NULL;
+
+-- name: EndActiveErasForTermination :execrows
+UPDATE pair_membership_era
+SET ended_at = p.terminated_at
+FROM pair AS p
+WHERE p.id = sqlc.arg(pair_id)
+  AND pair_membership_era.pair_id = p.id
+  AND pair_membership_era.ended_at IS NULL
+  AND p.terminated_at IS NOT NULL;
+
+-- name: InvalidateCandidatesForTermination :execrows
+UPDATE private_question_candidate AS candidate
+SET state = 'invalidated', resolved_at = p.terminated_at
+FROM private_conversation AS conversation, pair AS p
+WHERE p.id = sqlc.arg(pair_id)
+  AND p.terminated_at IS NOT NULL
+  AND conversation.pair_id = p.id
+  AND candidate.conversation_id = conversation.id
+  AND candidate.state = 'unresolved';
+
+-- name: RevokeInitialInvitesForTermination :execrows
+UPDATE initial_invite
+SET revoked_at = p.terminated_at
+FROM pair AS p
+WHERE p.id = sqlc.arg(pair_id)
+  AND p.terminated_at IS NOT NULL
+  AND initial_invite.pair_id = p.id
+  AND initial_invite.revoked_at IS NULL
+  AND initial_invite.redeemed_at IS NULL;
+
+-- name: RevokeRejoinInvitesForTermination :execrows
+UPDATE rejoin_invite
+SET revoked_at = p.terminated_at
+FROM pair AS p
+WHERE p.id = sqlc.arg(pair_id)
+  AND p.terminated_at IS NOT NULL
+  AND rejoin_invite.pair_id = p.id
+  AND rejoin_invite.revoked_at IS NULL
+  AND rejoin_invite.redeemed_at IS NULL;
+
+-- name: EndTogetherSessionsForTermination :execrows
+UPDATE together_session
+SET ended_at = p.terminated_at
+FROM pair AS p
+WHERE p.id = sqlc.arg(pair_id)
+  AND p.terminated_at IS NOT NULL
+  AND together_session.pair_id = p.id
+  AND together_session.ended_at IS NULL;
+
 -- name: ParticipantHasActiveMembership :one
 SELECT EXISTS (
     SELECT 1 FROM pair_membership

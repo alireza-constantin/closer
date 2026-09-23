@@ -4,6 +4,7 @@ package pair
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/alireza-constantin/closer/apps/api/internal/pair"
 	"github.com/alireza-constantin/closer/apps/api/internal/postgres"
@@ -223,6 +224,71 @@ func (s txStore) LockActivePair(ctx context.Context, pairID string) (bool, error
 		return false, nil
 	}
 	return err == nil, err
+}
+
+func (s txStore) LockPairForTermination(ctx context.Context, pairID string) (bool, *time.Time, error) {
+	id, err := parseUUID(pairID)
+	if err != nil {
+		return false, nil, nil
+	}
+	row, err := sqlc.New(s.db).LockPairForTermination(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil, nil
+	}
+	if err != nil {
+		return false, nil, err
+	}
+	if !row.TerminatedAt.Valid {
+		return true, nil, nil
+	}
+	terminatedAt := row.TerminatedAt.Time
+	return true, &terminatedAt, nil
+}
+
+func (s txStore) ParticipantMembershipState(ctx context.Context, pairID, participantID string) (bool, bool, error) {
+	pairUUID, err := parseUUID(pairID)
+	if err != nil {
+		return false, false, nil
+	}
+	participantUUID, err := parseUUID(participantID)
+	if err != nil {
+		return false, false, nil
+	}
+	row, err := sqlc.New(s.db).ParticipantMembershipState(ctx, sqlc.ParticipantMembershipStateParams{
+		PairID: pairUUID, ParticipantID: participantUUID,
+	})
+	if err != nil {
+		return false, false, err
+	}
+	return row.HasMembership, row.HasActiveMembership, nil
+}
+
+func (s txStore) TerminatePair(ctx context.Context, pairID string) (time.Time, error) {
+	id, err := parseUUID(pairID)
+	if err != nil {
+		return time.Time{}, pair.ErrPairNotFound
+	}
+	queries := sqlc.New(s.db)
+	terminatedAt, err := queries.MarkPairTerminated(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return time.Time{}, pair.ErrPairNotFound
+	}
+	if err != nil {
+		return time.Time{}, err
+	}
+	for _, cleanup := range []func(context.Context, pgtype.UUID) (int64, error){
+		queries.EndActiveMembershipsForTermination,
+		queries.EndActiveErasForTermination,
+		queries.InvalidateCandidatesForTermination,
+		queries.RevokeInitialInvitesForTermination,
+		queries.RevokeRejoinInvitesForTermination,
+		queries.EndTogetherSessionsForTermination,
+	} {
+		if _, err := cleanup(ctx, id); err != nil {
+			return time.Time{}, err
+		}
+	}
+	return terminatedAt.Time, nil
 }
 
 func (s txStore) ParticipantHasActiveMembership(ctx context.Context, pairID, participantID string) (bool, error) {
