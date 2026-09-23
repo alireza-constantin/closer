@@ -12,6 +12,7 @@ sql:
       - "db/schema/008_private_round_completed.sql"
       - "db/schema/009_private_post_reveal.sql"
       - "db/schema/010_private_progression.sql"
+      - "db/schema/011_admin_analytics_indexes.sql"
     queries:
       - "db/queries/auth.sql"
       - "db/queries/participant.sql"
@@ -21,6 +22,7 @@ sql:
       - "db/queries/question.sql"
       - "db/queries/together.sql"
       - "db/queries/private.sql"
+      - "db/queries/admin_analytics.sql"
     gen:
       go:
         package: "sqlc"

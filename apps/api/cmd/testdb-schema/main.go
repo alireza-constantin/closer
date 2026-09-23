@@ -34,7 +34,7 @@ func main() {
 			fatal(fmt.Errorf("reset guarded test schema: %w", err))
 		}
 	}
-	for _, path := range []string{"db/schema/001_auth.sql", "db/schema/002_participant_pair.sql", "db/schema/003_initial_invite.sql", "db/schema/004_rejoin_invite.sql", "db/schema/005_question_revision.sql", "db/schema/006_together.sql", "db/schema/007_private_round.sql", "db/schema/008_private_round_completed.sql", "db/schema/009_private_post_reveal.sql", "db/schema/010_private_progression.sql"} {
+	for _, path := range []string{"db/schema/001_auth.sql", "db/schema/002_participant_pair.sql", "db/schema/003_initial_invite.sql", "db/schema/004_rejoin_invite.sql", "db/schema/005_question_revision.sql", "db/schema/006_together.sql", "db/schema/007_private_round.sql", "db/schema/008_private_round_completed.sql", "db/schema/009_private_post_reveal.sql", "db/schema/010_private_progression.sql", "db/schema/011_admin_analytics_indexes.sql"} {
 		ddl, err := os.ReadFile(path)
 		if err != nil {
 			fatal(fmt.Errorf("read schema file %s: %w", path, err))

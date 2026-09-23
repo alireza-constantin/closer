@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alireza-constantin/closer/apps/api/internal/adminanalytics"
 	"github.com/alireza-constantin/closer/apps/api/internal/auth"
 	"github.com/alireza-constantin/closer/apps/api/internal/invite"
 	"github.com/alireza-constantin/closer/apps/api/internal/pair"
@@ -139,6 +140,7 @@ func NewRouterWithPrivateAndTogetherRealtime(
 	realtimeRegistry *realtime.Registry,
 	realtimePublisher realtime.Publisher,
 	security SecurityConfig,
+	analyticsServices ...*adminanalytics.Service,
 ) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
@@ -184,6 +186,9 @@ func NewRouterWithPrivateAndTogetherRealtime(
 			}
 			if questionService != nil {
 				registerAdminQuestionRoutes(api, authService, questionService, security)
+			}
+			if len(analyticsServices) > 0 && analyticsServices[0] != nil {
+				registerAdminAnalyticsRoutes(api, authService, analyticsServices[0])
 			}
 			if togetherService != nil && participantService != nil {
 				registerTogetherRoutes(api, authService, participantService, togetherService, realtimePublisher, security)
