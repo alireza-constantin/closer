@@ -6,13 +6,9 @@ node_modules
 # Build outputs
 dist
 build
-apps/web/.next*/
 *.tsbuildinfo
 
 # Generated files
-apps/web/src/routeTree.gen.ts
-local.db
-local.db-*
 
 # Environment variables
 .env
@@ -43,11 +39,6 @@ lerna-debug.log*
 # Turbo
 .turbo
 .nx
-
-# Better-T-Stack
-.alchemy
-.vercel
-.next-build
 
 # Testing
 coverage

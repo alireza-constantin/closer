@@ -1,252 +1,107 @@
 # Closer
 
-This project was created with [Better-T-Stack](https://github.com/AmanVarshney01/create-better-t-stack), a modern TypeScript stack that combines Next.js, Self, and more.
+Closer is a React + Vite installable web app backed by a Go HTTP API and PostgreSQL.
 
-## Features
-
-- **TypeScript** - For type safety and improved developer experience
-- **Next.js** - Full-stack React framework
-- **TailwindCSS** - Utility-first CSS for rapid UI development
-- **Shared UI package** - shadcn/ui primitives live in `packages/ui`
-- **Drizzle** - TypeScript-first ORM
-- **PostgreSQL** - Database engine
-- **Authentication** - Better-Auth
-- **PWA** - Progressive Web App support
-
-## Getting Started
-
-First, install the dependencies:
-
-```bash
-bun install
+```text
+React + Vite PWA  →  Go API (JSON + SSE)  →  PostgreSQL
 ```
 
-## Database Setup
+The Vite app contains the consumer flows, Admin question authoring, and Admin analytics. The Go API owns authentication, authorization, domain transitions, persistence, and realtime events. PostgreSQL schema changes use the versioned Go migration baseline in `apps/api/db/migrations`.
 
-This project uses PostgreSQL with Drizzle ORM and retains the `node-postgres`
-driver because the app requires transactions, row locking, and session-based
-PostgreSQL `LISTEN`/`NOTIFY`.
+## Local development
 
-Closer currently has exactly two Neon environments:
+Requirements: Bun 1.4.2, Go 1.25.1, and PostgreSQL 18. A local PostgreSQL instance can be used directly. An optional loopback-only Compose service is provided for an isolated test database; it binds port 5435 and can run only when that port is free.
 
-- `development` — local development and integration testing.
-- `main` — Production.
+1. Install workspace dependencies with `bun install`.
+2. Create an empty local PostgreSQL database named `closer_test` reachable on `127.0.0.1:5435`.
+3. Set `CLOSER_TEST_DATABASE_URL` to that local `closer_test` database. The Go test bootstrap rejects non-loopback hosts and any database name other than `closer_test`.
+4. Apply the schema with `bun run api:schema:reset:test`.
+5. In separate terminals run `bun run dev` and `bun run api:run`. Vite proxies `/api` to `http://127.0.0.1:8080` by default; override this development target with `VITE_API_PROXY_TARGET`.
 
-Docker Postgres remains an optional offline/local fallback. It is not the
-recommended workflow and is not deleted.
+Environment variables already present in the process take precedence. Root commands such as `bun run api:run` load the first existing file from `apps/api/.env.local` and root `.env.local`, in that order. Commands started with `apps/api` as their working directory load only `apps/api/.env.local`. Do not put production credentials in these files.
 
-### Development environment
+To start the optional test database when port 5435 is free, run `docker compose up -d closer-test-postgres`. Its default password is `closer-test-only`, and its port is bound to loopback. The guarded reset command recreates only this local test schema.
 
-Create or select the Neon Development branch. Never use Production credentials
-locally. Copy `apps/web/.env.example` to `apps/web/.env.local` and set:
+## Environment variables
 
-- `DATABASE_URL` to the pooled Development URL for normal application queries.
-- `DATABASE_URL_UNPOOLED` to the direct Development URL for schema operations.
-- `REALTIME_DATABASE_URL` to the direct Development URL for `LISTEN/NOTIFY`.
-- the Better Auth and Admin development values documented in the template.
+| Area                    | Variable                                            | Requirement and purpose                                                                                                                                         |
+| ----------------------- | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Go API                  | `HTTP_ADDR`                                         | Required `host:port` listener address, for example `127.0.0.1:8080`.                                                                                            |
+| Database                | `DATABASE_URL`                                      | Required PostgreSQL URL for API queries and migrations.                                                                                                         |
+| Realtime                | `REALTIME_DATABASE_URL`                             | Optional PostgreSQL URL for the dedicated LISTEN connection; falls back to `DATABASE_URL_UNPOOLED`, then `DATABASE_URL`.                                        |
+| Realtime                | `DATABASE_URL_UNPOOLED`                             | Optional direct PostgreSQL URL used as the realtime fallback.                                                                                                   |
+| Auth / browser security | `CLOSER_TRUSTED_ORIGINS`                            | Exact comma-separated HTTP(S) origins allowed to make cookie-authenticated mutations. Configure the deployed frontend origin. Empty fails closed for mutations. |
+| Auth / proxy security   | `CLOSER_TRUSTED_PROXY_CIDRS`                        | Optional comma-separated CIDRs for trusted reverse proxies that set forwarded-protocol headers.                                                                 |
+| Go API                  | `HTTP_SHUTDOWN_TIMEOUT`                             | Optional positive Go duration; defaults to `10s`.                                                                                                               |
+| Vite development        | `VITE_API_PROXY_TARGET`                             | Optional development proxy target; defaults to `http://127.0.0.1:8080`. No Vite runtime secret or API base URL is required.                                     |
+| Local Go tests          | `CLOSER_TEST_DATABASE_URL`                          | Required to run PostgreSQL integration tests; must target loopback `closer_test`. Never use a production database.                                              |
+| Admin operator          | `ADMIN_BOOTSTRAP_EMAIL`, `ADMIN_BOOTSTRAP_PASSWORD` | Set only for the explicit one-time Admin bootstrap command.                                                                                                     |
+| Admin operator          | `ADMIN_RECOVERY_PASSWORD`                           | Set only for an explicit Admin recovery command.                                                                                                                |
 
-The current pre-launch workflow treats the Drizzle schema files as the source
-of truth. Apply the schema explicitly:
+There are no runtime requirements for Next.js, Better Auth, Drizzle, `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, or a legacy Admin user ID.
 
-```bash
-bun run db:push
-bun dev
+## Database and tests
+
+The test schema bootstrap is guarded and only operates on local `closer_test`:
+
+```sh
+bun run api:schema:reset:test
+bun run api:test
 ```
 
-Open [http://localhost:3001](http://localhost:3001) and smoke test Closer.
+The production migration command is intentionally separate. Review the migration and database target before running it in any deployment environment:
 
-### Integration tests
-
-The default `bun test` runs safe unit, frontend, parity, and harness tests. It
-does not discover destructive `*.integration.test.*` files. Those suites use
-only an explicit local PostgreSQL database named `closer_test`; they never fall
-back to `DATABASE_URL`, `closer_dev`, Production, or Neon.
-
-Create the database and apply the required test schema separately, then set
-both guards for that shell only:
-
-```bash
-CLOSER_ALLOW_DESTRUCTIVE_DB_TESTS=1 \
-CLOSER_TEST_DATABASE_URL=postgres://closer:local-only-password@127.0.0.1:5432/closer_test \
-bun run test:integration
+```sh
+cd apps/api
+go run ./cmd/migrate apply
+go run ./cmd/migrate verify
 ```
 
-PowerShell:
+Canonical local verification commands:
 
-```powershell
-$env:CLOSER_ALLOW_DESTRUCTIVE_DB_TESTS = "1"
-$env:CLOSER_TEST_DATABASE_URL = "postgres://closer:local-only-password@127.0.0.1:5432/closer_test"
-bun run test:integration
+```sh
+# Go API
+cd apps/api
+go fmt ./...
+go vet ./...
+go test -p 1 -count=1 ./...
+go build ./...
+cd ../..
+bun run api:test
+bun run api:build
+
+# Vite app
+bun run --filter web-vite test
+bun run --filter web-vite check-types
+bun run --filter web-vite build
+
+# Workspace
+bun run test
+bun run check-types
+bun run build
 ```
 
-The helper refuses Production (`NODE_ENV=production` or
-`VERCEL_ENV=production`), remote hosts, and any database name other than
-`closer_test`. If the explicit test URL or opt-in flag is absent, the guarded
-command fails with a clear configuration error before opening a connection.
-Unit tests that do not require database access remain available through the
-default command.
+SQLC is pinned to v1.31.1 in CI. Generate twice from `apps/api` and confirm the second run has no content changes:
 
-### Worktrees
-
-Worktrees do not share ignored `.env.local` files or `node_modules`. From a new
-worktree, run `bun install --frozen-lockfile`, then copy the ignored local
-environment file from the canonical checkout only when needed:
-
-```powershell
-Copy-Item ..\closer\apps\web\.env.local apps\web\.env.local
+```sh
+cd apps/api
+sqlc generate
+git diff --exit-code -- internal/postgres
+sqlc generate
+git diff --exit-code -- internal/postgres
 ```
 
-Never commit that file. For destructive tests, configure
-`CLOSER_TEST_DATABASE_URL` explicitly in the test shell and verify it points to
-the local `closer_test` database before running `bun run test:integration`.
+## Deployment shape
 
-### Production environment
+Deploy a static Vite build, the Go API process, and PostgreSQL. Serve the SPA and API on one HTTPS origin so session cookies and the exact-origin mutation policy remain straightforward. The static host must route `/api/*` to the Go API and fall back to `index.html` for client-side routes; do not route API misses to the SPA fallback. Configure `CLOSER_TRUSTED_ORIGINS` with the exact public frontend origin and configure proxy CIDRs only for proxies you control.
 
-Production values are configured through Vercel. Use
-`apps/web/.env.production.example` as the checklist for the Neon `main` branch:
+For Caddy or another reverse proxy, route `/api/*` to the Go listener and serve `apps/web-vite/dist` with an SPA fallback. The API owns paths under `/api/v1`; the Vite development proxy is not a production server.
 
-- `DATABASE_URL` is the pooled Production URL.
-- `DATABASE_URL_UNPOOLED` is the direct Production URL for explicit schema operations.
-- `REALTIME_DATABASE_URL` is the direct Production URL for `LISTEN/NOTIFY`.
-- the existing Better Auth and Admin values are configured as documented.
+Admin bootstrap and recovery are operator commands, not public signup flows. Keep their credentials short-lived and out of source control and logs. This repository does not deploy, migrate production, or configure DNS.
 
-**Pre-launch warning:** while Production data is disposable, an operator may
-manually reset/clear `main` and run `bun run db:push`. A deploy never changes the
-database. Once real user data exists, `db:push` against Production is
-prohibited; establish a clean migration baseline before then and use only
-reviewed, versioned migrations afterward.
+Run the operator commands only after setting the corresponding Admin variables in the environment:
 
-### One-time clean-start runbook
-
-Development first:
-
-1. Confirm `apps/web/.env.local` points to Neon DEVELOPMENT.
-2. Reset or clear the Development database manually.
-3. Run `bun run db:push`.
-4. Start `bun dev`.
-5. Smoke test Closer and run relevant tests.
-
-Production only after Development passes:
-
-1. Confirm there is no Production data to preserve.
-2. Confirm Vercel Production variables point to Neon `main`.
-3. Reset or clear `main` manually.
-4. Run `bun run db:push` explicitly against `main` from a trusted operator shell.
-5. Deploy the application.
-6. Bootstrap Admin with `bun run admin:bootstrap`.
-7. Set `ADMIN_USER_ID` and redeploy if necessary.
-8. Run the production smoke test.
-
-Do not automate either reset or schema push.
-
-### Future migration boundary
-
-- **Current pre-launch:** Drizzle schema + manual `db:push` + disposable data.
-- **Before real users:** create a clean migration baseline and re-enable
-  migration-based releases.
-- **After real users:** never use `db:push` to evolve Production; use only
-  reviewed, versioned migrations.
-
-## UI Customization
-
-React web apps in this stack share shadcn/ui primitives through `packages/ui`.
-
-- Change design tokens and global styles in `packages/ui/src/styles/globals.css`
-- Update shared primitives in `packages/ui/src/components/*`
-- Adjust shadcn aliases or style config in `packages/ui/components.json` and `apps/web/components.json`
-
-### Add more shared components
-
-Run this from the project root to add more primitives to the shared UI package:
-
-```bash
-npx shadcn@latest add accordion dialog popover sheet table -c packages/ui
+```sh
+bun run api:admin-bootstrap
+bun run api:admin-recover
 ```
-
-Import shared components like this:
-
-```tsx
-import { Button } from "@Closer/ui/components/button";
-```
-
-### Add app-specific blocks
-
-If you want to add app-specific blocks instead of shared primitives, run the shadcn CLI from `apps/web`.
-
-## Deployment
-
-### Vercel Services
-
-- Target: web + server
-- Config: `vercel.json`
-- Link the project first: bun run deploy:setup
-- Local Vercel dev: bun run dev:vercel
-- Sync preview env: bun run env:preview
-- Sync production env: bun run env:production
-- Dry-run check (no upload): bun run deploy:check
-- Preview deploy: bun run deploy
-- Production deploy: bun run deploy:prod
-  Vercel Services share project environment variables, but deploys do not upload local `.env` files automatically. Link the project with `vercel link`, then run the env sync command before your first deploy (otherwise the deployment starts with no env vars), or pass one-off envs with `vercel deploy -e KEY=value`.
-  Pass Vercel CLI flags to the env sync command directly, for example: `bun run env:production --scope your-team`.
-
-### Preview runtime checklist
-
-Before creating a Preview deployment, configure these Vercel Preview environment variables with deployment-safe values:
-
-- `DATABASE_URL`: a pooled PostgreSQL connection string for the intended Preview database; never a localhost, loopback, or file URL.
-- `DATABASE_URL_UNPOOLED`: a direct/unpooled PostgreSQL connection for explicit schema operations when needed.
-- `BETTER_AUTH_SECRET`: at least 32 characters, scoped consistently with the Preview environment.
-- `REALTIME_DATABASE_URL` (when `DATABASE_URL` is transaction-pooled): a direct, session-capable PostgreSQL URL for the server-side `LISTEN` connection. This is never sent to browsers or logged. If it is unset, the listener falls back to `DATABASE_URL_UNPOOLED`, then `DATABASE_URL`.
-
-`BETTER_AUTH_URL` is intentionally not synchronized by `bun run env:preview`. On Vercel, Closer derives it from that deployment's `VERCEL_URL`, then uses that exact HTTPS origin for Better Auth's base URL and trusted-origin list. This supports each Preview URL without allowing arbitrary origins. For local development, keep `BETTER_AUTH_URL` set to the local app origin.
-
-The Vercel build command is `cd ../.. && bun run --filter web build`. It only
-builds the application: it does not run `db:migrate`, `db:push`, or any other
-database mutation. Schema changes are explicit operator actions.
-
-For the disposable pre-launch Production database only, use the guarded
-`bun run db:push:production` workflow documented in the [Admin production
-runbook](docs/admin/ADMIN-RUNBOOK.md). Keep the normal `bun run db:push`
-command pointed at Development.
-
-The `env:preview` helper warns if a local `.env` value looks like localhost. Treat that as a stop signal: configure the Preview value in Vercel (or use a deployment-safe env file) before deploying.
-
-### Realtime invalidation
-
-Closer uses one same-origin Server-Sent Events stream for each active Pair route tree. The stream carries only a version, Pair ID, and an invalidation type (`pair.changed`, `private.changed`, `together.changed`, or `pair.terminated`). It never carries answers, candidates, credentials, or other Pair content.
-
-PostgreSQL `NOTIFY` publishes those invalidations across Vercel instances. Each warm Node process keeps at most one lazy `LISTEN closer_realtime` connection and fans matching notifications out to its local SSE clients. The SSE route reauthenticates and authorizes the current Participant before subscribing. If an instance or connection is recycled, the browser EventSource reconnects and the active TanStack Query projections are invalidated and fetched again.
-
-For Preview debugging, inspect the EventStream request for `GET /api/pairs/:pairId/events` and the subsequent authorized projection GET. Do not log or paste database URLs, cookies, invitation tokens, answers, or candidate text. A missing direct PostgreSQL connection is a deployment blocker for cross-instance realtime; do not substitute an in-memory event bus.
-
-For more details, see the guide on [Deploying to Vercel](https://www.better-t-stack.dev/docs/guides/vercel).
-
-## Project Structure
-
-```
-Closer/
-├── apps/
-│   └── web/         # Fullstack application (Next.js)
-├── packages/
-│   ├── ui/          # Shared shadcn/ui components and styles
-│   ├── auth/        # Authentication configuration & logic
-│   └── db/          # Database schema & queries
-```
-
-## Available Scripts
-
-- `bun run dev`: Start all applications in development mode
-- `bun run build`: Build all applications
-- `bun run dev:web`: Start only the web application
-- `bun run check-types`: Check TypeScript types across all apps
-- `bun run db:push`: Apply the current Drizzle schema to the configured database
-- `bun run db:push:production`: Guarded, interactive one-time pre-launch Production schema push
-- `bun run db:studio`: Open database studio UI
-- `cd apps/web && bun run generate-pwa-assets`: Generate PWA assets
-- `bun run deploy:setup`: Link this repo to a Vercel project (first-time setup)
-- `bun run dev:vercel`: Run the Vercel Services dev environment locally
-- `bun run env:preview`: Sync local env files to the Vercel preview environment
-- `bun run env:production`: Sync local env files to the Vercel production environment
-- `bun run deploy`: Create a Vercel preview deployment
-- `bun run deploy:prod`: Deploy to Vercel production
-- `bun run deploy:check`: Dry-run a deploy to preview framework detection and included files without uploading

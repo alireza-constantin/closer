@@ -1,3 +1,0 @@
-[test]
-preload = ["./scripts/test/preload.ts"]
-pathIgnorePatterns = ["**/*.integration.test.*"]

@@ -3,7 +3,7 @@ import { RouterProvider } from "react-router/dom";
 
 import { AppProviders } from "@/app/providers";
 import { createAppRouter } from "@/app/router";
-import { RoutePending } from "@/app/pages";
+import { RoutePending } from "@/app/route-feedback";
 
 const router = createAppRouter();
 

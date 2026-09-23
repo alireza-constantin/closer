@@ -17,7 +17,7 @@ type questionMutationResponse struct {
 
 func registerAdminQuestionRoutes(router chi.Router, authService *auth.Service, service *question.Service, security SecurityConfig) {
 	router.Route("/admin/questions", func(admin chi.Router) {
-		admin.Get("/", func(w http.ResponseWriter, r *http.Request) {
+		admin.With(noStoreAdminRead).Get("/", func(w http.ResponseWriter, r *http.Request) {
 			if _, ok := requireAdminActor(w, r, authService); !ok {
 				return
 			}
@@ -36,7 +36,7 @@ func registerAdminQuestionRoutes(router chi.Router, authService *auth.Service, s
 			}
 			writeJSON(w, http.StatusOK, map[string]any{"items": items, "page": page, "pageSize": limit})
 		})
-		admin.Get("/duplicates", func(w http.ResponseWriter, r *http.Request) {
+		admin.With(noStoreAdminRead).Get("/duplicates", func(w http.ResponseWriter, r *http.Request) {
 			if _, ok := requireAdminActor(w, r, authService); !ok {
 				return
 			}
@@ -68,7 +68,7 @@ func registerAdminQuestionRoutes(router chi.Router, authService *auth.Service, s
 			}
 			writeJSON(w, http.StatusCreated, questionMutationResponse{Question: created})
 		})
-		admin.Get("/{questionID}", func(w http.ResponseWriter, r *http.Request) {
+		admin.With(noStoreAdminRead).Get("/{questionID}", func(w http.ResponseWriter, r *http.Request) {
 			if _, ok := requireAdminActor(w, r, authService); !ok {
 				return
 			}
@@ -154,6 +154,13 @@ func registerAdminQuestionRoutes(router chi.Router, authService *auth.Service, s
 			}
 			writeJSON(w, http.StatusOK, value)
 		})
+	})
+}
+
+func noStoreAdminRead(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "private, no-store")
+		next.ServeHTTP(w, r)
 	})
 }
 

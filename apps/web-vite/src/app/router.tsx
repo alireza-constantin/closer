@@ -1,35 +1,11 @@
 import { createBrowserRouter, Navigate, redirect, type RouteObject } from "react-router";
+import type { ComponentType } from "react";
 
-import {
-  HomePage,
-  InvitePage,
-  NotFoundPage,
-  OnboardingPage,
-  PairInvitePage,
-  PairPage,
-  RejoinPage,
-  RouteErrorPage,
-  RoutePending,
-  SpacesPage,
-} from "@/app/pages";
-import { TogetherPickerPage, TogetherSessionPage } from "@/features/together/together-pages";
-import {
-  PrivateCategoryPage,
-  PrivateConversationPage,
-  PrivateHistoryPage,
-} from "@/features/private-conversation/components";
+import { RouteErrorPage, RoutePending } from "@/app/route-feedback";
 import { queryClient } from "@/lib/query-client";
 import { QueryClientProvider } from "@tanstack/react-query";
-import {
-  AdminGuard,
-  AdminHomePage,
-  AdminLoginPage,
-  AdminNewQuestionPage,
-  AdminQuestionDetailPage,
-  AdminQuestionListPage,
-} from "@/features/admin/components";
 
-function RootPage() {
+function RootPage({ HomePage }: { HomePage: ComponentType }) {
   return (
     <QueryClientProvider client={queryClient}>
       <HomePage />
@@ -40,7 +16,10 @@ function RootPage() {
 export const appRoutes: RouteObject[] = [
   {
     path: "/",
-    Component: RootPage,
+    lazy: async () => {
+      const { HomePage } = await import("@/app/pages");
+      return { Component: () => <RootPage HomePage={HomePage} /> };
+    },
     errorElement: <RouteErrorPage />,
     HydrateFallback: RoutePending,
   },
@@ -49,31 +28,98 @@ export const appRoutes: RouteObject[] = [
     loader: () => redirect("/"),
     Component: () => <Navigate replace to="/" />,
   },
-  { path: "/onboarding", Component: OnboardingPage },
-  { path: "/spaces", Component: SpacesPage },
-  { path: "/pair/:pairId", Component: PairPage },
-  { path: "/pair/:pairId/private", Component: PrivateCategoryPage },
-  { path: "/pair/:pairId/private/history", Component: PrivateHistoryPage },
-  { path: "/pair/:pairId/private/:category", Component: PrivateConversationPage },
-  { path: "/pair/:pairId/invite", Component: PairInvitePage },
-  { path: "/pair/:pairId/together", Component: TogetherPickerPage },
-  { path: "/pair/:pairId/together/sessions/:sessionId", Component: TogetherSessionPage },
-  { path: "/invite/:token", Component: InvitePage },
-  { path: "/rejoin/:token", Component: RejoinPage },
-  { path: "/admin/login", Component: AdminLoginPage },
+  {
+    path: "/onboarding",
+    lazy: async () => ({ Component: (await import("@/app/pages")).OnboardingPage }),
+  },
+  {
+    path: "/spaces",
+    lazy: async () => ({ Component: (await import("@/app/pages")).SpacesPage }),
+  },
+  {
+    path: "/pair/:pairId",
+    lazy: async () => ({ Component: (await import("@/app/pages")).PairPage }),
+  },
+  {
+    path: "/pair/:pairId/private",
+    lazy: async () => ({
+      Component: (await import("@/features/private-conversation/components")).PrivateCategoryPage,
+    }),
+  },
+  {
+    path: "/pair/:pairId/private/history",
+    lazy: async () => ({
+      Component: (await import("@/features/private-conversation/components")).PrivateHistoryPage,
+    }),
+  },
+  {
+    path: "/pair/:pairId/private/:category",
+    lazy: async () => ({
+      Component: (await import("@/features/private-conversation/components"))
+        .PrivateConversationPage,
+    }),
+  },
+  {
+    path: "/pair/:pairId/invite",
+    lazy: async () => ({ Component: (await import("@/app/pages")).PairInvitePage }),
+  },
+  {
+    path: "/pair/:pairId/together",
+    lazy: async () => ({
+      Component: (await import("@/features/together/together-pages")).TogetherPickerPage,
+    }),
+  },
+  {
+    path: "/pair/:pairId/together/sessions/:sessionId",
+    lazy: async () => ({
+      Component: (await import("@/features/together/together-pages")).TogetherSessionPage,
+    }),
+  },
+  {
+    path: "/invite/:token",
+    lazy: async () => ({ Component: (await import("@/app/pages")).InvitePage }),
+  },
+  {
+    path: "/rejoin/:token",
+    lazy: async () => ({ Component: (await import("@/app/pages")).RejoinPage }),
+  },
+  {
+    path: "/admin/login",
+    lazy: async () => ({ Component: (await import("@/features/admin/components")).AdminLoginPage }),
+  },
   {
     path: "/admin",
-    Component: AdminGuard,
+    lazy: async () => ({ Component: (await import("@/features/admin/components")).AdminGuard }),
     children: [
-      { index: true, Component: AdminHomePage },
-      { path: "questions", Component: AdminQuestionListPage },
-      { path: "questions/new", Component: AdminNewQuestionPage },
-      { path: "questions/:questionId", Component: AdminQuestionDetailPage },
+      {
+        index: true,
+        lazy: async () => ({
+          Component: (await import("@/features/admin/components")).AdminHomePage,
+        }),
+      },
+      {
+        path: "questions",
+        lazy: async () => ({
+          Component: (await import("@/features/admin/components")).AdminQuestionListPage,
+        }),
+      },
+      {
+        path: "questions/new",
+        lazy: async () => ({
+          Component: (await import("@/features/admin/components")).AdminNewQuestionPage,
+        }),
+      },
+      {
+        path: "questions/:questionId",
+        lazy: async () => ({
+          Component: (await import("@/features/admin/components")).AdminQuestionDetailPage,
+        }),
+      },
     ],
   },
   {
     path: "*",
-    Component: NotFoundPage,
+    lazy: async () => ({ Component: (await import("@/app/pages")).NotFoundPage }),
   },
 ];
 

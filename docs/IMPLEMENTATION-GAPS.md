@@ -1,5 +1,7 @@
 # Closer V1 Implementation-Gap Inventory
 
+> **Historical snapshot.** This inventory reflects repository state as of 2026-09-12 and predates completion of the Go + Vite rewrite. It is retained for planning history and is not a current list of release gaps. Use the root README and [current architecture](./ARCHITECTURE.md) for the shipped runtime.
+
 ## Purpose and snapshot
 
 This document compares the repository implementation inspected on 2026-09-12 with the authoritative contracts in [`PRD.md`](./PRD.md), [`ARCHITECTURE.md`](./ARCHITECTURE.md), and accepted ADRs. It is a planning inventory, not an alternative specification.
