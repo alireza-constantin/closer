@@ -2,6 +2,7 @@ package adminanalytics
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -42,7 +43,7 @@ func TestQuestionAnalyticsAggregatesPinnedRevisionsAndDistinctPairs(t *testing.T
 	if err := pool.WithConnection(ctx, func(db postgres.QueryDB) error {
 		for _, name := range []string{"Analytics A", "Analytics B", "Analytics C"} {
 			var authID, participantID string
-			if err := db.QueryRow(ctx, "INSERT INTO auth_user(kind) VALUES ('anonymous') RETURNING id::text").Scan(&authID); err != nil {
+			if err := db.QueryRow(ctx, "INSERT INTO auth_user(id, kind, created_at) VALUES (gen_random_uuid(), 'anonymous', now()) RETURNING id::text").Scan(&authID); err != nil {
 				return err
 			}
 			if err := db.QueryRow(ctx, "INSERT INTO participant(auth_user_id, display_name) VALUES ($1, $2) RETURNING id::text", authID, name).Scan(&participantID); err != nil {
@@ -246,6 +247,48 @@ func TestQuestionAnalyticsAggregatesPinnedRevisionsAndDistinctPairs(t *testing.T
 	}
 	if together == nil || together.Shown != 5 || together.Decisions != 4 || together.Continued != 3 || together.Skipped != 1 || together.LikedDecisions != 2 {
 		t.Fatalf("five-Pair Together aggregate = %+v; want shown=5 decisions=4 continued=3 skipped=1 final-liked=2", together)
+	}
+	if err := pool.WithConnection(ctx, func(db postgres.QueryDB) error {
+		plans := []struct {
+			name  string
+			query string
+		}{
+			{"Private", `EXPLAIN (ANALYZE, BUFFERS) SELECT count(*) FILTER (WHERE c.state IN ('unresolved', 'asked', 'skipped')) FROM private_question_candidate c JOIN private_conversation pc ON pc.id = c.conversation_id WHERE c.question_id = $1 AND ($2::uuid IS NULL OR c.question_revision_id = $2) AND c.state IN ('unresolved', 'asked', 'skipped') HAVING count(DISTINCT pc.pair_id) >= $3::bigint`},
+			{"Together", `EXPLAIN (ANALYZE, BUFFERS) SELECT count(*) FROM together_session_question tsq JOIN together_session ts ON ts.id = tsq.session_id WHERE tsq.question_id = $1 AND ($2::uuid IS NULL OR tsq.question_revision_id = $2) HAVING count(DISTINCT ts.pair_id) >= $3::bigint`},
+		}
+		for _, plan := range plans {
+			rows, err := db.Query(ctx, plan.query, questionID, revisionOne, int64(5))
+			if err != nil {
+				return fmt.Errorf("EXPLAIN ANALYZE %s aggregate: %w", plan.name, err)
+			}
+			var lines int
+			for rows.Next() {
+				var line string
+				if err := rows.Scan(&line); err != nil {
+					rows.Close()
+					return err
+				}
+				lines++
+			}
+			if err := rows.Err(); err != nil {
+				rows.Close()
+				return err
+			}
+			rows.Close()
+			if lines == 0 {
+				return fmt.Errorf("EXPLAIN ANALYZE %s aggregate returned no plan", plan.name)
+			}
+		}
+		var indexCount int
+		if err := db.QueryRow(ctx, "SELECT count(*) FROM pg_indexes WHERE schemaname = 'public' AND indexname IN ('private_candidate_analytics_question_revision_idx', 'together_question_analytics_question_revision_idx')").Scan(&indexCount); err != nil {
+			return err
+		}
+		if indexCount != 2 {
+			return fmt.Errorf("analytics indexes present = %d, want 2", indexCount)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("analytics query plan or index check: %v", err)
 	}
 	allPrivate, err := store.PrivateAggregate(ctx, questionID, "", domain.ScopeAll)
 	if err != nil || allPrivate == nil || allPrivate.ValidOffers != 6 {
