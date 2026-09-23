@@ -257,7 +257,7 @@ export function PrivateConversationPage() {
   );
 }
 
-function PrivateRoundPanel({
+export function PrivateRoundPanel({
   availableCategories,
   category,
   pairId,
