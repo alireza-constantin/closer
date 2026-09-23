@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/alireza-constantin/closer/apps/api/db/migrations"
 	"github.com/alireza-constantin/closer/apps/api/internal/postgres"
 	"github.com/alireza-constantin/closer/apps/api/internal/postgres/testdb"
 )
@@ -34,21 +35,13 @@ func main() {
 			fatal(fmt.Errorf("reset guarded test schema: %w", err))
 		}
 	}
-	for _, path := range []string{"db/schema/001_auth.sql", "db/schema/002_participant_pair.sql", "db/schema/003_initial_invite.sql", "db/schema/004_rejoin_invite.sql", "db/schema/005_question_revision.sql", "db/schema/006_together.sql", "db/schema/007_private_round.sql", "db/schema/008_private_round_completed.sql", "db/schema/009_private_post_reveal.sql", "db/schema/010_private_progression.sql", "db/schema/011_admin_analytics_indexes.sql"} {
-		ddl, err := os.ReadFile(path)
-		if err != nil {
-			fatal(fmt.Errorf("read schema file %s: %w", path, err))
-		}
-		if err := p.WithinTx(ctx, func(db postgres.QueryDB) error {
-			if _, err := db.Exec(ctx, string(ddl)); err != nil {
-				return fmt.Errorf("apply schema file %s: %w", path, err)
-			}
-			return nil
-		}); err != nil {
-			fatal(err)
-		}
+	if applied, err := migrations.Apply(ctx, p); err != nil {
+		fatal(err)
+	} else if err := migrations.Verify(ctx, p); err != nil {
+		fatal(err)
+	} else {
+		fmt.Printf("Go rewrite schema %s applied to guarded local closer_test (%d migrations applied).\n", os.Args[1], applied)
 	}
-	fmt.Printf("Go rewrite schema %s applied to guarded local closer_test.\n", os.Args[1])
 }
 
 func fatal(err error) {
