@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"github.com/alireza-constantin/closer/apps/api/internal/auth"
+	domainpair "github.com/alireza-constantin/closer/apps/api/internal/pair"
 	"github.com/alireza-constantin/closer/apps/api/internal/participant"
 	"github.com/alireza-constantin/closer/apps/api/internal/postgres"
 	postgresauth "github.com/alireza-constantin/closer/apps/api/internal/postgres/auth"
+	postgrespair "github.com/alireza-constantin/closer/apps/api/internal/postgres/pair"
 	postgresparticipant "github.com/alireza-constantin/closer/apps/api/internal/postgres/participant"
 	postgresprivate "github.com/alireza-constantin/closer/apps/api/internal/postgres/private"
 	postgresquestion "github.com/alireza-constantin/closer/apps/api/internal/postgres/question"
@@ -29,17 +31,20 @@ func TestPrivateRoundHTTPJSONKeepsAnswersPrivateUntilEachReveal(t *testing.T) {
 	participantService := participant.NewService(postgresparticipant.NewStore(pool))
 	privateStore := postgresprivate.NewStore(pool)
 	privateService := privatedomain.NewService(privateStore)
+	pairService := domainpair.NewService(postgrespair.NewStore(pool))
 	questionService := question.NewService(postgresquestion.NewStore(pool, privateStore))
-	router := NewRouterWithQuestionPrivateRealtime(
+	router := NewRouterWithPrivateAndTogetherRealtime(
 		nil,
 		nil,
 		authService,
 		participantService,
-		nil,
+		pairService,
 		nil,
 		questionService,
 		privateService,
+		nil,
 		realtime.NewRegistry(16),
+		nil,
 		SecurityConfig{TrustedOrigins: []string{domainTestOrigin}},
 	)
 
@@ -226,6 +231,65 @@ func TestPrivateRoundHTTPJSONKeepsAnswersPrivateUntilEachReveal(t *testing.T) {
 	}
 	if mutation := performDomainRequest(router, http.MethodPut, path+"/reply", map[string]string{"body": "former cannot edit"}, secondCookie); mutation.Code != http.StatusNotFound {
 		t.Fatalf("former member mutation status=%d body=%s", mutation.Code, mutation.Body.String())
+	}
+	secondEraConversation, err := privateService.StartOrResume(ctx, privatedomain.StartInput{ParticipantID: first.ID, PairID: pairID, Category: "fun"})
+	if err != nil || secondEraConversation.Candidate == nil {
+		t.Fatalf("start second-era unresolved candidate = %+v, err=%v", secondEraConversation, err)
+	}
+	secondEraConversationPath := fmt.Sprintf("/api/v1/pairs/%s/private-conversations/%s", pairID, secondEraConversation.ConversationID)
+	secondEraNonCreator := performDomainRequest(router, http.MethodGet, secondEraConversationPath, nil, replacementCookie)
+	if secondEraNonCreator.Code != http.StatusOK || strings.Contains(secondEraNonCreator.Body.String(), "HTTP secrecy question") {
+		t.Fatalf("second-era creator candidate leaked before termination: status=%d body=%s", secondEraNonCreator.Code, secondEraNonCreator.Body.String())
+	}
+	termination := performDomainRequest(router, http.MethodPost, fmt.Sprintf("/api/v1/pairs/%s/terminate", pairID), nil, firstCookie)
+	var terminationProjection map[string]json.RawMessage
+	if termination.Code != http.StatusOK || json.Unmarshal(termination.Body.Bytes(), &terminationProjection) != nil {
+		t.Fatalf("termination response status=%d body=%s", termination.Code, termination.Body.String())
+	}
+	if len(terminationProjection) != 3 || string(terminationProjection["state"]) != `"terminated"` || terminationProjection["pairId"] == nil || terminationProjection["terminatedAt"] == nil {
+		t.Fatalf("termination JSON included an unexpected projection: %s", termination.Body.String())
+	}
+	for _, internalField := range []string{"membershipEraId", "endedAt", "endedDisplayName", "candidate", "answer", "internalState"} {
+		if _, exists := terminationProjection[internalField]; exists {
+			t.Fatalf("termination JSON exposed internal field %q: %s", internalField, termination.Body.String())
+		}
+	}
+	terminatedPair := performDomainRequest(router, http.MethodGet, fmt.Sprintf("/api/v1/pairs/%s", pairID), nil, firstCookie)
+	var terminalEntry map[string]json.RawMessage
+	if terminatedPair.Code != http.StatusOK || json.Unmarshal(terminatedPair.Body.Bytes(), &terminalEntry) != nil || string(terminalEntry["state"]) != `"terminated"` {
+		t.Fatalf("terminated Pair JSON status=%d body=%s", terminatedPair.Code, terminatedPair.Body.String())
+	}
+	for _, internalField := range []string{"membershipEraId", "endedAt", "endedDisplayName", "terminated_at", "membership_era_id"} {
+		if _, exists := terminalEntry[internalField]; exists {
+			t.Fatalf("Pair JSON exposed internal field %q: %s", internalField, terminatedPair.Body.String())
+		}
+	}
+	terminatedRound := performDomainRequest(router, http.MethodGet, path, nil, firstCookie)
+	if terminatedRound.Code != http.StatusNotFound {
+		t.Fatalf("terminated Round route status=%d body=%s, want 404", terminatedRound.Code, terminatedRound.Body.String())
+	}
+	for _, secret := range []string{"FIRST-HTTP-SENTINEL", "SECOND-HTTP-SENTINEL", "B_REPLY_ERA1", "HTTP secrecy question"} {
+		if strings.Contains(terminatedRound.Body.String(), secret) {
+			t.Fatalf("terminated Round error leaked %q: %s", secret, terminatedRound.Body.String())
+		}
+	}
+	terminatedConversation := performDomainRequest(router, http.MethodGet, secondEraConversationPath, nil, firstCookie)
+	if terminatedConversation.Code != http.StatusNotFound || strings.Contains(terminatedConversation.Body.String(), "HTTP secrecy question") {
+		t.Fatalf("terminated candidate projection status=%d body=%s", terminatedConversation.Code, terminatedConversation.Body.String())
+	}
+	firstHistoryAfterTermination := performDomainRequest(router, http.MethodGet, fmt.Sprintf("/api/v1/pairs/%s/private-history", pairID), nil, firstCookie)
+	if firstHistoryAfterTermination.Code != http.StatusOK || !strings.Contains(firstHistoryAfterTermination.Body.String(), "HTTP secrecy question") || !strings.Contains(firstHistoryAfterTermination.Body.String(), "FIRST-HTTP-SENTINEL") || !strings.Contains(firstHistoryAfterTermination.Body.String(), "SECOND-HTTP-SENTINEL") || !strings.Contains(firstHistoryAfterTermination.Body.String(), "B_REPLY_ERA1") {
+		t.Fatalf("completed HTTP history did not survive termination: status=%d body=%s", firstHistoryAfterTermination.Code, firstHistoryAfterTermination.Body.String())
+	}
+	formerHistoryAfterTermination := performDomainRequest(router, http.MethodGet, fmt.Sprintf("/api/v1/pairs/%s/private-history", pairID), nil, secondCookie)
+	if formerHistoryAfterTermination.Code != http.StatusOK || !strings.Contains(formerHistoryAfterTermination.Body.String(), "B_REPLY_ERA1") {
+		t.Fatalf("former-era HTTP history after termination status=%d body=%s", formerHistoryAfterTermination.Code, formerHistoryAfterTermination.Body.String())
+	}
+	replacementHistoryAfterTermination := performDomainRequest(router, http.MethodGet, fmt.Sprintf("/api/v1/pairs/%s/private-history", pairID), nil, replacementCookie)
+	for _, secret := range []string{"HTTP secrecy question", "FIRST-HTTP-SENTINEL", "SECOND-HTTP-SENTINEL", "B_REPLY_ERA1", "heart"} {
+		if replacementHistoryAfterTermination.Code != http.StatusOK || strings.Contains(replacementHistoryAfterTermination.Body.String(), secret) {
+			t.Fatalf("replacement history after termination leaked %q: status=%d body=%s", secret, replacementHistoryAfterTermination.Code, replacementHistoryAfterTermination.Body.String())
+		}
 	}
 	outsiderCookie := &http.Cookie{Name: auth.SessionCookieName, Value: outsiderAuth.Token}
 	outsiderHistory := performDomainRequest(router, http.MethodGet, fmt.Sprintf("/api/v1/pairs/%s/private-history", pairID), nil, outsiderCookie)
