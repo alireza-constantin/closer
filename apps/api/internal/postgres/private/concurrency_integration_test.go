@@ -520,8 +520,8 @@ func TestHistoryReadsObserveCommittedSnapshotsAcrossMutationReplacementAndComple
 	if completionReadErr != nil || revealErr != nil {
 		t.Fatalf("history/read and final Reveal race errors: %v / %v", completionReadErr, revealErr)
 	}
-	if len(completionRead.Rounds) != 1 && len(completionRead.Rounds) != 2 {
-		t.Fatalf("history/final Reveal race returned %d rounds, want one or two complete Rounds", len(completionRead.Rounds))
+	if len(completionRead.Rounds) > 1 {
+		t.Fatalf("history/final Reveal race returned %d rounds, want zero or one complete Round", len(completionRead.Rounds))
 	}
 	for _, item := range completionRead.Rounds {
 		if len(item.Answers) != 2 {
