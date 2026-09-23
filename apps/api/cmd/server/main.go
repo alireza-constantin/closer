@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/alireza-constantin/closer/apps/api/internal/adminanalytics"
 	"github.com/alireza-constantin/closer/apps/api/internal/auth"
 	"github.com/alireza-constantin/closer/apps/api/internal/config"
 	"github.com/alireza-constantin/closer/apps/api/internal/httpapi"
@@ -17,6 +18,7 @@ import (
 	"github.com/alireza-constantin/closer/apps/api/internal/pair"
 	"github.com/alireza-constantin/closer/apps/api/internal/participant"
 	"github.com/alireza-constantin/closer/apps/api/internal/postgres"
+	postgresanalytics "github.com/alireza-constantin/closer/apps/api/internal/postgres/adminanalytics"
 	postgresauth "github.com/alireza-constantin/closer/apps/api/internal/postgres/auth"
 	postgresinvite "github.com/alireza-constantin/closer/apps/api/internal/postgres/invite"
 	postgrespair "github.com/alireza-constantin/closer/apps/api/internal/postgres/pair"
@@ -61,11 +63,12 @@ func run(logger *slog.Logger) error {
 	inviteService := invite.NewServiceWithPublisher(postgresinvite.NewStore(database), realtimePublisher)
 	questionService := question.NewService(postgresquestion.NewStore(database, privateStore))
 	togetherService := together.NewService(postgrestogether.NewStore(database))
+	analyticsService := adminanalytics.NewService(postgresanalytics.NewStore(database))
 	realtimeRegistry := realtime.NewRegistry(32)
 	router := httpapi.NewRouterWithPrivateAndTogetherRealtime(logger, database, authService, participantService, pairService, inviteService, questionService, privateService, togetherService, realtimeRegistry, realtimePublisher, httpapi.SecurityConfig{
 		TrustedOrigins:    cfg.TrustedOrigins,
 		TrustedProxyCIDRs: cfg.TrustedProxyCIDRs,
-	})
+	}, analyticsService)
 	server := httpapi.NewServer(cfg.ListenAddress, router)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

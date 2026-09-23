@@ -291,6 +291,51 @@ the `/api/v1` prefix. The canonical Private collection is
 alias is created. A command response is enough for the immediate client update,
 but the client may refetch the authoritative projection after SSE.
 
+### Admin question analytics (ADMIN-02)
+
+These read-only routes require both `auth_user.kind = 'admin'` and an
+`admin_user` row. A missing session returns `401`; a consumer or incomplete
+Admin identity returns `403`. Responses are private and contain aggregate
+Question data only.
+
+```text
+GET /api/v1/admin/questions/:questionId/analytics
+GET /api/v1/admin/questions/:questionId/analytics?revisionScope=revision&revisionId=:revisionId
+GET /api/v1/admin/questions/:questionId/analytics?revisionScope=all
+GET /api/v1/admin/analytics/coverage
+```
+
+Question analytics defaults to the Question's exact current Revision. A
+`revision` scope must name a Revision belonging to that Question. `all` is an
+explicit historical aggregate across that Question's revisions. The response
+always identifies the requested scope and selected Revision; it never combines
+historical occurrences into a current-Revision result.
+
+Each performance section is a discriminated object. Server SQL returns a
+bucket only after at least five distinct Pair IDs contribute; a suppressed
+bucket contains no metric component:
+
+```json
+{
+  "private": { "status": "insufficient_data" },
+  "together": { "status": "insufficient_data" }
+}
+```
+
+An available rate has a numerator, denominator, and numeric rate. A zero
+denominator is represented as `{ "status": "unavailable" }` without rate
+components. Private rates use valid offers, asked/skipped decisions, and the
+candidate's final `liked_at` state. Together rates use persisted shown
+occurrences, `advanced_at`, `skipped_at`, and final pair-level `liked_at`.
+Together Likes carry no participant attribution.
+
+Coverage returns all 20 `category × relationshipType × mode` lanes. It counts
+active Questions with a non-withdrawn current Revision whose category and fit
+match that lane. `intensity` is only a diagnostic composition. `health` is
+`critical` for 0–5 eligible Questions, `low` for 6–11, and `healthy` for 12+.
+No route returns Pair, Participant, membership, Session, occurrence, answer,
+reply, reaction, or invite details.
+
 ### Projection and contract synchronization rules
 
 - A `WAITING_FOR_CREATOR` Private projection may contain only the safe state,
