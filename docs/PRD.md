@@ -106,67 +106,88 @@ Claim is rejected if the claimant is already the active occupant of the Pair's o
 
 ## 7. Private mode and Shared Open protocol
 
-> The following Shared Open contract supersedes legacy creator-owned wording in
-> sections 7–10 and 12. It is the authoritative Private protocol.
+> The following shared-lane contract is the authoritative Private protocol and
+> supersedes older category-specific Conversation descriptions in sections
+> 7–10 and 12.
 
-Private Conversations are persistent category resources, unique per Pair,
-membership era, and category. Either active member may select a shared,
-deterministic candidate. Selection creates one question visible to both; both
-may answer at once without seeing the other answer. The selection is
-provisional until the first answer commits it. A participant may have only one
-self-initiated provisional at a time; later generative selection resumes it.
-The 30-minute provisional marker is cleanup eligibility, never an automatic
-visible disappearance: a later entry preserves a still-referenceable question
-and first-answer submission remains valid. An explicitly abandoned unanswered
-provisional has no history or consumption.
+Private is one pair-wide shared exchange within each active membership era. It
+has exactly one live exchange and one shared category lane. A category is the
+lane for that exchange, not an independently persistent Conversation. Private
+never has parallel category conversations, candidates, or open Rounds.
 
-At most one committed unresolved Shared Open round exists per category. Each
-participant may initiate at most one committed unresolved round across the
-Pair; answering another member's round does not consume that initiator slot.
-One answer permits either member to quietly retire the question, sealing that
-answer forever while consuming the Question and freeing the initiator slot.
+The lane is sticky. It remains the shared lane across navigation and persists
+until the pair changes it through the post-Reveal `Something else` progression
+or the lane is exhausted. While a candidate or Round is pending, the lane is
+locked. Starting Private from another category while the exchange is pending
+resumes the existing exchange and its current lane; it does not create a
+second candidate or Round or change the lane.
+
+The exchange creator may select a deterministic candidate for the shared
+exchange. Selection creates one question visible to both; both may answer at
+once without seeing the other answer. The selection is provisional until the
+first answer commits it. The 30-minute provisional marker is cleanup
+eligibility, never an automatic visible disappearance: a later entry
+preserves a still-referenceable question and first-answer submission remains
+valid. An explicitly abandoned unanswered provisional has no history or
+consumption.
+
+At most one open Private exchange may exist pair-wide, including a candidate
+or committed unresolved Round. One answer permits either member to quietly
+retire the question, sealing that answer forever while consuming the Question.
 Two answers require explicit Reveal and cannot be unilaterally retired.
 
-Private does not label who selected a question, permanent askers, chooser
-rotation, control requests, quotas, question totals, pending work, or answer
-debt. The category hub is a mood choice: it routes receptive work when one is
-already present, otherwise lets the member choose a category. Selecting alone
-sends no push; first answer and second-answer/reveal-ready transitions use the
-existing notification architecture without reminders or nudges.
+Private does not label permanent askers, chooser rotation, control requests,
+quotas, question totals, pending work, or answer debt. Selecting alone sends no
+push; first answer and second-answer/reveal-ready transitions use the existing
+notification architecture without reminders or nudges.
 
 Private requires both Pair slots to have active Participants. If the second slot is unclaimed, entering Private opens the connection flow and lazily creates or reuses the initial invitation.
 
-Private is organized into persistent, category-specific Conversations. There is no generic Private Session object and no manual Finish or Restart action in V1. Leaving Private is navigation only—`Back to space` or `Leave for now`—and the Conversation remains resumable while the same two memberships remain active.
+Private keeps one resumable exchange for the current Pair membership era. There
+is no independent category Conversation and no manual Finish or Restart action
+in V1. Leaving Private is navigation only—`Back to space` or `Leave for now`—
+and does not clear the shared lane or its exchange.
 
-For a category with no Conversation in the current two-member configuration, the first Participant whose start succeeds creates the Conversation and becomes its immutable creator. Different categories may have different creators.
-
-Only the Conversation creator may:
-
-- see the unresolved pre-round question candidate;
-- Like, Ask, or Skip that candidate;
-- begin candidate selection after the current Round satisfies the progression rule.
-
-Creator authority does not alternate, transfer, expire, become shared, or permit inactivity takeover in V1.
-
-The non-creator may answer Asked Rounds, reveal, react, reply, view authorized history, and navigate away. Before the first Question is Asked, the non-creator sees `Waiting for <creator> to choose a question.` After both people reveal a Round, the non-creator waits for the creator to choose the next question.
+Within the exchange, the first Participant whose start succeeds becomes its
+immutable creator. Only the creator may see, Like, Ask, or Skip the unresolved
+candidate, and may begin another candidate after the current Round satisfies
+the progression rule. Creator authority does not alternate, transfer, expire,
+become shared, or permit inactivity takeover in V1. The other member may answer
+Asked Rounds, reveal, react, reply, view authorized history, and navigate away.
+Starting from another category while the lane is locked returns the current
+exchange and lane. After both people reveal a Round, `Something else` is the
+explicit progression that may change the shared lane.
 
 ## 8. Private candidate flow
 
-When a Conversation has no current unresolved Round, Closer persists one eligible question candidate and shows it only to the creator. The same candidate survives refreshes, retries, multiple creator devices, and navigation until it is Asked, Skipped, or invalidated by the Pair or membership boundary.
+When the shared lane has no current unresolved Round, Closer persists one
+eligible question candidate and shows it only to the exchange creator. The
+same candidate survives refreshes, retries, creator devices, and navigation
+until it is Asked, Skipped, or invalidated by the Pair or membership boundary.
+There can be only one unresolved candidate pair-wide.
 
 The creator's candidate actions are:
 
 - **Ask:** consumes the candidate, creates the next numbered Private Round, and makes that Question visible to both Participants.
-- **Skip:** consumes the candidate for this Conversation, creates no Round, does not increment the Round number, immediately offers another unused eligible candidate, and never appears in Pair Home or user-facing history.
+- **Skip:** consumes the candidate in the current exchange, creates no Round, does not increment the Round number, immediately offers another unused eligible candidate in the same lane, and never appears in Pair Home or user-facing history.
 - **Like:** toggles creator-only, occurrence-specific content feedback. It does not consume the candidate, create a Round, change eligibility or numbering, affect reveal/progression, or appear in Pair Home, answers, Reveal, replies, or user-facing history.
 
-Ask and Skip are idempotent and mutually exclusive for a candidate. Exactly one wins if they race. The final Like state becomes immutable when Ask or Skip resolves the candidate. If a Pair or membership boundary invalidates an unresolved candidate, its final Like state may remain internal content-quality feedback but does not become a Round, history item, or consumed Question in another Conversation.
+Ask and Skip are idempotent and mutually exclusive for a candidate. Exactly
+one wins if they race. The final Like state becomes immutable when Ask or Skip
+resolves the candidate. If a Pair or membership boundary invalidates an
+unresolved candidate, its final Like state may remain internal
+content-quality feedback but does not become a Round, history item, or
+consumed Question in a later lane.
 
-A Conversation's consumed-question set contains logical Questions that were Asked as Rounds or explicitly Skipped by the creator. A Question cannot reappear within that Conversation. Likes and Declines do not independently change consumption: Ask already consumed a Declined Round's Question.
+The exchange's consumed-question set contains logical Questions that were
+Asked as Rounds or explicitly Skipped. A Question cannot reappear in that
+exchange. Likes and Declines do not independently change consumption: Ask
+already consumed a Declined Round's Question.
 
 ## 9. Private Round flow
 
-Ask creates the next stable Round number, starting at 1 in each Conversation. The Round pins the exact Question wording and metadata presented at Ask time.
+Ask creates the next stable Round number in the shared exchange. The Round
+pins the exact Question wording and metadata presented at Ask time.
 
 Each Participant may independently submit one required answer. An answer is trimmed, 1–2000 characters, and immutable after submission in V1.
 
@@ -189,26 +210,40 @@ Passing an already-Asked Question creates the distinct **Declined** outcome:
 
 Answer and Decline races have one committed result. A Participant cannot both submit and Decline the same answer position.
 
-When both answers exist, the Round is reveal-ready. Each Participant must explicitly open Reveal; their reveal views are recorded independently. Either may reveal first, but the Conversation creator cannot proceed to another candidate until both answers and both reveal views are persisted. There is no timeout, reminder-triggered completion, override, or bypass. Foreground polling may update the creator when the second reveal occurs without exposing answer content early.
+When both answers exist, the Round is reveal-ready. Each Participant must
+explicitly open Reveal; their reveal views are recorded independently. Either
+may reveal first, but the pair cannot progress or change lanes until both
+answers and both reveal views are persisted. There is no timeout,
+reminder-triggered completion, override, or bypass. Foreground polling may
+update both members when the second reveal occurs without exposing answer
+content early.
 
 After a Participant opens a ready Reveal, both answers are available to that authorized Participant. Post-reveal, each Participant may keep at most one reaction and one optional reply for the Round. A reaction is displayed on the other Participant's answer. A supplied reply is trimmed to 1–500 characters and may be edited or removed by its owner.
 
-The sequential progression within one Conversation is:
+The sequential progression within the shared lane is:
 
 ```text
 creator candidate → Ask → independent answers → independent Reveal views
                   ↘ Skip → another candidate
 Asked Round → eligible Decline → terminal passed Round → another creator candidate
-both answers + both Reveal views → another creator candidate
+both answers + both Reveal views → creator may use Something else or continue
 ```
 
-Other category Conversations remain independently usable while one Conversation waits for an answer, reveal, or creator action.
+The creator cannot proceed until both answers and both Reveal Views are
+persisted. The lane remains locked while an answer, Reveal View, candidate
+action, or other exchange progression is pending. Other categories are not
+independently usable during that time.
 
 ## 10. Question selection and exhaustion
 
-Selection first applies category, Partner/Friend fit, mode fit, active revision, withdrawal, and consumed-question rules. It then uses a deterministic Conversation- or Session-scoped order so retries and concurrent requests converge on the same choice. Likes, reactions, replies, answer content, and behavioral personalization do not affect V1 selection.
+Selection first applies the current lane, Partner/Friend fit, mode fit, active
+revision, withdrawal, and consumed-question rules. It then uses a deterministic
+exchange- or Session-scoped order so retries and concurrent requests converge
+on the same choice. Likes, reactions, replies, answer content, and behavioral
+personalization do not affect V1 selection.
 
-Private Conversations use this soft ramp based only on mutually completed Rounds—Rounds with both answers and both Reveal views:
+The Private exchange uses this soft ramp based only on mutually completed
+Rounds—Rounds with both answers and both Reveal views:
 
 | Mutually completed Rounds | Preferred intensity |
 | ------------------------- | ------------------- |
@@ -216,11 +251,19 @@ Private Conversations use this soft ramp based only on mutually completed Rounds
 | 2–3                       | Medium              |
 | 4 or more                 | Deep                |
 
-Candidate selection, Ask, Skip, Decline, one answer, one reveal, question Like, reaction, and reply do not advance the ramp. The deep preference continues without restarting. A new Conversation after guest replacement starts again at Light.
+Candidate selection, Ask, Skip, Decline, one answer, one reveal, question
+Like, reaction, and reply do not advance the ramp. The deep preference
+continues without restarting. A new membership era starts its Private exchange
+again at Light.
 
-The same intensity fallback order applies as in Together. Within the first available intensity band, deterministic Conversation-scoped ordering chooses the candidate.
+The same intensity fallback order applies as in Together. Within the first
+available intensity band, deterministic exchange-scoped ordering chooses the
+candidate.
 
-When all eligible logical Questions in a Private Conversation are consumed, show `You've reached the end for now.` Do not cycle, restart the category, mark the Conversation ended, or create a replacement Conversation. If new eligible content is added later, the same Conversation may continue, provided no already-persisted candidate is replaced.
+When all eligible logical Questions in the current lane are consumed, show
+`You've reached the end for now.` Do not cycle or switch lanes automatically.
+The exchange remains resumable if eligible content is added later, provided no
+already-persisted candidate is replaced.
 
 ## 11. Question content behavior
 
@@ -246,13 +289,16 @@ Successful replacement:
 
 - creates a new Participant and active membership for the same logical slot;
 - ends the former membership and freezes that former Participant's display name for history;
-- closes all old-configuration Private Conversations as read-only;
+- closes the old Private exchange as read-only;
 - invalidates unresolved candidates without creating Rounds;
 - ends active Together Sessions;
 - gives the replacement no Private or Together content from before their membership;
 - lets the continuing Participant retain only history they were already authorized to access.
 
-Selecting a category after replacement creates a new Private Conversation with a new immutable creator, numbering from 1, an empty consumed-question set, and a Light intensity preference. Creator authority never transfers from the replaced Participant.
+The replacement Pair membership era begins a new Private exchange. The first
+selected lane starts at Round 1 with an empty consumed-question set and a
+Light intensity preference. No pending exchange state transfers from the
+former Participant.
 
 ## 13. Pair termination
 
@@ -274,7 +320,9 @@ Termination:
 
 `Back to space`, `Leave for now`, and Private navigation never terminate the Pair. The other member need not consent or acknowledge termination. Notifications may inform them later but are not required for the transition.
 
-A future Pair between the same Participants is entirely separate. It cannot resume, inherit, or merge the former Pair's Private Conversations, consumed Questions, Together Sessions, or history.
+A future Pair between the same Participants is entirely separate. It cannot
+resume, inherit, or merge the former Pair's Private exchange, consumed
+Questions, Together Sessions, or history.
 
 ## 14. Former-Pair history
 
@@ -332,7 +380,7 @@ V1 should establish whether people can:
 - connect the intended person through a safe and comprehensible invitation flow;
 - trust the Private answer and reveal boundary;
 - understand creator-owned question choice without making Private feel like chat;
-- resume sequential category Conversations across navigation;
+- resume the shared Private exchange and its sticky category lane across navigation;
 - experience a gentle Light-to-Medium-to-Deep question arc;
 - terminate a Pair with clear consequences and later understand read-only history;
 - recover from guest-session loss without transferring identity or prior history.

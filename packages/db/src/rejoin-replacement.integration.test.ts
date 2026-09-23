@@ -24,7 +24,6 @@ const {
   markPrivateRevealViewed,
   redeemInitialInvite,
   redeemRejoinInvite,
-  restoreRejoinInvite,
   resolveOrCreateParticipant,
   revokeRejoinInvites,
   startOrResumePrivateConversation,
@@ -344,10 +343,41 @@ test("guest replacement atomically closes the old exact era and isolates its act
   ).toBe(newEra.id);
 });
 
-test("rejoin restores the same participant and current membership era", async () => {
-  const { pairId, continuing } = await createJoinedPair();
+test("rejoin replaces the participant while preserving its Pair slot and former era history", async () => {
+  const { pairId, continuing, former } = await createJoinedPair();
+  const oldPrivate = await createLegacyPrivateRound(pairId, former.id);
+  await submitPrivateAnswer(db, {
+    pairId,
+    participantId: former.id,
+    roundId: oldPrivate.roundId,
+    body: "Former identity answer.",
+  });
   const credential = await issueRejoinInvite(db, { pairId, participantId: continuing.id });
-  const restoredAuthUserId = await createGuestAuthUser("Returning member");
+  const replacementAuthUserId = await createGuestAuthUser("Returning member");
+  const oldMembership = (
+    await db
+      .select()
+      .from(pairMembership)
+      .where(
+        and(
+          eq(pairMembership.pairId, pairId),
+          eq(pairMembership.participantId, former.id),
+          isNull(pairMembership.endedAt),
+        ),
+      )
+  )[0]!;
+  const continuingMembership = (
+    await db
+      .select()
+      .from(pairMembership)
+      .where(
+        and(
+          eq(pairMembership.pairId, pairId),
+          eq(pairMembership.participantId, continuing.id),
+          isNull(pairMembership.endedAt),
+        ),
+      )
+  )[0]!;
   const beforeEra = (
     await db
       .select()
@@ -355,30 +385,88 @@ test("rejoin restores the same participant and current membership era", async ()
       .where(and(eq(pairMembershipEra.pairId, pairId), isNull(pairMembershipEra.endedAt)))
   )[0]!;
 
-  const restored = await restoreRejoinInvite(db, {
+  const replacement = await redeemRejoinInvite(db, {
     token: credential.token,
-    authUserId: restoredAuthUserId,
+    authUserId: replacementAuthUserId,
+    displayName: "Returning member",
   });
 
-  expect(restored).toEqual({
-    pairId,
-    membershipEraId: beforeEra.id,
-    participantId: continuing.id,
-  });
+  expect(replacement.pairId).toBe(pairId);
+  expect(replacement.participantId).not.toBe(former.id);
+  expect(replacement.membershipEraId).not.toBe(beforeEra.id);
+
+  const memberships = await db
+    .select()
+    .from(pairMembership)
+    .where(eq(pairMembership.pairId, pairId));
+  const formerMembership = memberships.find((membership) => membership.id === oldMembership.id)!;
+  const replacementMembership = memberships.find(
+    (membership) => membership.participantId === replacement.participantId,
+  )!;
+  expect(formerMembership.participantId).toBe(former.id);
+  expect(formerMembership.endedAt).not.toBeNull();
+  expect(replacementMembership.id).not.toBe(formerMembership.id);
+  expect(replacementMembership.slot).toBe(formerMembership.slot);
+
+  const eras = await db
+    .select()
+    .from(pairMembershipEra)
+    .where(eq(pairMembershipEra.pairId, pairId));
+  const formerEra = eras.find((era) => era.id === beforeEra.id)!;
+  const replacementEra = eras.find((era) => era.id === replacement.membershipEraId)!;
+  expect(formerEra.endedAt).not.toBeNull();
+  expect([formerEra.firstMembershipId, formerEra.secondMembershipId]).toContain(oldMembership.id);
+  expect(replacementEra.endedAt).toBeNull();
+  expect([replacementEra.firstMembershipId, replacementEra.secondMembershipId]).toContain(
+    replacementMembership.id,
+  );
+  expect([replacementEra.firstMembershipId, replacementEra.secondMembershipId]).toContain(
+    continuingMembership.id,
+  );
+
+  expect(
+    await capture(
+      getPrivateRoundForParticipant(db, {
+        pairId,
+        participantId: replacement.participantId,
+        roundId: oldPrivate.roundId,
+      }),
+    ),
+  ).toBeInstanceOf(CloserDomainError);
+  expect(
+    await listActivePrivateConversations(db, { pairId, participantId: replacement.participantId }),
+  ).toEqual([]);
   expect(
     (
       await db
-        .select({ authUserId: participant.authUserId })
-        .from(participant)
-        .where(eq(participant.id, continuing.id))
-    )[0]?.authUserId,
-  ).toBe(restoredAuthUserId);
+        .select()
+        .from(privateAnswer)
+        .where(
+          and(
+            eq(privateAnswer.roundId, oldPrivate.roundId),
+            eq(privateAnswer.participantId, former.id),
+          ),
+        )
+    )[0]?.body,
+  ).toBe("Former identity answer.");
   expect(
-    await db
-      .select()
-      .from(pairMembershipEra)
-      .where(and(eq(pairMembershipEra.pairId, pairId), isNull(pairMembershipEra.endedAt))),
-  ).toHaveLength(1);
+    (
+      await db
+        .select({ membershipEraId: privateConversation.membershipEraId })
+        .from(privateRound)
+        .innerJoin(privateConversation, eq(privateRound.conversationId, privateConversation.id))
+        .where(eq(privateRound.id, oldPrivate.roundId))
+    )[0]?.membershipEraId,
+  ).toBe(beforeEra.id);
+  expect(
+    await capture(
+      redeemRejoinInvite(db, {
+        token: credential.token,
+        authUserId: await createGuestAuthUser("Second rejoin attempt"),
+        displayName: "Second rejoin attempt",
+      }),
+    ),
+  ).toBeInstanceOf(CloserDomainError);
 });
 
 test("replacement serializes concurrent redemption and Pair-scoped Together and Private mutations", async () => {

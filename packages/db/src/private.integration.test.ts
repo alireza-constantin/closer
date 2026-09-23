@@ -384,15 +384,20 @@ describe("Closer Slice 01B Private rounds", () => {
     ).toMatchObject({ code: "ROUND_NOT_FOUND" });
   });
 
-  test("multiple category conversations coexist and retain participant-relative independent state", async () => {
+  test("a different category resumes the pair-wide exchange and preserves participant-relative state", async () => {
     const { pairId, first, second } = await createJoinedPair();
-    const roundA = await createRound(pairId, first.id, questionIds.deep);
-    const roundB = await createRound(pairId, first.id, questionIds.relationship);
+    const round = await createRound(pairId, first.id, questionIds.deep);
     await submitPrivateAnswer(db, {
       pairId,
       participantId: first.id,
-      roundId: roundA.id,
-      body: "Answer for A",
+      roundId: round.id,
+      body: "Answer stays private",
+    });
+    const resumed = await startOrResumePrivateConversation(db, {
+      pairId,
+      participantId: second.id,
+      category: "fun",
+      clientRequestId: randomUUID(),
     });
     const firstConversations = await listActivePrivateConversations(db, {
       participantId: first.id,
@@ -402,18 +407,12 @@ describe("Closer Slice 01B Private rounds", () => {
       participantId: second.id,
       pairId,
     });
-    expect(firstConversations).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: roundA.conversationId, state: "WAITING" }),
-        expect.objectContaining({ id: roundB.conversationId, state: "YOUR_TURN" }),
-      ]),
-    );
-    expect(secondConversations).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: roundA.conversationId, state: "YOUR_TURN" }),
-        expect.objectContaining({ id: roundB.conversationId, state: "YOUR_TURN" }),
-      ]),
-    );
+    expect(resumed).toMatchObject({ roundId: round.id, category: "deep" });
+    expect(firstConversations).toHaveLength(1);
+    expect(firstConversations[0]).toMatchObject({ id: round.conversationId, state: "WAITING" });
+    expect(secondConversations).toHaveLength(1);
+    expect(secondConversations[0]).toMatchObject({ id: round.conversationId, state: "YOUR_TURN" });
+    expect(JSON.stringify(secondConversations[0])).not.toContain("Answer stays private");
   });
 
   test("the active-round projection exposes a newly created round safely to the other participant", async () => {
@@ -474,41 +473,40 @@ describe("Closer Slice 01B Private rounds", () => {
 
   test("only the second committed answer makes that round reveal-ready without serializing either answer", async () => {
     const { pairId, first, second } = await createJoinedPair();
-    const roundA = await createRound(pairId, first.id);
-    const roundB = await createRound(pairId, first.id, questionIds.relationship);
+    const round = await createRound(pairId, first.id);
     await submitPrivateAnswer(db, {
       pairId,
       participantId: first.id,
-      roundId: roundA.id,
+      roundId: round.id,
       body: "A one",
     });
     await submitPrivateAnswer(db, {
       pairId,
       participantId: second.id,
-      roundId: roundA.id,
+      roundId: round.id,
       body: "A two",
     });
     const visibleToFirst = await getPrivateRoundForParticipant(db, {
       pairId,
       participantId: first.id,
-      roundId: roundA.id,
+      roundId: round.id,
     });
     const visibleToSecond = await getPrivateRoundForParticipant(db, {
       pairId,
       participantId: second.id,
-      roundId: roundA.id,
+      roundId: round.id,
     });
     expect(visibleToFirst.state).toBe("REVEAL_READY");
     expect(visibleToSecond.answers).toBeUndefined();
     expect(visibleToFirst.answers).toBeUndefined();
     expect(JSON.stringify(visibleToSecond)).not.toContain("A one");
-    await markPrivateRevealViewed(db, { pairId, participantId: first.id, roundId: roundA.id });
+    await markPrivateRevealViewed(db, { pairId, participantId: first.id, roundId: round.id });
     expect(
       (
         await getPrivateRoundForParticipant(db, {
           pairId,
           participantId: first.id,
-          roundId: roundA.id,
+          roundId: round.id,
         })
       ).answers?.map((answer) => answer.body),
     ).toEqual(expect.arrayContaining(["A one", "A two"]));
@@ -516,11 +514,21 @@ describe("Closer Slice 01B Private rounds", () => {
       (
         await getPrivateRoundForParticipant(db, {
           pairId,
-          participantId: first.id,
-          roundId: roundB.id,
+          participantId: second.id,
+          roundId: round.id,
         })
       ).answers,
     ).toBeUndefined();
+    await markPrivateRevealViewed(db, { pairId, participantId: second.id, roundId: round.id });
+    expect(
+      (
+        await getPrivateRoundForParticipant(db, {
+          pairId,
+          participantId: second.id,
+          roundId: round.id,
+        })
+      ).answers?.map((answer) => answer.body),
+    ).toEqual(expect.arrayContaining(["A one", "A two"]));
   });
 
   test("answers are trimmed, bounded, immutable, and deterministic for repeated concurrent submission", async () => {
@@ -578,17 +586,16 @@ describe("Closer Slice 01B Private rounds", () => {
     ).toMatchObject({ code: "ANSWER_INVALID" });
   });
 
-  test("reveal-view timing is independent and does not leak to another active round", async () => {
+  test("reveal-view timing is independent while the shared lane stays locked", async () => {
     const { pairId, first, second } = await createJoinedPair();
-    const roundA = await makeReady(pairId, first.id, second.id);
-    const roundB = await makeReady(pairId, first.id, second.id, questionIds.relationship);
-    await markPrivateRevealViewed(db, { pairId, participantId: first.id, roundId: roundA.id });
+    const round = await makeReady(pairId, first.id, second.id);
+    await markPrivateRevealViewed(db, { pairId, participantId: first.id, roundId: round.id });
     expect(
       (
         await getPrivateRoundForParticipant(db, {
           pairId,
           participantId: first.id,
-          roundId: roundA.id,
+          roundId: round.id,
         })
       ).state,
     ).toBe("REVEAL_VIEWED");
@@ -597,19 +604,17 @@ describe("Closer Slice 01B Private rounds", () => {
         await getPrivateRoundForParticipant(db, {
           pairId,
           participantId: second.id,
-          roundId: roundA.id,
+          roundId: round.id,
         })
       ).state,
     ).toBe("REVEAL_READY");
-    expect(
-      (
-        await getPrivateRoundForParticipant(db, {
-          pairId,
-          participantId: first.id,
-          roundId: roundB.id,
-        })
-      ).state,
-    ).toBe("REVEAL_READY");
+    const resumedFromOtherCategory = await startOrResumePrivateConversation(db, {
+      pairId,
+      participantId: second.id,
+      category: "relationship",
+      clientRequestId: randomUUID(),
+    });
+    expect(resumedFromOtherCategory).toMatchObject({ roundId: round.id, category: "deep" });
   });
 
   test("a revealed participant owns one changeable reaction and one editable removable reply", async () => {
@@ -755,7 +760,7 @@ describe("Closer Slice 01B Private rounds", () => {
     ).toMatchObject({ code: "PAIR_NOT_FOUND" });
   });
 
-  test("Pair Home returns one summary per conversation and resuming Deep leaves Fun intact", async () => {
+  test("Pair Home summarizes the active exchange and another category resumes its sticky lane", async () => {
     const { pairId, first, second } = await createJoinedPair();
     const deep = await createRound(pairId, first.id, questionIds.deep);
     await submitPrivateAnswer(db, {
@@ -764,34 +769,25 @@ describe("Closer Slice 01B Private rounds", () => {
       roundId: deep.id,
       body: "Deep waits",
     });
-    const fun = await createRound(pairId, first.id, questionIds.fun);
-    const resumedDeep = await startOrResumePrivateConversation(db, {
+    const resumedFromOtherCategory = await startOrResumePrivateConversation(db, {
       pairId,
       participantId: second.id,
-      category: "deep",
+      category: "fun",
       clientRequestId: randomUUID(),
     });
     const summaries = await listActivePrivateConversations(db, { pairId, participantId: first.id });
-    expect(resumedDeep.roundId).toBe(deep.id);
-    expect(summaries).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: deep.conversationId,
-          currentRound: expect.objectContaining({ id: deep.id }),
-          questionCount: 1,
-          state: "WAITING",
-        }),
-        expect.objectContaining({
-          id: fun.conversationId,
-          currentRound: expect.objectContaining({ id: fun.id }),
-          questionCount: 1,
-          state: "YOUR_TURN",
-        }),
-      ]),
-    );
+    expect(resumedFromOtherCategory).toMatchObject({ roundId: deep.id, category: "deep" });
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]).toMatchObject({
+      id: deep.conversationId,
+      currentRound: { id: deep.id },
+      questionCount: 1,
+      state: "WAITING",
+    });
   });
 
   test("conversation summaries derive ready to reveal and ready for next from the current round", async () => {
+    await createPrivateTestQuestion("light");
     const { pairId, first, second } = await createJoinedPair();
     const round = await makeReady(pairId, first.id, second.id);
     let firstSummary = (
@@ -937,7 +933,7 @@ describe("Closer Slice 01B Private rounds", () => {
     ).toBe(first.id);
   });
 
-  test("a completed lane changes only through a new explicit category selection", async () => {
+  test("Something else can change the lane only after both Reveal Views", async () => {
     await Promise.all([
       createPrivateTestQuestion("light"),
       createPrivateTestQuestion("medium"),
@@ -971,6 +967,14 @@ describe("Closer Slice 01B Private rounds", () => {
       body: "Fafa's answer",
     });
     await markPrivateRevealViewed(db, { pairId, participantId: first.id, roundId: asked.roundId });
+    expect(
+      await startOrResumePrivateConversation(db, {
+        pairId,
+        participantId: first.id,
+        category: "fun",
+        clientRequestId: randomUUID(),
+      }),
+    ).toMatchObject({ roundId: asked.roundId, category: "deep", state: "CURRENT_ROUND" });
     await markPrivateRevealViewed(db, { pairId, participantId: second.id, roundId: asked.roundId });
 
     const fun = await startOrResumePrivateConversation(db, {
@@ -979,16 +983,7 @@ describe("Closer Slice 01B Private rounds", () => {
       category: "fun",
       clientRequestId: randomUUID(),
     });
-    if (fun.state !== "CANDIDATE") throw new Error("Expected the Fun candidate.");
-    expect(fun).toMatchObject({ category: "fun" });
-    expect(fun.id).not.toBe(deep.id);
-    expect(
-      await getPrivateConversationForParticipant(db, {
-        pairId,
-        participantId: first.id,
-        conversationId: deep.id,
-      }),
-    ).toMatchObject({ id: deep.id, category: "deep", state: "READY_FOR_NEXT" });
+    expect(fun).toMatchObject({ category: "fun", state: "CANDIDATE" });
   });
 
   test("a participant outside the pair cannot read or operate on its round", async () => {
@@ -1014,20 +1009,22 @@ describe("Closer Slice 01B Private rounds", () => {
         }),
       ),
     ).toMatchObject({ code: "PAIR_NOT_FOUND" });
-    const started = await startOrResumePrivateConversation(db, {
-      pairId: joined.pairId,
-      participantId: joined.first.id,
-      category: "relationship",
-      clientRequestId: randomUUID(),
-    });
-    if (started.state !== "CANDIDATE") throw new Error("Expected candidate projection.");
     expect(
       await capture(
         askPrivateQuestionCandidate(db, {
           pairId: joined.pairId,
           participantId: unrelated.id,
-          conversationId: started.id,
-          candidateId: started.candidate.id,
+          conversationId: round.conversationId,
+          candidateId: "00000000-0000-4000-8000-000000000000",
+        }),
+      ),
+    ).toMatchObject({ code: "PAIR_NOT_FOUND" });
+    expect(
+      await capture(
+        declinePrivateRound(db, {
+          pairId: joined.pairId,
+          participantId: unrelated.id,
+          roundId: round.id,
         }),
       ),
     ).toMatchObject({ code: "PAIR_NOT_FOUND" });
@@ -1809,7 +1806,7 @@ describe("Closer Slice 01B Private rounds", () => {
       roundId: round.id,
     });
     expect(passed).toMatchObject({
-      state: "DECLINED",
+      state: "RETIRED",
       yourAnswer: null,
       conversation: { questionNumber: 1 },
     });
@@ -1820,12 +1817,12 @@ describe("Closer Slice 01B Private rounds", () => {
       roundId: round.id,
     });
     expect(authorView).toMatchObject({
-      state: "DECLINED",
+      state: "RETIRED",
       yourAnswer: "Only Ali may retain this.",
     });
     expect(authorView.answers).toBeUndefined();
     const [stored] = await db.select().from(privateRound).where(eq(privateRound.id, round.id));
-    expect(stored).toMatchObject({ status: "declined", declinedByParticipantId: second.id });
+    expect(stored).toMatchObject({ status: "retired", retiredByParticipantId: second.id });
     expect(
       await db.select().from(privateRevealView).where(eq(privateRevealView.roundId, round.id)),
     ).toHaveLength(0);
@@ -1859,22 +1856,27 @@ describe("Closer Slice 01B Private rounds", () => {
     ).toMatchObject({ code: "QUESTION_UNAVAILABLE" });
     await declinePrivateRound(db, { pairId, participantId: second.id, roundId: oneAnswer.id });
 
-    const ready = await createRound(pairId, first.id, questionIds.relationship);
+    const readyPair = await createJoinedPair();
+    const ready = await createRound(readyPair.pairId, readyPair.first.id);
     await submitPrivateAnswer(db, {
-      pairId,
-      participantId: first.id,
+      pairId: readyPair.pairId,
+      participantId: readyPair.first.id,
       roundId: ready.id,
       body: "First answer.",
     });
     await submitPrivateAnswer(db, {
-      pairId,
-      participantId: second.id,
+      pairId: readyPair.pairId,
+      participantId: readyPair.second.id,
       roundId: ready.id,
       body: "Second answer.",
     });
     expect(
       await capture(
-        declinePrivateRound(db, { pairId, participantId: first.id, roundId: ready.id }),
+        declinePrivateRound(db, {
+          pairId: readyPair.pairId,
+          participantId: readyPair.first.id,
+          roundId: ready.id,
+        }),
       ),
     ).toMatchObject({ code: "QUESTION_UNAVAILABLE" });
   });
@@ -1928,6 +1930,7 @@ describe("Closer Slice 01B Private rounds", () => {
   });
 
   test("Reveal Views are independent and only both views permit creator candidate progression", async () => {
+    await createPrivateTestQuestion("light");
     const { pairId, first, second } = await createJoinedPair();
     const started = await startOrResumePrivateConversation(db, {
       pairId,
