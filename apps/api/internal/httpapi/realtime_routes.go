@@ -77,9 +77,21 @@ func registerRealtimeRoutes(router chi.Router, authService *auth.Service, partic
 				if !open {
 					return
 				}
+				// Membership may end while an SSE connection is open. Recheck
+				// current authority before delivering each invalidation so a
+				// replaced former member cannot observe later Pair activity.
+				if _, err := pairService.GetAccess(r.Context(), participantView.ID, pairID); err != nil {
+					if errors.Is(err, pair.ErrPairNotFound) && writeTerminatedPairEvent(w, r, pairService, participantView.ID, pairID) {
+						return
+					}
+					return
+				}
 				writeRealtimeEvent(writer, event)
 				_ = writer.Flush()
 				flusher.Flush()
+				if event.Type == realtime.PairTerminated {
+					return
+				}
 			}
 		}
 	})
