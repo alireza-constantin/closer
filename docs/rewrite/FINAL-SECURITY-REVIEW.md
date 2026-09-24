@@ -31,24 +31,78 @@ queries, migrations, realtime listener, frontend cache ownership, package
 manifests, workspace configuration, and deployment files. Searched for unsafe
 HTML sinks, redirect destinations, legacy runtime packages, secret exposure,
 and sensitive HTTP cache policy. Added and ran focused regressions for the two
-confirmed issues below. Existing Go integration and concurrency tests were
-reviewed, but the PostgreSQL-backed tests skip without the isolated test URL.
+confirmed issues below. Existing Go integration and concurrency suites were
+rerun against the isolated test database described below.
 
-The test harness only accepts `CLOSER_TEST_DATABASE_URL` pointing to loopback
-database `closer_test`; it never falls back to `DATABASE_URL`. That variable and
-`apps/api/.env.local` were absent. PostgreSQL was not listening on
-`127.0.0.1:5435`, `pg_ctl` was unavailable, and Docker Desktop was unreachable.
-No database connection, migration, reset, or production access was attempted.
-This blocks the requested DB-backed proof and release sign-off.
+The test harness accepts only an explicit `CLOSER_TEST_DATABASE_URL` pointing
+to loopback database `closer_test`; it never falls back to `DATABASE_URL`. For
+this continuation, an isolated PostgreSQL 18.6 cluster was initialized outside
+the repository at `F:\codes\Closer-security-data`, bound only to
+`127.0.0.1:55435`, and configured for SCRAM-SHA-256. A dedicated
+non-superuser `closer_test_user` owns the only database created, `closer_test`.
+The URL is in ignored `apps/api/.env.local`. Guarded reset applied the baseline
+migration once; guarded apply then reported zero pending migrations. No other
+database was targeted.
 
-Commands completed: focused and full Vite tests; Vite typecheck/build; workspace
-typechecks/build; `go fmt ./...`; `go vet ./...`; `go test -p 1 -count=1 ./...`;
-`go build ./...`; and `bun run api:test` / `bun run api:build`. The Go tests
-without PostgreSQL passed. Integration tests requiring `closer_test` could not
-run. SQLC v1.31.1 generation was run twice; the second output matched the first
-by per-file SHA-256. Generated output differed from the checked-out worktree
-only in line endings; no generated content diff remained after restoring those
-line-ending-only changes.
+The unrelated PostgreSQL service on port 5435 remained running (PID 6460) and
+its existing data/configuration were not changed. At the end, only the isolated
+cluster was stopped and port 55435 had no listener. The isolated data directory
+is retained. Two setup scratch files outside the repositories remain as
+zero-length files: the desktop safety review rejected their deletion, so their
+generated credential contents were overwritten and verified empty.
+
+Commands completed: `go fmt ./...`, `go vet ./...`,
+`go test -p 1 -count=1 ./...`, `go build ./...`, `bun run api:test`, and
+`bun run api:build`; all passed with the guarded database configured. The
+focused Vite suite passed all 53 tests, Vite typecheck and production build
+passed, and workspace typechecks/build passed. SQLC v1.31.1 generation ran
+twice; both generated output manifests were unchanged, including between runs.
+The Go race-detector run remains unavailable because this toolchain has
+`CGO_ENABLED=0` and `go test -race` requires cgo.
+
+## Database-backed verification results
+
+- **SSE membership loss:** `TestRealtimeClosesAfterSubscriberLosesActiveMembership`
+  passed and verifies that the route closes and sends no later Pair event after
+  its access store reports lost membership. That route test uses a controlled
+  in-memory access store. Pair-scoped registry fanout and subscription close
+  tests passed; live PostgreSQL-backed SSE replacement, replacement reconnect,
+  outsider, cross-Pair route, and terminated-Pair stream cases were not covered
+  together by a test.
+- **Replacement/rejoin and membership eras:** PostgreSQL tests passed for
+  rejoin closing the old era, replacement isolation from old Private/Together
+  state, old-era history concealment, and replacement inability to inherit or
+  mutate old reactions/replies.
+- **Private authorization and secrecy:** PostgreSQL tests passed for waiting
+  candidate projections, viewer-relative answer projections, independent
+  reveal, post-reveal reaction/reply/progression gates, and HTTP JSON answers
+  remaining private until authorized reveal.
+- **Private history:** outsider denial, malformed HTTP cursor rejection,
+  cross-Pair cursor rejection, replacement-era isolation, keyset pagination,
+  and frozen wording/display-name projections passed.
+- **Termination and concurrency:** tests passed for idempotent termination,
+  termination versus initial invite redemption, rejoin, Private mutations, and
+  Together mutations, plus replacement versus progression and old-member
+  reaction/reply access.
+- **Invites:** tests passed for hash-only token persistence, explicit claim,
+  concurrent same-invite redemption, revoke races, expiry recheck, single use,
+  and rejection after termination.
+- **Admin and sessions:** database tests passed for Admin isolation/bootstrap,
+  denial of consumer promotion, session token hash-only persistence, logout
+  revocation, expiry, and rate-limit concurrency. HTTP authorization tests
+  passed for unauthenticated/consumer denial and Admin-only access.
+- **Analytics privacy:** the PostgreSQL integration fixture passed the
+  four-distinct-Pair suppression and five-distinct-Pair availability checks,
+  including replacement eras not counting as a new Pair. HTTP tests verified
+  suppressed JSON omits numerator, denominator, and rate.
+- **LISTEN/NOTIFY:** commit delivery, rollback suppression, dedicated listener
+  connection open/close lifecycle, Pair-scoped fanout, idempotent subscription
+  cleanup, and event payload validation tests passed. Cancellation of the
+  long-running listener loop itself was not separately exercised here.
+
+No tests were skipped for lack of the isolated database URL during this run.
+The remaining SSE route integration gap above is explicitly retained as a
+verification limitation rather than inferred as a passing live-stream test.
 
 # Findings
 
@@ -141,7 +195,8 @@ environment.
 - SSE event payloads are a versioned allowlist of Pair-scoped event type and
   metadata, not domain content. The listener uses a dedicated `pgx.Conn`, a
   fixed channel name, JSON payload validation, cancellation, and reconnect
-  backoff; live reconnect/shutdown proof is blocked by unavailable PostgreSQL.
+  backoff. Database LISTEN/NOTIFY commit/rollback and listener connection tests
+  passed; live SSE reconnect/shutdown behavior remains unverified.
 - React output uses normal escaping; no `dangerouslySetInnerHTML`, `innerHTML`,
   `insertAdjacentHTML`, or custom HTML renderer was found. API client paths are
   same-origin and reject absolute, protocol-relative, and traversal paths.
@@ -158,11 +213,11 @@ environment.
 
 # Residual risks
 
-- **Release sign-off is incomplete.** No safe `closer_test` database was
-  configured or available. Run migrations twice and rerun the full Go suite,
-  including HTTP serialization, replacement-era, termination/rejoin race,
-  invite race, Together, analytics, and listener integration tests against the
-  isolated database before merge.
+- **Release sign-off is incomplete.** Database-backed Go, API, migration, and
+  concurrency gates passed on the isolated test cluster, but the full SSE
+  replacement/reconnect/outsider/cross-Pair/terminated-stream matrix still
+  lacks an HTTP route integration test against PostgreSQL. The current
+  membership-loss route regression uses an in-memory access store.
 - SQLC v1.31.1 produced identical content on consecutive generations.
 - The new SSE membership recheck is per event, not transactionally locked
   through socket delivery. It prevents later events after the check observes
@@ -201,8 +256,9 @@ environment.
 
 ## Review state
 
-The two source-level fixes are tested. Do not treat this report as a full
-pre-release security sign-off until the safe PostgreSQL/SQLC gates above pass.
+The two source-level fixes and the listed database-backed gates are tested.
+Do not treat this report as a full pre-release security sign-off until the
+remaining live SSE route integration matrix is verified.
 The external temporary legacy environment backup still exists at
 `F:\codes\Closer-local-backup\legacy-next-env\legacy-next-env.env`; it is not
 used by the final runtime.
