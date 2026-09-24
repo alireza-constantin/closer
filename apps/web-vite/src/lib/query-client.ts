@@ -12,7 +12,7 @@ export function createQueryClient() {
   });
 }
 
-export function clearConsumerQueryCache(client: QueryClient) {
+export function clearActorQueryCache(client: QueryClient) {
   client.clear();
 }
 
