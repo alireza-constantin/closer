@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/alireza-constantin/closer/apps/api/db/migrations"
+	"github.com/alireza-constantin/closer/apps/api/internal/env"
 	"github.com/alireza-constantin/closer/apps/api/internal/postgres"
 )
 
@@ -15,6 +16,9 @@ func main() {
 	if len(os.Args) != 2 || (os.Args[1] != "apply" && os.Args[1] != "verify") {
 		fmt.Fprintln(os.Stderr, "usage: migrate <apply|verify>")
 		os.Exit(2)
+	}
+	if err := env.LoadLocal(); err != nil {
+		fatal(err)
 	}
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {

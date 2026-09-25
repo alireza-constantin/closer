@@ -4,13 +4,13 @@ The Go API is the server authority for authentication, Pair and Participant stat
 
 ## Run locally
 
-From the repository root, set `HTTP_ADDR=127.0.0.1:8080` and `DATABASE_URL` to a local PostgreSQL URL, then run:
+From the repository root, copy `apps/api/.env.example` to `apps/api/.env.local`, configure `DATABASE_URL` for your local `closer_dev` database, and run:
 
 ```sh
-bun run api:run
+bun run dev:api
 ```
 
-The API requires an applied schema. Local setup and the full environment inventory are in the root README. Runtime env takes precedence over `apps/api/.env.local` and root `.env.local`.
+The API requires an applied schema and does not start PostgreSQL. The root `bun run dev` starts this API alongside Vite. Local setup and the full environment inventory are in the root README. Process environment takes precedence over `apps/api/.env.local`.
 
 ## Migrations
 
@@ -19,9 +19,10 @@ The API requires an applied schema. Local setup and the full environment invento
 For an explicitly selected database:
 
 ```sh
-go run ./cmd/migrate apply
-go run ./cmd/migrate verify
+bun run db:migrate
 ```
+
+`bun run db:migrate` reads `DATABASE_URL` from the process or `apps/api/.env.local`. To verify an already migrated database, run `go -C apps/api run ./cmd/migrate verify` after setting `DATABASE_URL` in the process environment.
 
 Both commands require `DATABASE_URL`. Review the target before invoking them. The guarded test bootstrap is a separate command and accepts only loopback PostgreSQL database `closer_test`:
 

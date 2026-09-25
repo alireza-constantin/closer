@@ -10,52 +10,74 @@ The Vite app contains the consumer flows, Admin question authoring, and Admin an
 
 ## Local development
 
-Requirements: Bun 1.4.2, Go 1.25.1, and PostgreSQL 18. A local PostgreSQL instance can be used directly. An optional loopback-only Compose service is provided for an isolated test database; it binds port 5435 and can run only when that port is free.
+Requirements: Bun 1.4.2, Go 1.25.1, and a locally installed PostgreSQL server. Start PostgreSQL yourself; `bun run dev` never starts, stops, initializes, or resets a database.
 
-1. Install workspace dependencies with `bun install`.
-2. Create an empty local PostgreSQL database named `closer_test` reachable on `127.0.0.1:5435`.
-3. Set `CLOSER_TEST_DATABASE_URL` to that local `closer_test` database. The Go test bootstrap rejects non-loopback hosts and any database name other than `closer_test`.
-4. Apply the schema with `bun run api:schema:reset:test`.
-5. In separate terminals run `bun run dev` and `bun run api:run`. Vite proxies `/api` to `http://127.0.0.1:8080` by default; override this development target with `VITE_API_PROXY_TARGET`.
+1. Install Bun, Go, and PostgreSQL, then start your local PostgreSQL server.
+2. Create a development database named `closer_dev`. For example, with PostgreSQL command-line tools installed and a local admin role named `postgres`:
 
-Environment variables already present in the process take precedence. Root commands such as `bun run api:run` load the first existing file from `apps/api/.env.local` and root `.env.local`, in that order. Commands started with `apps/api` as their working directory load only `apps/api/.env.local`. Do not put production credentials in these files.
+   ```powershell
+   createdb --host 127.0.0.1 --port 5435 --username postgres closer_dev
+   ```
 
-To start the optional test database when port 5435 is free, run `docker compose up -d closer-test-postgres`. Its default password is `closer-test-only`, and its port is bound to loopback. The guarded reset command recreates only this local test schema.
+   Change the host, port, and admin role to match your local PostgreSQL installation. The application role in the connection URL below must be able to connect to and create schema objects in `closer_dev`.
+
+3. Copy `apps/api/.env.example` to `apps/api/.env.local` and replace `CHANGE_ME` with your local PostgreSQL password. This ignored file configures `DATABASE_URL`, `HTTP_ADDR`, and the local trusted browser origin. Keep `closer_dev` separate from the integration-test database `closer_test`.
+4. Install workspace dependencies and apply the Go migration baseline:
+
+   ```powershell
+   bun install
+   bun run db:migrate
+   ```
+
+5. Start both app processes from the repository root:
+
+   ```powershell
+   bun run dev
+   ```
+
+The combined command runs the Go API and Vite in the same terminal with `dev:api` and `dev:web` log prefixes. If either process exits with an error, the other is stopped. Press `Ctrl+C` to stop both.
+
+The frontend is at `http://localhost:5173`; the API is at `http://127.0.0.1:8080` and its health endpoint is `http://127.0.0.1:8080/healthz`. The browser calls same-origin `/api/v1` paths, which Vite proxies to the API without changing the browser `Origin`; set `CLOSER_TRUSTED_ORIGINS` to the exact frontend origin shown above. Session cookies and EventSource use that same-origin path. Set `VITE_API_PROXY_TARGET` only when the API listens at a different address.
+
+API startup checks `DATABASE_URL` and exits with a sanitized `PostgreSQL is unavailable` error when PostgreSQL cannot be reached or the credentials fail. It does not fall back to `closer_test` or a remote database.
+
+Process environment variables take precedence over `apps/api/.env.local`. The API and migration commands load that ignored file when present. Never put production credentials in it. The committed `.env.example` contains placeholders only.
 
 ## Environment variables
 
-| Area                    | Variable                                            | Requirement and purpose                                                                                                                                         |
-| ----------------------- | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Go API                  | `HTTP_ADDR`                                         | Required `host:port` listener address, for example `127.0.0.1:8080`.                                                                                            |
-| Database                | `DATABASE_URL`                                      | Required PostgreSQL URL for API queries and migrations.                                                                                                         |
-| Realtime                | `REALTIME_DATABASE_URL`                             | Optional PostgreSQL URL for the dedicated LISTEN connection; falls back to `DATABASE_URL_UNPOOLED`, then `DATABASE_URL`.                                        |
-| Realtime                | `DATABASE_URL_UNPOOLED`                             | Optional direct PostgreSQL URL used as the realtime fallback.                                                                                                   |
-| Auth / browser security | `CLOSER_TRUSTED_ORIGINS`                            | Exact comma-separated HTTP(S) origins allowed to make cookie-authenticated mutations. Configure the deployed frontend origin. Empty fails closed for mutations. |
-| Auth / proxy security   | `CLOSER_TRUSTED_PROXY_CIDRS`                        | Optional comma-separated CIDRs for trusted reverse proxies that set forwarded-protocol headers.                                                                 |
-| Go API                  | `HTTP_SHUTDOWN_TIMEOUT`                             | Optional positive Go duration; defaults to `10s`.                                                                                                               |
-| Vite development        | `VITE_API_PROXY_TARGET`                             | Optional development proxy target; defaults to `http://127.0.0.1:8080`. No Vite runtime secret or API base URL is required.                                     |
-| Local Go tests          | `CLOSER_TEST_DATABASE_URL`                          | Required to run PostgreSQL integration tests; must target loopback `closer_test`. Never use a production database.                                              |
-| Admin operator          | `ADMIN_BOOTSTRAP_EMAIL`, `ADMIN_BOOTSTRAP_PASSWORD` | Set only for the explicit one-time Admin bootstrap command.                                                                                                     |
-| Admin operator          | `ADMIN_RECOVERY_PASSWORD`                           | Set only for an explicit Admin recovery command.                                                                                                                |
+| Area                         | Variable                                                                       | Requirement and purpose                                                                                                |
+| ---------------------------- | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| Go API                       | `HTTP_ADDR`                                                                    | Required listener address; local default is `127.0.0.1:8080`.                                                          |
+| API and migrations           | `DATABASE_URL`                                                                 | Required PostgreSQL URL. Local development must target `closer_dev`; never use `closer_test` here.                     |
+| Browser security             | `CLOSER_TRUSTED_ORIGINS`                                                       | Exact browser origins allowed to make cookie-authenticated mutations. Local default is `http://localhost:5173`.        |
+| Realtime                     | `REALTIME_DATABASE_URL`                                                        | Optional dedicated PostgreSQL URL for LISTEN; defaults to `DATABASE_URL_UNPOOLED`, then `DATABASE_URL`.                |
+| Realtime                     | `DATABASE_URL_UNPOOLED`                                                        | Optional direct PostgreSQL URL used as the realtime fallback.                                                          |
+| Vite development             | `VITE_API_PROXY_TARGET`                                                        | Optional API proxy target; defaults to `http://127.0.0.1:8080`.                                                        |
+| PostgreSQL integration tests | `CLOSER_TEST_DATABASE_URL`                                                     | Test-only URL. Keep it pointed at a separate loopback `closer_test`; it is never used by the API or migration command. |
+| Auth / proxy security        | `CLOSER_TRUSTED_PROXY_CIDRS`                                                   | Optional CIDRs for trusted reverse proxies. Not needed for local development.                                          |
+| Go API                       | `HTTP_SHUTDOWN_TIMEOUT`                                                        | Optional positive Go duration; defaults to `10s`.                                                                      |
+| Admin operator               | `ADMIN_BOOTSTRAP_EMAIL`, `ADMIN_BOOTSTRAP_PASSWORD`, `ADMIN_RECOVERY_PASSWORD` | Set only for explicit Admin operator commands.                                                                         |
 
 There are no runtime requirements for Next.js, Better Auth, Drizzle, `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, or a legacy Admin user ID.
 
 ## Database and tests
 
-The test schema bootstrap is guarded and only operates on local `closer_test`:
+Normal development uses `closer_dev` and applies the Go migration baseline with:
+
+```sh
+bun run db:migrate
+```
+
+This command reads `DATABASE_URL` from the process or `apps/api/.env.local` and applies pending Go migrations. It does not create or reset a database. Review the target before running it outside local development.
+
+PostgreSQL integration tests use only the explicit `CLOSER_TEST_DATABASE_URL` and require local `closer_test`. The guarded reset is destructive to that test database only; never point it at `closer_dev` or another database:
 
 ```sh
 bun run api:schema:reset:test
 bun run api:test
 ```
 
-The production migration command is intentionally separate. Review the migration and database target before running it in any deployment environment:
-
-```sh
-cd apps/api
-go run ./cmd/migrate apply
-go run ./cmd/migrate verify
-```
+An optional Compose test database is available for developers who choose it. It is not part of `bun run dev` or the normal local PostgreSQL setup.
 
 Canonical local verification commands:
 

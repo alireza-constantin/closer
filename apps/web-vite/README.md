@@ -4,7 +4,7 @@ The React Router + Vite application is the production frontend. It includes gues
 
 ## Development
 
-Run `bun run dev` from the repository root. Vite proxies `/api` to `http://127.0.0.1:8080` by default. Set `VITE_API_PROXY_TARGET` to use a different local Go API address. Browser requests use same-origin `/api/v1` paths and cookies; production hosting must proxy `/api/*` to the Go API and serve `index.html` for frontend deep links.
+Run `bun run dev` from the repository root to start Vite and the Go API together. Vite is available at `http://localhost:5173` and proxies `/api` to `http://127.0.0.1:8080` by default. Set `VITE_API_PROXY_TARGET` to use a different local Go API address. Browser requests use same-origin `/api/v1` paths and cookies; EventSource uses same-origin credentials through the same proxy. Production hosting must proxy `/api/*` to the Go API and serve `index.html` for frontend deep links.
 
 ## PWA and authenticated data
 
