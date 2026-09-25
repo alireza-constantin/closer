@@ -66,6 +66,9 @@ func TestSubscriptionCloseIsIdempotent(t *testing.T) {
 	}
 	subscription.Close()
 	subscription.Close()
+	if _, exists := registry.byPair["pair-a"]; exists {
+		t.Fatal("closed subscription remained registered with the Pair")
+	}
 	registry.Publish(Event{Version: 1, PairID: "pair-a", Type: PairChanged})
 	select {
 	case _, ok := <-subscription.Events:
