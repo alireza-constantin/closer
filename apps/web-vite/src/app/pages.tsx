@@ -28,7 +28,7 @@ import {
   type PairForm,
 } from "@/features/consumer/forms";
 import { ApiError } from "@/lib/api-client";
-import { clearConsumerQueryCache } from "@/lib/query-client";
+import { clearActorQueryCache } from "@/lib/query-client";
 import { EndedPairPage } from "@/features/pair/components";
 import { connectPairRealtime, pairQueryKey } from "@/features/pair/realtime";
 
@@ -262,7 +262,7 @@ export function SpacesPage() {
           className="text-closer-muted mt-auto self-start text-sm font-semibold underline"
           onClick={async () => {
             await logout();
-            clearConsumerQueryCache(queryClient);
+            clearActorQueryCache(queryClient);
             navigate("/");
           }}
         >
@@ -416,7 +416,7 @@ export function InvitePage() {
       return redeemInvite(token, me.data?.actor?.participant ? undefined : value.displayName);
     },
     onSuccess: async (value: any) => {
-      clearConsumerQueryCache(queryClient);
+      clearActorQueryCache(queryClient);
       navigate(`/pair/${value.pairId}`);
     },
   });
@@ -559,7 +559,7 @@ export function RejoinPage() {
       return redeemRejoin(token, value.displayName);
     },
     onSuccess: async (value: any) => {
-      clearConsumerQueryCache(queryClient);
+      clearActorQueryCache(queryClient);
       navigate(`/pair/${value.pairId}`);
     },
   });

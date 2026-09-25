@@ -35,6 +35,7 @@ import {
 import { adminCategoryLabel } from "@/features/admin/category-presentation";
 import { revisionFieldsSchema, type RevisionFieldsForm } from "@/features/admin/forms";
 import { ApiError } from "@/lib/api-client";
+import { clearActorQueryCache } from "@/lib/query-client";
 
 export const questionListKey = ["admin", "questions"] as const;
 export const questionDetailKey = (id: string) => ["admin", "question", id] as const;
@@ -194,6 +195,7 @@ export function AdminLoginPage() {
     mutationFn: (value: { email: string; password: string }) =>
       adminLogin(value.email, value.password),
     onSuccess: (value) => {
+      clearActorQueryCache(queryClient);
       queryClient.setQueryData(adminSessionKey, value);
       navigate("/admin", { replace: true });
     },
