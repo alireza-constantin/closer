@@ -23,10 +23,12 @@
   },
   "type": "module",
   "scripts": {
-    "dev": "bun run --parallel dev:api dev:web",
+    "dev": "bun run db:check && bun run --parallel dev:api dev:web",
     "dev:api": "go -C apps/api run ./cmd/server",
     "dev:web": "bun run --filter web-vite dev",
     "db:migrate": "go -C apps/api run ./cmd/migrate apply",
+    "db:status": "go -C apps/api run ./cmd/migrate status",
+    "db:check": "go -C apps/api run ./cmd/migrate check",
     "build": "bun run --filter '*' build",
     "check-types": "bun run --filter '*' check-types",
     "format": "prettier --write .",

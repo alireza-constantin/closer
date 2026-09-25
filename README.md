@@ -22,11 +22,11 @@ Requirements: Bun 1.4.2, Go 1.25.1, and a locally installed PostgreSQL server. S
    Change the host, port, and admin role to match your local PostgreSQL installation. The application role in the connection URL below must be able to connect to and create schema objects in `closer_dev`.
 
 3. Copy `apps/api/.env.example` to `apps/api/.env.local` and replace `CHANGE_ME` with your local PostgreSQL password. This ignored file configures `DATABASE_URL`, `HTTP_ADDR`, and the local trusted browser origin. Keep `closer_dev` separate from the integration-test database `closer_test`.
-4. Install workspace dependencies and apply the Go migration baseline:
+4. Install workspace dependencies and inspect the local schema state:
 
    ```powershell
    bun install
-   bun run db:migrate
+   bun run db:status
    ```
 
 5. Start both app processes from the repository root:
@@ -35,7 +35,14 @@ Requirements: Bun 1.4.2, Go 1.25.1, and a locally installed PostgreSQL server. S
    bun run dev
    ```
 
-The combined command runs the Go API and Vite in the same terminal with `dev:api` and `dev:web` log prefixes. If either process exits with an error, the other is stopped. Press `Ctrl+C` to stop both.
+Before starting either process, `bun run dev` runs the read-only migration check. If the local database is behind, the command prints the pending migration names and stops. Apply them explicitly, then retry:
+
+```powershell
+bun run db:migrate
+bun run dev
+```
+
+`bun run db:migrate` applies pending migrations only; it never resets the database. `bun run db:status` shows the configured database name, server, and migration state without changing it. The combined `dev` command runs the Go API and Vite in the same terminal with `dev:api` and `dev:web` log prefixes. If either process exits with an error, the other is stopped. Press `Ctrl+C` to stop both.
 
 The frontend is at `http://localhost:5173`; the API is at `http://127.0.0.1:8080` and its health endpoint is `http://127.0.0.1:8080/healthz`. The browser calls same-origin `/api/v1` paths, which Vite proxies to the API without changing the browser `Origin`; set `CLOSER_TRUSTED_ORIGINS` to the exact frontend origin shown above. Session cookies and EventSource use that same-origin path. Set `VITE_API_PROXY_TARGET` only when the API listens at a different address.
 
@@ -62,13 +69,19 @@ There are no runtime requirements for Next.js, Better Auth, Drizzle, `BETTER_AUT
 
 ## Database and tests
 
-Normal development uses `closer_dev` and applies the Go migration baseline with:
+Normal development uses `closer_dev`. Git is the source of truth for migration files, while each computer's local database records its own applied migrations. After pulling or switching branches, run `bun run dev`; its migration preflight blocks stale or incompatible local schemas. Inspect status at any time with:
+
+```powershell
+bun run db:status
+```
+
+When the check reports pending migrations, explicitly apply them with:
 
 ```sh
 bun run db:migrate
 ```
 
-This command reads `DATABASE_URL` from the process or `apps/api/.env.local` and applies pending Go migrations. It does not create or reset a database. Review the target before running it outside local development.
+This command reads `DATABASE_URL` from the process or `apps/api/.env.local` and applies pending Go migrations. It does not create or reset a database. Review the target before running it outside local development. Never casually edit an already-applied migration; create a new migration for schema changes. Normal database commands refuse a URL targeting `closer_test`.
 
 PostgreSQL integration tests use only the explicit `CLOSER_TEST_DATABASE_URL` and require local `closer_test`. The guarded reset is destructive to that test database only; never point it at `closer_dev` or another database:
 

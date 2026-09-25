@@ -2,6 +2,7 @@
 package migrations
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"embed"
@@ -23,9 +24,10 @@ const lockID int64 = 0x434c4f534552
 const historyTable = "closer_schema_migrations"
 
 type migration struct {
-	version  string
-	contents []byte
-	checksum string
+	version         string
+	contents        []byte
+	checksum        string
+	legacyChecksums []string
 }
 
 func load() ([]migration, error) {
@@ -40,13 +42,26 @@ func load() ([]migration, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read embedded migration %s: %w", path, err)
 		}
-		sum := sha256.Sum256(contents)
-		loaded = append(loaded, migration{version: strings.TrimSuffix(path, ".sql"), contents: contents, checksum: hex.EncodeToString(sum[:])})
+		canonical := bytes.ReplaceAll(contents, []byte("\r\n"), []byte("\n"))
+		sum := sha256.Sum256(canonical)
+		crlf := bytes.ReplaceAll(canonical, []byte("\n"), []byte("\r\n"))
+		legacyChecksums := []string{checksum(contents), checksum(crlf)}
+		loaded = append(loaded, migration{
+			version:         strings.TrimSuffix(path, ".sql"),
+			contents:        canonical,
+			checksum:        hex.EncodeToString(sum[:]),
+			legacyChecksums: legacyChecksums,
+		})
 	}
 	if len(loaded) == 0 {
 		return nil, errors.New("no embedded database migrations found")
 	}
 	return loaded, nil
+}
+
+func checksum(contents []byte) string {
+	sum := sha256.Sum256(contents)
+	return hex.EncodeToString(sum[:])
 }
 
 // Apply runs pending migrations in version order. Each migration and its history
@@ -114,7 +129,12 @@ func Apply(ctx context.Context, pool *postgres.Pool) (int, error) {
 		for _, item := range loaded {
 			if checksum, ok := known[item.version]; ok {
 				if checksum != item.checksum {
-					return fmt.Errorf("migration %s checksum differs from the applied version", item.version)
+					if !contains(item.legacyChecksums, checksum) {
+						return fmt.Errorf("migration %s checksum differs from the applied version", item.version)
+					}
+					if _, err := lock.Exec(ctx, "UPDATE "+historyTable+" SET checksum = $1 WHERE version = $2", item.checksum, item.version); err != nil {
+						return fmt.Errorf("normalize migration %s checksum: %w", item.version, err)
+					}
 				}
 				continue
 			}
